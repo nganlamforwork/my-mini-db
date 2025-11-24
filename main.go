@@ -2,106 +2,233 @@ package main
 
 import "fmt"
 
-// INTERNAL_MAX_KEY defines the maximum number of keys that an internal node can hold.
-// This corresponds to the "order" of the B-Tree minus 1 in classical definitions.
-const INTERNAL_MAX_KEY = 4
+type KeyType int
+type ValueType string
 
-// Node is an empty interface to represent a generic tree node (internal or leaf).
-// In a full implementation, leaf nodes would have a concrete type as well.
-type Node interface{}
+// Maximum number of children in an internal node (m = 4)
+// So leaf nodes can have up to ORDER-1 keys
+const ORDER = 4 
 
-// BTreeInternalNode represents an internal node in a B-Tree.
-// It contains:
-// - nkey: number of valid keys currently stored
-// - keys: array of keys
-// - children: array of pointers to child nodes
-type BTreeInternalNode struct {
-	nkey     int
-	keys     [INTERNAL_MAX_KEY]int
-	children [INTERNAL_MAX_KEY]*Node
+type Node struct {
+    isLeaf   bool
+    keys     []KeyType
+    values   []ValueType   // chỉ dùng cho leaf
+    children []*Node       // chỉ dùng cho internal node
+    next     *Node         // chỉ dùng cho leaf, linked list
 }
 
-// NewINode returns a new internal node initialized with zero keys
-// and nil children. This is a helper function to create empty nodes.
-func NewINode() BTreeInternalNode {
-	var new_keys [INTERNAL_MAX_KEY]int
-	var new_children [INTERNAL_MAX_KEY]*Node
-	return BTreeInternalNode{
-		nkey:     0,
-		keys:     new_keys,
-		children: new_children,
+type BPlusTree struct {
+    root *Node
+}
+
+// -----------------------------
+// Node creation helpers
+// -----------------------------
+
+// newLeafNode creates a new empty leaf node
+func newLeafNode() *Node {
+    return &Node{
+        isLeaf:   true,
+        keys:     make([]KeyType, 0, ORDER-1),
+        values:   make([]ValueType, 0, ORDER-1),
+        children: nil,
+        next:     nil,
+    }
+}
+
+// newInternalNode creates a new empty internal node
+func newInternalNode() *Node {
+    return &Node{
+        isLeaf:   false,
+        keys:     make([]KeyType, 0, ORDER-1),
+        children: make([]*Node, 0, ORDER),
+    }
+}
+
+// -----------------------------
+// Finding the correct leaf
+// -----------------------------
+
+// findLeaf traverses the tree to find the correct leaf where 'key' should be inserted.
+// Uses binary search to find the last key <= input key (B+Tree routing rule).
+func (tree *BPlusTree) findLeaf(key KeyType) *Node {
+    current := tree.root
+    if current == nil {
+        return nil
+    }
+
+    for !current.isLeaf {
+        keys := current.keys
+        left, right := 0, len(keys)-1
+        pos := -1 // last index where keys[pos] <= key
+
+        // binary search for last key <= key
+        for left <= right {
+            mid := (left + right) / 2
+            if keys[mid] <= key {
+                pos = mid
+                left = mid + 1
+            } else {
+                right = mid - 1
+            }
+        }
+
+        // child index = pos + 1
+        // if pos = -1 → go to children[0]
+        childIndex := pos + 1
+        current = current.children[childIndex]
+    }
+
+    return current
+}
+
+// -----------------------------
+// Insert into leaf
+// -----------------------------
+
+// insertIntoLeaf inserts key/value pair into a leaf node in sorted order
+func insertIntoLeaf(leaf *Node, key KeyType, value ValueType) {
+	i := 0
+	// find correct position for key
+	for i < len(leaf.keys) && leaf.keys[i] < key {
+		i++
 	}
+
+	// append empty slots to shift elements
+	leaf.keys = append(leaf.keys, 0)
+	leaf.values = append(leaf.values, "")
+	copy(leaf.keys[i+1:], leaf.keys[i:])
+	copy(leaf.values[i+1:], leaf.values[i:])
+
+	// insert the new key/value
+	leaf.keys[i] = key
+	leaf.values[i] = value
 }
 
-// FindLastLE finds the last position (index) in the node's keys array
-// where the key is less than or equal to findKey.
-// Returns -1 if all keys are greater than findKey.
-// This is useful to decide which child pointer to follow when descending the tree.
-func (node *BTreeInternalNode) FindLastLE(findKey int) int {
-	pos := -1
-	for i := 0; i < node.nkey; i++ {
-		if node.keys[i] <= findKey {
-			pos = i
+// splitLeaf splits a full leaf node into two and returns the new leaf and its first key
+func splitLeaf(leaf *Node) (*Node, KeyType) {
+	mid := (ORDER + 1) / 2 // find split point
+	newLeaf := newLeafNode()
+
+	// move half of keys/values to the new leaf
+	newLeaf.keys = append(newLeaf.keys, leaf.keys[mid:]...)
+	newLeaf.values = append(newLeaf.values, leaf.values[mid:]...)
+
+	// truncate original leaf
+	leaf.keys = leaf.keys[:mid]
+	leaf.values = leaf.values[:mid]
+
+	// update linked list pointers
+	newLeaf.next = leaf.next
+	leaf.next = newLeaf
+
+	// return new leaf and the first key of new leaf (to push up)
+	return newLeaf, newLeaf.keys[0]
+}
+
+// -----------------------------
+// Insert into internal node
+// -----------------------------
+
+// insertIntoInternal inserts a key and child pointer into an internal node
+func insertIntoInternal(node *Node, key KeyType, child *Node) {
+	i := 0
+	// find the position for the new key
+	for i < len(node.keys) && key > node.keys[i] {
+		i++
+	}
+
+	// insert key
+	node.keys = append(node.keys, 0)
+	copy(node.keys[i+1:], node.keys[i:])
+	node.keys[i] = key
+
+	// insert corresponding child pointer
+	node.children = append(node.children, nil)
+	copy(node.children[i+2:], node.children[i+1:])
+	node.children[i+1] = child
+}
+
+// splitInternal splits a full internal node and returns new node and the middle key
+func splitInternal(node *Node) (*Node, KeyType) {
+	mid := len(node.keys) / 2      // middle index
+	midKey := node.keys[mid]       // key to push up
+
+	newNode := newInternalNode()
+	// move half of keys and children to new node
+	newNode.keys = append(newNode.keys, node.keys[mid+1:]...)
+	newNode.children = append(newNode.children, node.children[mid+1:]...)
+
+	// truncate original node
+	node.keys = node.keys[:mid]
+	node.children = node.children[:mid+1]
+
+	return newNode, midKey
+}
+
+// -----------------------------
+// Insert into B+ Tree
+// -----------------------------
+
+func (tree *BPlusTree) Insert(key KeyType, value ValueType) {
+	// if tree is empty, create root leaf
+	if tree.root == nil {
+		leaf := newLeafNode()
+		leaf.keys = append(leaf.keys, key)
+		leaf.values = append(leaf.values, value)
+		tree.root = leaf
+		return
+	}
+
+	// find leaf to insert
+	leaf := tree.findLeaf(key)
+	insertIntoLeaf(leaf, key, value)
+
+	// if leaf not full, done
+	if len(leaf.keys) < ORDER {
+		return
+	}
+
+	// leaf is full -> split
+	newLeaf, newKey := splitLeaf(leaf)
+
+	// maintain stack to trace path to parent
+	parentStack := []*Node{}
+	current := tree.root
+	for current != leaf {
+		parentStack = append(parentStack, current)
+		i := 0
+		for i < len(current.keys) && key >= current.keys[i] {
+			i++
 		}
+		current = current.children[i]
 	}
-	return pos
+
+	// new node to insert into parent
+	var newNode *Node = newLeaf
+	var pushKey KeyType = newKey
+
+	// insert new key/node into ancestors
+	for len(parentStack) > 0 {
+		parent := parentStack[len(parentStack)-1]
+		parentStack = parentStack[:len(parentStack)-1]
+
+		insertIntoInternal(parent, pushKey, newNode)
+		if len(parent.keys) < ORDER {
+			return
+		}
+
+		// parent is full -> split
+		newNode, pushKey = splitInternal(parent)
+	}
+
+	// if root was split, create new root
+	newRoot := newInternalNode()
+	newRoot.keys = append(newRoot.keys, pushKey)
+	newRoot.children = append(newRoot.children, tree.root, newNode)
+	tree.root = newRoot
 }
 
-// InsertKV inserts a new key-child pair into the internal node.
-// Steps:
-// 1. Find the position to insert using FindLastLE
-// 2. Shift all keys and children after that position one step to the right
-// 3. Insert the new key and child at the proper position
-// 4. Increase nkey
-//
-// Note: This function assumes that the node is not full; in a full B-Tree
-// you would need to handle splitting before inserting.
-func (node *BTreeInternalNode) InsertKV(insertKey int, insertChild Node) {
-	pos := node.FindLastLE(insertKey)
-	// Shift keys and children to the right to make space for the new key
-	for i := node.nkey - 1; i > pos; i-- {
-		node.keys[i+1] = node.keys[i]
-		node.children[i+1] = node.children[i]
-	}
-	node.keys[pos+1] = insertKey
-	node.children[pos+1] = &insertChild
-	node.nkey += 1
-}
-
-// Split splits the internal node into two nodes.
-// - It splits around the middle index (median).
-// - The left half remains in the original node.
-// - The right half is returned as a new node.
-//
-// Important notes:
-// - In a complete B-Tree implementation, the median key would be promoted
-//   to the parent, not included in either child node directly.
-// - Here, the function simply returns the right node, leaving promotion
-//   logic to be implemented at a higher level (e.g., in the B-Tree structure itself).
-func (node *BTreeInternalNode) Split() BTreeInternalNode {
-	var newKeys [INTERNAL_MAX_KEY]int
-	var newChildren [INTERNAL_MAX_KEY]*Node
-	pos := node.nkey / 2
-
-	// Copy the second half of keys and children into new node
-	for i := pos; i < node.nkey; i++ {
-		newKeys[i-pos] = node.keys[i]       // Copy key
-		newChildren[i-pos] = node.children[i] // Copy child pointer
-		node.keys[i] = 0                     // Clear old key
-		node.children[i] = nil               // Clear old child
-	}
-
-	newNode := BTreeInternalNode{
-		nkey:     node.nkey - pos,
-		keys:     newKeys,
-		children: newChildren,
-	}
-
-	// Update original node key count
-	node.nkey = pos
-	return newNode
-}
-
-func main() {
-	fmt.Println("Hello word") // Typo: should be "Hello world"
+func main(){
+	fmt.Println("B+ Tree implementation")
 }

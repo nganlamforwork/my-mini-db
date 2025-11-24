@@ -4,67 +4,85 @@ import (
 	"testing"
 )
 
-func TestDatabase(t *testing.T) {
-	node := NewINode()
-	c := NewINode()
-	node.InsertKV(3, c)
-	// [3]
-	if node.nkey != 1 {
-		t.Errorf("got nkey = %v, expect %v", node.nkey, 1)
+// helper: check if leaf contains key/value
+func leafContains(leaf *Node, key KeyType, value ValueType) bool {
+	for i, k := range leaf.keys {
+		if k == key && leaf.values[i] == value {
+			return true
+		}
 	}
-	if node.keys[0] != 3 {
-		t.Errorf("got key[0] = %v, expect %v", node.keys[0], 3)
+	return false
+}
+
+func TestBPlusTreeInsertAndFind(t *testing.T) {
+	tree := &BPlusTree{}
+
+	// ------------------------------
+	// Insert without split
+	// ------------------------------
+	tree.Insert(10, "A")
+	tree.Insert(20, "B")
+	tree.Insert(5, "C") // leaf keys: [5,10,20]
+
+	leaf := tree.findLeaf(10)
+	if !leafContains(leaf, 10, "A") {
+		t.Errorf("Leaf does not contain inserted key 10")
 	}
-	node.InsertKV(10, c)
-	// [3, 10]
-	if node.nkey != 2 {
-		t.Errorf("got nkey = %v, expect %v", node.nkey, 2)
+	if !leafContains(leaf, 5, "C") || !leafContains(leaf, 20, "B") {
+		t.Errorf("Leaf keys/values incorrect for no split case")
 	}
-	if node.keys[0] != 3 {
-		t.Errorf("got key[0] = %v, expect %v", node.keys[0], 3)
+
+	// ------------------------------
+	// Insert causing leaf split
+	// ORDER = 4 → max keys = 3
+	// Insert 15 → triggers leaf split
+	// ------------------------------
+	tree.Insert(15, "D")
+	
+	// After split, leafs linked list:
+	// leaf1: [5,10] → leaf2: [15,20]
+	leaf1 := tree.root
+	if !leaf1.isLeaf {
+		// root may be internal now after split
+		leaf1 = tree.root.children[0]
 	}
-	if node.keys[1] != 10 {
-		t.Errorf("got key[1] = %v, expect %v", node.keys[1], 10)
+	leaf2 := leaf1.next
+
+	if !leafContains(leaf2, 15, "D") || !leafContains(leaf2, 20, "B") {
+		t.Errorf("Leaf split failed, second leaf keys incorrect")
 	}
-	node.InsertKV(5, c)
-	// [3, 5, 10]
-	if node.nkey != 3 {
-		t.Errorf("got nkey = %v, expect %v", node.nkey, 3)
+
+	// ------------------------------
+	// Insert causing root split
+	// Insert more keys to trigger internal node split
+	// ------------------------------
+	tree.Insert(25, "E")
+	tree.Insert(30, "F") // Should trigger root split eventually
+
+	if tree.root == nil {
+		t.Errorf("Root should not be nil after inserts")
 	}
-	if node.keys[0] != 3 {
-		t.Errorf("got key[0] = %v, expect %v", node.keys[0], 3)
+	if tree.root.isLeaf {
+		t.Errorf("Root should be internal after splits")
 	}
-	if node.keys[1] != 5 {
-		t.Errorf("got key[1] = %v, expect %v", node.keys[1], 5)
+	if len(tree.root.keys) == 0 {
+		t.Errorf("Root keys should not be empty after split")
 	}
-	if node.keys[2] != 10 {
-		t.Errorf("got key[2] = %v, expect %v", node.keys[2], 10)
+
+	// Verify all keys exist via findLeaf
+	keysToCheck := map[KeyType]ValueType{
+		5:  "C",
+		10: "A",
+		15: "D",
+		20: "B",
+		25: "E",
+		30: "F",
 	}
-	node.InsertKV(12, c)
-	if node.nkey != 4 {
-		t.Errorf("got nkey = %v, expect %v", node.nkey, 4)
+
+	for k, v := range keysToCheck {
+		leaf := tree.findLeaf(k)
+		if !leafContains(leaf, k, v) {
+			t.Errorf("Key %d not found in leaf or value mismatch", k)
+		}
 	}
-	// [3, 5, 10, 12]
-	newNode := node.Split()
-	// [3, 5] [10, 12]
-	if node.nkey != 2 {
-		t.Errorf("got nkey = %v, expect %v", node.nkey, 2)
-	}
-	if newNode.nkey != 2 {
-		t.Errorf("got nkey = %v, expect %v", newNode.nkey, 2)
-	}
-	if node.keys[0] != 3 {
-		t.Errorf("got key[0] = %v, expect %v", node.keys[0], 3)
-	}
-	if node.keys[1] != 5 {
-		t.Errorf("got key[1] = %v, expect %v", node.keys[1], 5)
-	}
-	if newNode.keys[0] != 10 {
-		t.Errorf("got key[2] = %v, expect %v", newNode.keys[0], 10)
-	}
-	if newNode.keys[1] != 12 {
-		t.Errorf("got key[2] = %v, expect %v", newNode.keys[1], 10)
-	}
-	// if d, ok := (*node.children[0]).(BTreeInternalNode); ok {
-	// }
 }
