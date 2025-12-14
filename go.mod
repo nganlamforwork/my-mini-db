@@ -1,3 +1,3 @@
-module my_mini_db
+module bplustree
 
 go 1.25.4
