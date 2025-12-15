@@ -1,10 +1,10 @@
-package maintain
+package main
 
 import (
 	"bytes"
 	"encoding/binary"
-
 )
+
 const PageHeaderSize = 56
 
 type PageType uint8
@@ -16,26 +16,29 @@ const (
 )
 
 type PageHeader struct {
-	PageID     uint64   // unique page identifier
-	PageType   PageType // meta / internal / leaf
+	PageID   uint64   // unique page identifier
+	PageType PageType // meta / internal / leaf
 
 	// common B+Tree metadata
-	KeyCount   uint16   // number of keys currently stored
-	FreeSpace  uint16   // remaining free space (bytes)
+	KeyCount  uint16 // number of keys currently stored
+	FreeSpace uint16 // remaining free space (bytes)
 
 	// tree structure
-	ParentPage uint64   // parent page id (0 if root)
-	NextPage   uint64   // right sibling (leaf) or 0
-	PrevPage   uint64   // left sibling (leaf) or 0
+	ParentPage uint64 // parent page id (0 if root)
+	NextPage   uint64 // right sibling (leaf) or 0
+	PrevPage   uint64 // left sibling (leaf) or 0
 
 	// padding for 8-byte alignment
-	_          uint32
+	_ uint32
 
 	// concurrency / recovery (optional but future-proof)
-	LSN        uint64   // log sequence number (for WAL)
+	LSN uint64 // log sequence number (for WAL)
 }
 
 func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
+	// Serialize header fields deterministically in big-endian order.
+	// The order is important for on-disk compatibility; choosing
+	// PageID first keeps identifiers at the front of the header.
 	if err := binary.Write(buf, binary.BigEndian, h.PageID); err != nil {
 		return err
 	}
@@ -43,6 +46,7 @@ func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
 		return err
 	}
 
+	// linkage (prev/next) so scanners can follow sibling chains
 	if err := binary.Write(buf, binary.BigEndian, h.PrevPage); err != nil {
 		return err
 	}
@@ -50,6 +54,7 @@ func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
 		return err
 	}
 
+	// type and counts
 	if err := binary.Write(buf, binary.BigEndian, h.PageType); err != nil {
 		return err
 	}
@@ -60,12 +65,13 @@ func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
 		return err
 	}
 
-	// padding (alignment)
+	// padding for alignment to keep header size stable across platforms
 	var padding uint32 = 0
 	if err := binary.Write(buf, binary.BigEndian, padding); err != nil {
 		return err
 	}
 
+	// LSN last so header changes affecting recovery can be appended
 	if err := binary.Write(buf, binary.BigEndian, h.LSN); err != nil {
 		return err
 	}
@@ -74,6 +80,7 @@ func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
 }
 
 func (h *PageHeader) ReadFromBuffer(buf *bytes.Reader) error {
+	// Deserialize fields in the same order they were written.
 	if err := binary.Read(buf, binary.BigEndian, &h.PageID); err != nil {
 		return err
 	}
@@ -98,12 +105,13 @@ func (h *PageHeader) ReadFromBuffer(buf *bytes.Reader) error {
 		return err
 	}
 
-	// skip padding
+	// skip padding (alignment)
 	var padding uint32
 	if err := binary.Read(buf, binary.BigEndian, &padding); err != nil {
 		return err
 	}
 
+	// read LSN last (consistent with WriteToBuffer)
 	if err := binary.Read(buf, binary.BigEndian, &h.LSN); err != nil {
 		return err
 	}

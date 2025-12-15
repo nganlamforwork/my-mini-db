@@ -3,17 +3,16 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
-
 )
 
 type MetaPage struct {
 	Header PageHeader
 
 	// B+Tree metadata
-	RootPage  uint64 // page id of root
-	PageSize  uint32 // e.g. 4096
-	Order     uint16 // B+Tree order
-	Version   uint16 // format version
+	RootPage uint64 // page id of root
+	PageSize uint32 // e.g. 4096
+	Order    uint16 // B+Tree order
+	Version  uint16 // format version
 }
 
 func (m *MetaPage) WriteToBuffer(buf *bytes.Buffer) error {

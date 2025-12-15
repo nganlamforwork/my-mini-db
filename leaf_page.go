@@ -1,82 +1,67 @@
 package main
 
 // -----------------------------
-// Finding the correct leaf
-// -----------------------------
-
-// findLeaf traverses the tree to find the correct leaf where 'key' should be inserted.
-// Uses binary search to find the last key <= input key (B+Tree routing rule).
-func (tree *BPlusTree) findLeaf(key KeyType) *Node {
-    current := tree.root
-    if current == nil {
-        return nil
-    }
-
-    for !current.isLeaf {
-        keys := current.keys
-        left, right := 0, len(keys)-1
-        pos := -1 // last index where keys[pos] <= key
-
-        // binary search for last key <= key
-        for left <= right {
-            mid := (left + right) / 2
-            if keys[mid] <= key {
-                pos = mid
-                left = mid + 1
-            } else {
-                right = mid - 1
-            }
-        }
-
-        // child index = pos + 1
-        // if pos = -1 → go to children[0]
-        childIndex := pos + 1
-        current = current.children[childIndex]
-    }
-
-    return current
-}
-
-// -----------------------------
 // Insert into leaf
 // -----------------------------
 
-// insertIntoLeaf inserts key/value pair into a leaf node in sorted order
-func insertIntoLeaf(leaf *Node, key KeyType, value ValueType) {
+// insertIntoLeaf inserts a key/value pair into `page` keeping
+// the keys sorted. This is an in-memory, stable insertion used
+// by higher-level tree operations; it does not persist data to
+// disk — the pager layer is responsible for page lifecycle.
+//
+// Key points:
+// - Find the insertion index by scanning until the first key >= new key.
+// - Shift existing keys/values to make room and update key count.
+func insertIntoLeaf(page *LeafPage, key KeyType, value ValueType) {
 	i := 0
-	// find correct position for key
-	for i < len(leaf.keys) && leaf.keys[i] < key {
+	for i < len(page.keys) && page.keys[i] < key {
 		i++
 	}
 
-	// append empty slots to shift elements
-	leaf.keys = append(leaf.keys, 0)
-	leaf.values = append(leaf.values, "")
-	copy(leaf.keys[i+1:], leaf.keys[i:])
-	copy(leaf.values[i+1:], leaf.values[i:])
+	// grow slices by one and shift elements right to make room
+	page.keys = append(page.keys, 0)
+	page.values = append(page.values, "")
 
-	// insert the new key/value
-	leaf.keys[i] = key
-	leaf.values[i] = value
+	copy(page.keys[i+1:], page.keys[i:])
+	copy(page.values[i+1:], page.values[i:])
+
+	page.keys[i] = key
+	page.values[i] = value
+
+	// maintain header metadata
+	page.Header.KeyCount = uint16(len(page.keys))
 }
 
 // splitLeaf splits a full leaf node into two and returns the new leaf and its first key
-func splitLeaf(leaf *Node) (*Node, KeyType) {
-	mid := (ORDER + 1) / 2 // find split point
-	newLeaf := newLeafNode()
+// splitLeaf splits `page` into two leaf pages: the existing `page`
+// becomes the left sibling and `newLeaf` becomes the right sibling.
+//
+// Key concepts:
+//   - Use a midpoint to divide keys/values for relatively even distribution.
+//   - The first key of the new right-side leaf is the separator pushed
+//     up into the parent internal node.
+//   - Sibling links (`NextPage`/`PrevPage`) are updated to maintain
+//     the leaf-level doubly-linked list used for range scans.
+func splitLeaf(page *LeafPage, newLeaf *LeafPage) KeyType {
+	mid := len(page.keys) / 2 // Calculate midpoint for even distribution
 
-	// move half of keys/values to the new leaf
-	newLeaf.keys = append(newLeaf.keys, leaf.keys[mid:]...)
-	newLeaf.values = append(newLeaf.values, leaf.values[mid:]...)
+	// Move keys and values from midpoint to the new leaf
+	newLeaf.keys = append(newLeaf.keys, page.keys[mid:]...)
+	newLeaf.values = append(newLeaf.values, page.values[mid:]...)
 
-	// truncate original leaf
-	leaf.keys = leaf.keys[:mid]
-	leaf.values = leaf.values[:mid]
+	// Retain only the left half in the original leaf
+	page.keys = page.keys[:mid]
+	page.values = page.values[:mid]
 
-	// update linked list pointers
-	newLeaf.next = leaf.next
-	leaf.next = newLeaf
+	// Update sibling links to stitch the new leaf into the list
+	newLeaf.Header.NextPage = page.Header.NextPage
+	newLeaf.Header.PrevPage = page.Header.PageID
+	page.Header.NextPage = newLeaf.Header.PageID
 
-	// return new leaf and the first key of new leaf (to push up)
-	return newLeaf, newLeaf.keys[0]
+	// Update key counts
+	page.Header.KeyCount = uint16(len(page.keys))
+	newLeaf.Header.KeyCount = uint16(len(newLeaf.keys))
+
+	// The first key of the new right leaf is the separator for the parent
+	return newLeaf.keys[0]
 }
