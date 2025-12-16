@@ -7,12 +7,12 @@ package main
 // insertIntoInternal inserts `key` and the associated right-side child
 // pointer into an internal node `page` at the correct position.
 //
-// Key concepts and flow:
-//   - Internal nodes store separator keys and child pointers where the
-//     child pointer at index i corresponds to keys <= keys[i] for the
-//     left child and > keys[i] for the right child (routing semantics).
-//   - When inserting a new separator, we insert the key and the pointer
-//     to the right child produced by a split.
+// Routing semantics (precise): for an internal node with keys K[0..n-1]
+// and children C[0..n], the subtree C[i] contains keys where
+// K[i-1] < key <= K[i], with K[-1] = -inf and K[n] = +inf. To choose
+// a child for `searchKey` we find the last key <= searchKey (pos) and
+// follow child C[pos+1]; if no key <= searchKey, follow C[0]. This
+// matches the binary search used in `findLeaf`.
 func insertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
 	i := 0
 	// find the position for the new key (first key >= new key)

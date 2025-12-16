@@ -32,7 +32,6 @@ func insertIntoLeaf(page *LeafPage, key KeyType, value ValueType) {
 	page.Header.KeyCount = uint16(len(page.keys))
 }
 
-// splitLeaf splits a full leaf node into two and returns the new leaf and its first key
 // splitLeaf splits `page` into two leaf pages: the existing `page`
 // becomes the left sibling and `newLeaf` becomes the right sibling.
 //

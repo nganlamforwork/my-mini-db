@@ -3,6 +3,12 @@ package main
 type KeyType int
 type ValueType string
 
+const (
+	PageTypeMeta     PageType = 0
+	PageTypeInternal PageType = 1
+	PageTypeLeaf     PageType = 2
+)
+
 // Maximum number of children in an internal node (m = 4)
 // So leaf nodes can have up to ORDER-1 keys
 const ORDER = 4
@@ -27,7 +33,6 @@ type LeafPage struct {
 // Node creation helpers
 // -----------------------------
 
-// newLeafPage creates a new empty leaf node
 // newLeafPage constructs an in-memory leaf page with initialized
 // internal slices and header metadata. It does not register the
 // page with any pager — callers should use PageManager to allocate

@@ -8,13 +8,6 @@ import (
 const PageHeaderSize = 56
 
 type PageType uint8
-
-const (
-	PageTypeMeta     PageType = 0
-	PageTypeInternal PageType = 1
-	PageTypeLeaf     PageType = 2
-)
-
 type PageHeader struct {
 	PageID   uint64   // unique page identifier
 	PageType PageType // meta / internal / leaf
@@ -36,9 +29,12 @@ type PageHeader struct {
 }
 
 func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
-	// Serialize header fields deterministically in big-endian order.
-	// The order is important for on-disk compatibility; choosing
-	// PageID first keeps identifiers at the front of the header.
+	// Serialize header fields in a stable, explicitly-defined order
+	// (big-endian). The serialization order is independent of the Go
+	// struct field layout; consumers/readers must use the same order
+	// when decoding. The chosen order here is:
+	//   PageID, ParentPage, PrevPage, NextPage, PageType, KeyCount,
+	//   FreeSpace, padding (uint32), LSN
 	if err := binary.Write(buf, binary.BigEndian, h.PageID); err != nil {
 		return err
 	}
