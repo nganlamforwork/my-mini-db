@@ -15,7 +15,6 @@ func TestInsertWithoutSplit(t *testing.T) {
 	dbfile := filepath.Join(dbDir, t.Name()+".db")
 	pm := NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
-	t.Logf("DB file: %s", dbfile)
 	tree := &BPlusTree{
 		pager: pm,
 	}
@@ -52,18 +51,6 @@ func TestInsertWithoutSplit(t *testing.T) {
 	if lp.Header.ParentPage != 0 {
 		t.Fatalf("expected root leaf to have no parent, got %d", lp.Header.ParentPage)
 	}
-
-	// print all values in leaf pages (select all)
-	vals := collectLeafValues(tree)
-	t.Logf("leaf values: %v", vals)
-
-	// dump tree structure to text file next to DB for inspection
-	txt := dbfile + ".txt"
-	if err := dumpTreeStructure(tree, txt); err != nil {
-		t.Logf("failed to dump tree: %v", err)
-	} else {
-		t.Logf("wrote tree dump: %s", txt)
-	}
 }
 
 func TestInsertWithSplit(t *testing.T) {
@@ -72,12 +59,9 @@ func TestInsertWithSplit(t *testing.T) {
 	dbfile := filepath.Join(dbDir, t.Name()+".db")
 	pm := NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
-	t.Logf("DB file: %s", dbfile)
 	tree := &BPlusTree{
 		pager: pm,
 	}
-	print("TestInsertWithSplit starting...\n")
-	print("Initial rootPageID: ", tree.rootPageID, "\n")
 
 	// Insert keys to cause a split
 	keys := []KeyType{10, 20, 30, 40, 50}
@@ -142,18 +126,6 @@ func TestInsertWithSplit(t *testing.T) {
 	if computeLeafPayloadSize(leftChild) > payloadCap || computeLeafPayloadSize(rightChild) > payloadCap {
 		t.Fatalf("one of the children exceeds payload capacity after split")
 	}
-
-	// print all values in leaves (select all)
-	vals := collectLeafValues(tree)
-	t.Logf("leaf values: %v", vals)
-
-	// dump tree structure
-	txt := dbfile + ".txt"
-	if err := dumpTreeStructure(tree, txt); err != nil {
-		t.Logf("failed to dump tree: %v", err)
-	} else {
-		t.Logf("wrote tree dump: %s", txt)
-	}
 }
 
 // TestInsertManyComplex inserts a larger set of keys (20) in a
@@ -169,7 +141,6 @@ func TestInsertManyComplex(t *testing.T) {
 	dbfile := filepath.Join(dbDir, t.Name()+".db")
 	pm := NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
-	t.Logf("DB file: %s", dbfile)
 	tree := &BPlusTree{
 		pager: pm,
 	}
@@ -241,18 +212,6 @@ Traversal:
 		if collected[i] != expected[i] {
 			t.Fatalf("expected key %v at index %d, got %v", expected[i], i, collected[i])
 		}
-	}
-
-	// print all values in leaves (select all)
-	vals := collectLeafValues(tree)
-	t.Logf("leaf values: %v", vals)
-
-	// dump tree structure
-	txt := dbfile + ".txt"
-	if err := dumpTreeStructure(tree, txt); err != nil {
-		t.Logf("failed to dump tree: %v", err)
-	} else {
-		t.Logf("wrote tree dump: %s", txt)
 	}
 }
 
