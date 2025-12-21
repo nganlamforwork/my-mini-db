@@ -1,5 +1,10 @@
 package main
 
+import (
+	"bytes"
+	"encoding/binary"
+)
+
 // -----------------------------
 // Insert into internal node
 // -----------------------------
@@ -60,4 +65,62 @@ func splitInternal(page *InternalPage, newPage *InternalPage) KeyType {
 	newPage.Header.KeyCount = uint16(len(newPage.keys))
 
 	return midKey
+}
+
+// WriteToBuffer serializes the internal page into buf. Format:
+//  - header (PageHeader.WriteToBuffer)
+//  - keys (KeyCount entries, each written as int64 big-endian)
+//  - children (KeyCount+1 entries, each uint64 big-endian)
+func (p *InternalPage) WriteToBuffer(buf *bytes.Buffer) error {
+	if err := p.Header.WriteToBuffer(buf); err != nil {
+		return err
+	}
+
+	// write keys as fixed-size int64
+	for _, k := range p.keys {
+		if err := binary.Write(buf, binary.BigEndian, int64(k)); err != nil {
+			return err
+		}
+	}
+
+	// write child page ids
+	for _, c := range p.children {
+		if err := binary.Write(buf, binary.BigEndian, c); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ReadFromBuffer deserializes an internal page from buf. It expects the
+// same layout used in WriteToBuffer.
+func (p *InternalPage) ReadFromBuffer(buf *bytes.Reader) error {
+	if err := p.Header.ReadFromBuffer(buf); err != nil {
+		return err
+	}
+
+	// prepare slices
+	keyCount := int(p.Header.KeyCount)
+	p.keys = make([]KeyType, 0, keyCount)
+	for i := 0; i < keyCount; i++ {
+		var k int64
+		if err := binary.Read(buf, binary.BigEndian, &k); err != nil {
+			return err
+		}
+		p.keys = append(p.keys, KeyType(k))
+	}
+
+	// children: keyCount+1 entries
+	childCount := keyCount + 1
+	p.children = make([]uint64, 0, childCount)
+	for i := 0; i < childCount; i++ {
+		var c uint64
+		if err := binary.Read(buf, binary.BigEndian, &c); err != nil {
+			return err
+		}
+		p.children = append(p.children, c)
+	}
+
+	return nil
 }

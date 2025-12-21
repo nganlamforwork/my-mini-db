@@ -1,5 +1,11 @@
 package main
 
+import (
+	"bytes"
+	"encoding/binary"
+	"io"
+)
+
 // -----------------------------
 // Insert into leaf
 // -----------------------------
@@ -63,4 +69,66 @@ func splitLeaf(page *LeafPage, newLeaf *LeafPage) KeyType {
 
 	// The first key of the new right leaf is the separator for the parent
 	return newLeaf.keys[0]
+}
+
+// WriteToBuffer serializes the leaf page into buf. Format:
+//  - header (PageHeader.WriteToBuffer)
+//  - keys (KeyCount entries as int64)
+//  - values (for each value: uint32 length, followed by bytes)
+func (p *LeafPage) WriteToBuffer(buf *bytes.Buffer) error {
+	if err := p.Header.WriteToBuffer(buf); err != nil {
+		return err
+	}
+
+	// keys
+	for _, k := range p.keys {
+		if err := binary.Write(buf, binary.BigEndian, int64(k)); err != nil {
+			return err
+		}
+	}
+
+	// values: write length then bytes
+	for _, v := range p.values {
+		b := []byte(v)
+		if err := binary.Write(buf, binary.BigEndian, uint32(len(b))); err != nil {
+			return err
+		}
+		if _, err := buf.Write(b); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// ReadFromBuffer deserializes a leaf page from buf.
+func (p *LeafPage) ReadFromBuffer(buf *bytes.Reader) error {
+	if err := p.Header.ReadFromBuffer(buf); err != nil {
+		return err
+	}
+
+	keyCount := int(p.Header.KeyCount)
+	p.keys = make([]KeyType, 0, keyCount)
+	for i := 0; i < keyCount; i++ {
+		var k int64
+		if err := binary.Read(buf, binary.BigEndian, &k); err != nil {
+			return err
+		}
+		p.keys = append(p.keys, KeyType(k))
+	}
+
+	p.values = make([]ValueType, 0, keyCount)
+	for i := 0; i < keyCount; i++ {
+		var l uint32
+		if err := binary.Read(buf, binary.BigEndian, &l); err != nil {
+			return err
+		}
+		b := make([]byte, l)
+		if _, err := io.ReadFull(buf, b); err != nil {
+			return err
+		}
+		p.values = append(p.values, ValueType(b))
+	}
+
+	return nil
 }
