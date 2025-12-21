@@ -42,6 +42,7 @@ func newLeafPage(pageID uint64) *LeafPage {
 		Header: PageHeader{
 			PageID:   pageID,
 			PageType: PageTypeLeaf,
+			FreeSpace: uint16(DefaultPageSize - PageHeaderSize),
 		},
 		keys:   make([]KeyType, 0, ORDER-1),
 		values: make([]ValueType, 0, ORDER-1),
@@ -57,6 +58,7 @@ func newInternalPage(pageID uint64) *InternalPage {
 		Header: PageHeader{
 			PageID:   pageID,
 			PageType: PageTypeInternal,
+			FreeSpace: uint16(DefaultPageSize - PageHeaderSize),
 		},
 		keys:     make([]KeyType, 0, ORDER-1),
 		children: make([]uint64, 0, ORDER),

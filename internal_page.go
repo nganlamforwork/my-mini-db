@@ -48,7 +48,7 @@ func insertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
 // - The middle key (mid) is removed from the node and propagated upward.
 // - Keys to the right of mid and corresponding child pointers move to `newPage`.
 // - Parent pointers for moved children should be updated by caller if tracked.
-func splitInternal(page *InternalPage, newPage *InternalPage) KeyType {
+func splitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) KeyType {
 	mid := len(page.keys) / 2 // middle index
 	midKey := page.keys[mid]  // key to push up
 
@@ -60,9 +60,42 @@ func splitInternal(page *InternalPage, newPage *InternalPage) KeyType {
 	page.keys = page.keys[:mid]
 	page.children = page.children[:mid+1]
 
-	// update metadata
+	// update metadata: ensure KeyCount reflects actual slice lengths
 	page.Header.KeyCount = uint16(len(page.keys))
 	newPage.Header.KeyCount = uint16(len(newPage.keys))
+
+	// update parent pointer of children moved to newPage
+	// for each child page id now owned by newPage, set its ParentPage
+	for _, childID := range newPage.children {
+		if pm == nil {
+			continue
+		}
+		child := pm.Get(childID)
+		if child == nil {
+			continue
+		}
+		switch c := child.(type) {
+		case *InternalPage:
+			c.Header.ParentPage = newPage.Header.PageID
+		case *LeafPage:
+			c.Header.ParentPage = newPage.Header.PageID
+		}
+	}
+
+	// recompute FreeSpace for internal pages (keys*8 + children*8 payload)
+	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
+	usedLeft := len(page.keys)*8 + len(page.children)*8
+	if usedLeft > payloadCapacity {
+		page.Header.FreeSpace = 0
+	} else {
+		page.Header.FreeSpace = uint16(payloadCapacity - usedLeft)
+	}
+	usedRight := len(newPage.keys)*8 + len(newPage.children)*8
+	if usedRight > payloadCapacity {
+		newPage.Header.FreeSpace = 0
+	} else {
+		newPage.Header.FreeSpace = uint16(payloadCapacity - usedRight)
+	}
 
 	return midKey
 }

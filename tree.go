@@ -110,11 +110,16 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	}
 
 	// Insert into the leaf in sorted order
-	insertIntoLeaf(leaf, key, value)
+	if err := insertIntoLeaf(leaf, key, value); err != nil {
+		return err
+	}
 
-	// If the leaf does not overflow, we're done
+	// If the leaf does not overflow (by key count or payload), we're done
+	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
 	if len(leaf.keys) <= MAX_KEYS {
-		return nil
+		if computeLeafPayloadSize(leaf) <= payloadCapacity {
+			return nil
+		}
 	}
 
 	// 3. Split leaf
@@ -144,7 +149,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 		// split internal
 		newInternal := tree.pager.NewInternal()
-		pushKey = splitInternal(parent, newInternal)
+		pushKey = splitInternal(parent, newInternal, tree.pager)
 		childPageID = newInternal.Header.PageID
 	}
 

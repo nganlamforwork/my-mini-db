@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
 	"io"
 )
 
@@ -18,7 +19,29 @@ import (
 // Key points:
 // - Find the insertion index by scanning until the first key >= new key.
 // - Shift existing keys/values to make room and update key count.
-func insertIntoLeaf(page *LeafPage, key KeyType, value ValueType) {
+// computeLeafPayloadSize returns the number of payload bytes used by the
+// leaf page (sum of key sizes + value length prefixes + value bytes).
+func computeLeafPayloadSize(p *LeafPage) int {
+	size := 0
+	for range p.keys {
+		size += 8 // key as int64
+	}
+	for _, v := range p.values {
+		size += 4               // uint32 length prefix
+		size += len([]byte(v))  // bytes of value
+	}
+	return size
+}
+
+// insertIntoLeaf inserts a key/value pair into `page` keeping the keys sorted.
+// Returns an error if the single value is larger than the page payload capacity.
+func insertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
+	// check single-value size against page capacity
+	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
+	if len([]byte(value))+4 > payloadCapacity {
+		return fmt.Errorf("value too large for single page: %d bytes", len([]byte(value)))
+	}
+
 	i := 0
 	for i < len(page.keys) && page.keys[i] < key {
 		i++
@@ -34,8 +57,18 @@ func insertIntoLeaf(page *LeafPage, key KeyType, value ValueType) {
 	page.keys[i] = key
 	page.values[i] = value
 
-	// maintain header metadata
+	// update header metadata and recompute free space
 	page.Header.KeyCount = uint16(len(page.keys))
+	used := computeLeafPayloadSize(page)
+	if used > payloadCapacity {
+		// shouldn't normally happen because we checked single value size,
+		// but signal caller that page is overfull so it can split.
+		page.Header.FreeSpace = 0
+	} else {
+		page.Header.FreeSpace = uint16(payloadCapacity - used)
+	}
+
+	return nil
 }
 
 // splitLeaf splits `page` into two leaf pages: the existing `page`
@@ -66,6 +99,21 @@ func splitLeaf(page *LeafPage, newLeaf *LeafPage) KeyType {
 	// Update key counts
 	page.Header.KeyCount = uint16(len(page.keys))
 	newLeaf.Header.KeyCount = uint16(len(newLeaf.keys))
+
+	// Recompute free space for both pages based on payload
+	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
+	usedLeft := computeLeafPayloadSize(page)
+	if usedLeft > payloadCapacity {
+		page.Header.FreeSpace = 0
+	} else {
+		page.Header.FreeSpace = uint16(payloadCapacity - usedLeft)
+	}
+	usedRight := computeLeafPayloadSize(newLeaf)
+	if usedRight > payloadCapacity {
+		newLeaf.Header.FreeSpace = 0
+	} else {
+		newLeaf.Header.FreeSpace = uint16(payloadCapacity - usedRight)
+	}
 
 	// The first key of the new right leaf is the separator for the parent
 	return newLeaf.keys[0]

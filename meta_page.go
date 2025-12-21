@@ -5,6 +5,9 @@ import (
 	"encoding/binary"
 )
 
+// DefaultPageSize is the default page size used by in-memory pages
+const DefaultPageSize = 4096
+
 type MetaPage struct {
 	Header PageHeader
 
