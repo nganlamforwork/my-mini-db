@@ -2,13 +2,22 @@ package main
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
 	"testing"
 )
 
 func TestInsertWithoutSplit(t *testing.T) {
+	// use a persistent per-test DB file under testdata/ so it can be inspected
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	t.Logf("DB file: %s", dbfile)
 	tree := &BPlusTree{
-		pager: NewPageManager(),
+		pager: pm,
 	}
 
 	// Insert keys without causing a split
@@ -43,11 +52,29 @@ func TestInsertWithoutSplit(t *testing.T) {
 	if lp.Header.ParentPage != 0 {
 		t.Fatalf("expected root leaf to have no parent, got %d", lp.Header.ParentPage)
 	}
+
+	// print all values in leaf pages (select all)
+	vals := collectLeafValues(tree)
+	t.Logf("leaf values: %v", vals)
+
+	// dump tree structure to text file next to DB for inspection
+	txt := dbfile + ".txt"
+	if err := dumpTreeStructure(tree, txt); err != nil {
+		t.Logf("failed to dump tree: %v", err)
+	} else {
+		t.Logf("wrote tree dump: %s", txt)
+	}
 }
 
 func TestInsertWithSplit(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	t.Logf("DB file: %s", dbfile)
 	tree := &BPlusTree{
-		pager: NewPageManager(),
+		pager: pm,
 	}
 	print("TestInsertWithSplit starting...\n")
 	print("Initial rootPageID: ", tree.rootPageID, "\n")
@@ -115,6 +142,18 @@ func TestInsertWithSplit(t *testing.T) {
 	if computeLeafPayloadSize(leftChild) > payloadCap || computeLeafPayloadSize(rightChild) > payloadCap {
 		t.Fatalf("one of the children exceeds payload capacity after split")
 	}
+
+	// print all values in leaves (select all)
+	vals := collectLeafValues(tree)
+	t.Logf("leaf values: %v", vals)
+
+	// dump tree structure
+	txt := dbfile + ".txt"
+	if err := dumpTreeStructure(tree, txt); err != nil {
+		t.Logf("failed to dump tree: %v", err)
+	} else {
+		t.Logf("wrote tree dump: %s", txt)
+	}
 }
 
 // TestInsertManyComplex inserts a larger set of keys (20) in a
@@ -125,8 +164,14 @@ func TestInsertWithSplit(t *testing.T) {
 //     the leaf linked list.
 //   - The number of collected keys equals the number inserted.
 func TestInsertManyComplex(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	t.Logf("DB file: %s", dbfile)
 	tree := &BPlusTree{
-		pager: NewPageManager(),
+		pager: pm,
 	}
 
 	// 20 keys (more than 15) inserted in a shuffled order to
@@ -197,4 +242,100 @@ Traversal:
 			t.Fatalf("expected key %v at index %d, got %v", expected[i], i, collected[i])
 		}
 	}
+
+	// print all values in leaves (select all)
+	vals := collectLeafValues(tree)
+	t.Logf("leaf values: %v", vals)
+
+	// dump tree structure
+	txt := dbfile + ".txt"
+	if err := dumpTreeStructure(tree, txt); err != nil {
+		t.Logf("failed to dump tree: %v", err)
+	} else {
+		t.Logf("wrote tree dump: %s", txt)
+	}
+}
+
+// collectLeafValues returns all values stored in the leaf-level pages
+// by scanning from the left-most leaf using `NextPage` links.
+func collectLeafValues(tree *BPlusTree) []ValueType {
+	// find left-most leaf
+	curID := tree.rootPageID
+	var leftmost *LeafPage
+	for {
+		p := tree.pager.Get(curID)
+		if p == nil {
+			return nil
+		}
+		switch v := p.(type) {
+		case *LeafPage:
+			leftmost = v
+			goto Start
+		case *InternalPage:
+			if len(v.children) == 0 {
+				return nil
+			}
+			curID = v.children[0]
+		default:
+			return nil
+		}
+	}
+
+Start:
+	res := make([]ValueType, 0)
+	leaf := leftmost
+	for leaf != nil {
+		res = append(res, leaf.values...)
+		if leaf.Header.NextPage == 0 {
+			break
+		}
+		np := tree.pager.Get(leaf.Header.NextPage)
+		if np == nil {
+			break
+		}
+		leaf = np.(*LeafPage)
+	}
+	return res
+}
+
+// dumpTreeStructure writes a human-readable snapshot of all allocated
+// pages into `path`. It iterates pages 1..pager.next-1 and prints a
+// concise description for meta, internal and leaf pages.
+func dumpTreeStructure(tree *BPlusTree, path string) error {
+	f, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	// ensure pages are loaded into the pager cache
+	max := tree.pager.next - 1
+	ids := make([]uint64, 0, max)
+	for i := uint64(1); i <= max; i++ {
+		p := tree.pager.Get(i)
+		if p == nil {
+			continue
+		}
+		ids = append(ids, i)
+	}
+
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+
+	for _, id := range ids {
+		p := tree.pager.Get(id)
+		switch v := p.(type) {
+		case *MetaPage:
+			fmt.Fprintf(f, "Page %d META root=%d pageSize=%d order=%d version=%d\n",
+				id, v.RootPage, v.PageSize, v.Order, v.Version)
+		case *InternalPage:
+			fmt.Fprintf(f, "Page %d INTERNAL parent=%d keyCount=%d free=%d keys=%v children=%v\n",
+				id, v.Header.ParentPage, v.Header.KeyCount, v.Header.FreeSpace, v.keys, v.children)
+		case *LeafPage:
+			fmt.Fprintf(f, "Page %d LEAF parent=%d prev=%d next=%d keyCount=%d free=%d keys=%v values=%v\n",
+				id, v.Header.ParentPage, v.Header.PrevPage, v.Header.NextPage, v.Header.KeyCount, v.Header.FreeSpace, v.keys, v.values)
+		default:
+			fmt.Fprintf(f, "Page %d UNKNOWN type=%T\n", id, p)
+		}
+	}
+	return nil
 }
