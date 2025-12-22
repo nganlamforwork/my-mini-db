@@ -3,8 +3,8 @@ package main
 import "fmt"
 
 type BPlusTree struct {
-	rootPageID uint64
-	pager      *PageManager
+	meta  *MetaPage
+	pager *PageManager
 }
 
 const MAX_KEYS = ORDER - 1
@@ -27,7 +27,17 @@ const MAX_KEYS = ORDER - 1
 func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 	path := make([]uint64, 0)
 
-	currentID := tree.rootPageID
+	// ensure meta is loaded
+	if tree.meta == nil {
+		if m, err := tree.pager.ReadMeta(); err == nil {
+			tree.meta = m
+		}
+	}
+
+	currentID := uint64(0)
+	if tree.meta != nil {
+		currentID = tree.meta.RootPage
+	}
 	for {
 		page := tree.pager.Get(currentID)
 		if page == nil {
@@ -87,12 +97,25 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	// 5) If the root splits, create a new root internal node.
 
 	// 1. Empty tree → create root leaf
-	if tree.rootPageID == 0 {
+	if tree.meta == nil {
+		if m, err := tree.pager.ReadMeta(); err == nil {
+			tree.meta = m
+		} else {
+			// fallback: create a new meta page in-memory
+			tree.meta = &MetaPage{RootPage: 0, PageSize: uint32(DefaultPageSize), Order: uint16(ORDER), Version: 1}
+		}
+	}
+
+	if tree.meta.RootPage == 0 {
 		leaf := tree.pager.NewLeaf()
 		leaf.keys = append(leaf.keys, key)
 		leaf.values = append(leaf.values, value)
 		leaf.Header.KeyCount = 1
-		tree.rootPageID = leaf.Header.PageID
+		tree.meta.RootPage = leaf.Header.PageID
+		// persist meta
+		if err := tree.pager.WriteMeta(tree.meta); err != nil {
+			return err
+		}
 		return nil
 	}
 
@@ -158,14 +181,14 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	newRoot.keys = append(newRoot.keys, pushKey)
 	newRoot.children = append(
 		newRoot.children,
-		tree.rootPageID,
+		tree.meta.RootPage,
 		childPageID,
 	)
 
 	// Ensure correct type assertions for left and right children
-	if left, ok := tree.pager.Get(tree.rootPageID).(*InternalPage); ok {
+	if left, ok := tree.pager.Get(tree.meta.RootPage).(*InternalPage); ok {
 		left.Header.ParentPage = newRoot.Header.PageID
-	} else if leftLeaf, ok := tree.pager.Get(tree.rootPageID).(*LeafPage); ok {
+	} else if leftLeaf, ok := tree.pager.Get(tree.meta.RootPage).(*LeafPage); ok {
 		leftLeaf.Header.ParentPage = newRoot.Header.PageID
 	}
 
@@ -176,6 +199,10 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	}
 
 	newRoot.Header.KeyCount = 1
-	tree.rootPageID = newRoot.Header.PageID
+	// update meta root and persist
+	tree.meta.RootPage = newRoot.Header.PageID
+	if err := tree.pager.WriteMeta(tree.meta); err != nil {
+		return err
+	}
 	return nil
 }

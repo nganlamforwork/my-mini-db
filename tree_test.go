@@ -15,9 +15,20 @@ func TestInsertWithoutSplit(t *testing.T) {
 	dbfile := filepath.Join(dbDir, t.Name()+".db")
 	pm := NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
 	tree := &BPlusTree{
 		pager: pm,
+		meta:  m,
 	}
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	defer func() {
+		if err := dumpTreeStructure(tree, out); err != nil {
+			t.Logf("dumpTreeStructure failed: %v", err)
+		}
+	}()
 
 	// Insert keys without causing a split
 	keys := []KeyType{10, 20, 30}
@@ -31,7 +42,7 @@ func TestInsertWithoutSplit(t *testing.T) {
 	}
 
 	// Verify the root is a leaf and contains the inserted key/value pairs
-	root := tree.pager.Get(tree.rootPageID)
+	root := tree.pager.Get(tree.meta.RootPage)
 	lp, ok := root.(*LeafPage)
 	if !ok {
 		t.Fatalf("expected root to be a leaf page, got %T", root)
@@ -59,9 +70,20 @@ func TestInsertWithSplit(t *testing.T) {
 	dbfile := filepath.Join(dbDir, t.Name()+".db")
 	pm := NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
 	tree := &BPlusTree{
 		pager: pm,
+		meta:  m,
 	}
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	defer func() {
+		if err := dumpTreeStructure(tree, out); err != nil {
+			t.Logf("dumpTreeStructure failed: %v", err)
+		}
+	}()
 
 	// Insert keys to cause a split
 	keys := []KeyType{10, 20, 30, 40, 50}
@@ -75,9 +97,9 @@ func TestInsertWithSplit(t *testing.T) {
 	}
 
 	// Verify the root and child nodes after split
-	rootP, ok := tree.pager.Get(tree.rootPageID).(*InternalPage)
+	rootP, ok := tree.pager.Get(tree.meta.RootPage).(*InternalPage)
 	if !ok {
-		t.Fatalf("expected root to be internal page, got %T", tree.pager.Get(tree.rootPageID))
+		t.Fatalf("expected root to be internal page, got %T", tree.pager.Get(tree.meta.RootPage))
 	}
 	if len(rootP.keys) != 1 {
 		t.Fatalf("Expected root to have 1 key, got %d", len(rootP.keys))
@@ -141,9 +163,20 @@ func TestInsertManyComplex(t *testing.T) {
 	dbfile := filepath.Join(dbDir, t.Name()+".db")
 	pm := NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
 	tree := &BPlusTree{
 		pager: pm,
+		meta:  m,
 	}
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	defer func() {
+		if err := dumpTreeStructure(tree, out); err != nil {
+			t.Logf("dumpTreeStructure failed: %v", err)
+		}
+	}()
 
 	// 20 keys (more than 15) inserted in a shuffled order to
 	// provoke splits at multiple levels.
@@ -156,7 +189,7 @@ func TestInsertManyComplex(t *testing.T) {
 	}
 
 	// Find left-most leaf by walking down children[0]
-	curID := tree.rootPageID
+	curID := tree.meta.RootPage
 	var leftmost *LeafPage
 	for {
 		p := tree.pager.Get(curID)
@@ -219,7 +252,7 @@ Traversal:
 // by scanning from the left-most leaf using `NextPage` links.
 func collectLeafValues(tree *BPlusTree) []ValueType {
 	// find left-most leaf
-	curID := tree.rootPageID
+	curID := tree.meta.RootPage
 	var leftmost *LeafPage
 	for {
 		p := tree.pager.Get(curID)

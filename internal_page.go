@@ -129,9 +129,7 @@ func (p *InternalPage) WriteToBuffer(buf *bytes.Buffer) error {
 // ReadFromBuffer deserializes an internal page from buf. It expects the
 // same layout used in WriteToBuffer.
 func (p *InternalPage) ReadFromBuffer(buf *bytes.Reader) error {
-	if err := p.Header.ReadFromBuffer(buf); err != nil {
-		return err
-	}
+	// PageHeader is already read by caller (readPageFromFile); payload follows.
 
 	// prepare slices
 	keyCount := int(p.Header.KeyCount)

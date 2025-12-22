@@ -42,11 +42,7 @@ func (m *MetaPage) WriteToBuffer(buf *bytes.Buffer) error {
 }
 
 func (m *MetaPage) ReadFromBuffer(buf *bytes.Reader) error {
-	// read header first
-	if err := m.Header.ReadFromBuffer(buf); err != nil {
-		return err
-	}
-
+	// Note: PageHeader is already read by caller (readPageFromFile).
 	// read meta payload
 	if err := binary.Read(buf, binary.BigEndian, &m.RootPage); err != nil {
 		return err

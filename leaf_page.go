@@ -151,9 +151,7 @@ func (p *LeafPage) WriteToBuffer(buf *bytes.Buffer) error {
 
 // ReadFromBuffer deserializes a leaf page from buf.
 func (p *LeafPage) ReadFromBuffer(buf *bytes.Reader) error {
-	if err := p.Header.ReadFromBuffer(buf); err != nil {
-		return err
-	}
+	// PageHeader already read by caller (readPageFromFile); payload follows.
 
 	keyCount := int(p.Header.KeyCount)
 	p.keys = make([]KeyType, 0, keyCount)
