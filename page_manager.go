@@ -255,8 +255,22 @@ func (pm *PageManager) readPageFromFile(pageID uint64) (interface{}, error) {
 
 // Close closes the underlying file. Call when application exits.
 func (pm *PageManager) Close() error {
+	// Flush all pages before closing
+	if err := pm.FlushAll(); err != nil {
+		return err
+	}
 	if pm.file != nil {
 		return pm.file.Close()
+	}
+	return nil
+}
+
+// FlushAll writes all cached pages back to disk
+func (pm *PageManager) FlushAll() error {
+	for pageID, page := range pm.pages {
+		if err := pm.writePageToFile(pageID, page); err != nil {
+			return fmt.Errorf("failed to flush page %d: %w", pageID, err)
+		}
 	}
 	return nil
 }

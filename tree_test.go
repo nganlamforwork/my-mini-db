@@ -331,3 +331,877 @@ func dumpTreeStructure(tree *BPlusTree, path string) error {
 	}
 	return nil
 }
+
+// -----------------------------
+// Test Load from disk
+// -----------------------------
+
+func TestLoadFromDisk(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	
+	// Phase 1: Create and populate tree
+	pm1 := NewPageManagerWithFile(dbfile, true)
+	m1, err := pm1.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree1 := &BPlusTree{
+		pager: pm1,
+		meta:  m1,
+	}
+
+	// Insert test data
+	keys := []KeyType{10, 20, 30, 40, 50, 60, 70, 80}
+	for _, k := range keys {
+		if err := tree1.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+	
+	pm1.Close()
+
+	// Phase 2: Load tree from disk
+	pm2 := NewPageManagerWithFile(dbfile, false) // Open existing file
+	defer pm2.Close()
+	
+	tree2 := &BPlusTree{
+		pager: pm2,
+	}
+	
+	if err := tree2.Load(); err != nil {
+		t.Fatalf("failed to load tree: %v", err)
+	}
+
+	// Verify all keys can be found
+	for _, k := range keys {
+		val, err := tree2.Search(k)
+		if err != nil {
+			t.Errorf("key %d not found after load: %v", k, err)
+		}
+		expected := ValueType(fmt.Sprintf("v%d", k))
+		if val != expected {
+			t.Errorf("key %d: expected value %v, got %v", k, expected, val)
+		}
+	}
+
+	// Write dump file
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree2, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+// -----------------------------
+// Test Search
+// -----------------------------
+
+func TestSearch(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert test data
+	testData := map[KeyType]ValueType{
+		10: "ten",
+		20: "twenty",
+		30: "thirty",
+		40: "forty",
+		50: "fifty",
+	}
+
+	for k, v := range testData {
+		if err := tree.Insert(k, v); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Test successful searches
+	for k, expectedVal := range testData {
+		val, err := tree.Search(k)
+		if err != nil {
+			t.Errorf("search for key %d failed: %v", k, err)
+		}
+		if val != expectedVal {
+			t.Errorf("key %d: expected %v, got %v", k, expectedVal, val)
+		}
+	}
+
+	// Test search for non-existent key
+	_, err = tree.Search(99)
+	if err == nil {
+		t.Error("expected error for non-existent key, got nil")
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+// -----------------------------
+// Test Delete operations
+// -----------------------------
+
+func TestDeleteSimple(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert keys
+	keys := []KeyType{10, 20, 30}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Delete one key
+	if err := tree.Delete(20); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	// Verify key is gone
+	_, err = tree.Search(20)
+	if err == nil {
+		t.Error("deleted key still found")
+	}
+
+	// Verify other keys still exist
+	for _, k := range []KeyType{10, 30} {
+		if _, err := tree.Search(k); err != nil {
+			t.Errorf("key %d not found after delete: %v", k, err)
+		}
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestDeleteWithBorrowFromRight(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert keys to create structure: [10,20] | [30,40,50]
+	keys := []KeyType{10, 20, 30, 40, 50}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Delete from left leaf to trigger borrow from right
+	if err := tree.Delete(10); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	// Verify structure: should have borrowed 30 from right
+	remaining := []KeyType{20, 30, 40, 50}
+	for _, k := range remaining {
+		if _, err := tree.Search(k); err != nil {
+			t.Errorf("key %d not found: %v", k, err)
+		}
+	}
+
+	// Verify 10 is gone
+	if _, err := tree.Search(10); err == nil {
+		t.Error("deleted key 10 still found")
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestDeleteWithBorrowFromLeft(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert keys to create structure: [10,20,30] | [40,50]
+	keys := []KeyType{10, 20, 30, 40, 50}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Delete from right leaf to trigger borrow from left
+	if err := tree.Delete(50); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+
+	// Verify remaining keys
+	remaining := []KeyType{10, 20, 30, 40}
+	for _, k := range remaining {
+		if _, err := tree.Search(k); err != nil {
+			t.Errorf("key %d not found: %v", k, err)
+		}
+	}
+
+	// Verify 50 is gone
+	if _, err := tree.Search(50); err == nil {
+		t.Error("deleted key 50 still found")
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestDeleteWithMerge(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert keys to create structure that will require merge
+	keys := []KeyType{10, 20, 30, 40, 50}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Delete keys to trigger merge
+	toDelete := []KeyType{50, 40}
+	for _, k := range toDelete {
+		if err := tree.Delete(k); err != nil {
+			t.Fatalf("delete %d failed: %v", k, err)
+		}
+	}
+
+	// Verify remaining keys
+	remaining := []KeyType{10, 20, 30}
+	for _, k := range remaining {
+		if _, err := tree.Search(k); err != nil {
+			t.Errorf("key %d not found: %v", k, err)
+		}
+	}
+
+	// Verify deleted keys are gone
+	for _, k := range toDelete {
+		if _, err := tree.Search(k); err == nil {
+			t.Errorf("deleted key %d still found", k)
+		}
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestDeleteComplex(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert many keys
+	keys := []KeyType{5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Delete several keys in various patterns
+	toDelete := []KeyType{15, 45, 65, 25, 75, 5}
+	for _, k := range toDelete {
+		if err := tree.Delete(k); err != nil {
+			t.Fatalf("delete %d failed: %v", k, err)
+		}
+	}
+
+	// Build expected remaining keys
+	remainingMap := make(map[KeyType]bool)
+	for _, k := range keys {
+		remainingMap[k] = true
+	}
+	for _, k := range toDelete {
+		delete(remainingMap, k)
+	}
+
+	// Verify remaining keys
+	for k := range remainingMap {
+		if _, err := tree.Search(k); err != nil {
+			t.Errorf("key %d not found: %v", k, err)
+		}
+	}
+
+	// Verify deleted keys are gone
+	for _, k := range toDelete {
+		if _, err := tree.Search(k); err == nil {
+			t.Errorf("deleted key %d still found", k)
+		}
+	}
+
+	// Verify keys are still in order
+	collected := make([]KeyType, 0)
+	curID := tree.meta.RootPage
+	var leftmost *LeafPage
+	for {
+		p := tree.pager.Get(curID)
+		if p == nil {
+			break
+		}
+		switch v := p.(type) {
+		case *LeafPage:
+			leftmost = v
+			goto Traverse
+		case *InternalPage:
+			if len(v.children) == 0 {
+				break
+			}
+			curID = v.children[0]
+		}
+	}
+
+Traverse:
+	leaf := leftmost
+	for leaf != nil {
+		collected = append(collected, leaf.keys...)
+		if leaf.Header.NextPage == 0 {
+			break
+		}
+		leaf = tree.pager.Get(leaf.Header.NextPage).(*LeafPage)
+	}
+
+	// Verify collected keys are sorted
+	for i := 1; i < len(collected); i++ {
+		if collected[i] <= collected[i-1] {
+			t.Errorf("keys not in order: %v", collected)
+			break
+		}
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestDeleteAll(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert keys
+	keys := []KeyType{10, 20, 30, 40, 50}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Delete all keys
+	for _, k := range keys {
+		if err := tree.Delete(k); err != nil {
+			t.Fatalf("delete %d failed: %v", k, err)
+		}
+	}
+
+	// Verify tree is empty
+	if tree.meta.RootPage != 0 {
+		// If root still exists, check it's actually empty
+		root := tree.pager.Get(tree.meta.RootPage)
+		if leaf, ok := root.(*LeafPage); ok {
+			if len(leaf.keys) != 0 {
+				t.Errorf("root leaf should be empty, has %d keys", len(leaf.keys))
+			}
+		}
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+// -----------------------------
+// Test Range Query
+// -----------------------------
+
+func TestRangeQuerySimple(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert test data
+	keys := []KeyType{10, 20, 30, 40, 50, 60, 70, 80, 90}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Test range query [30, 60]
+	resultKeys, resultValues, err := tree.SearchRange(30, 60)
+	if err != nil {
+		t.Fatalf("range query failed: %v", err)
+	}
+
+	expectedKeys := []KeyType{30, 40, 50, 60}
+	if len(resultKeys) != len(expectedKeys) {
+		t.Fatalf("expected %d keys, got %d", len(expectedKeys), len(resultKeys))
+	}
+
+	for i, k := range expectedKeys {
+		if resultKeys[i] != k {
+			t.Errorf("key mismatch at index %d: expected %d, got %d", i, k, resultKeys[i])
+		}
+		expectedVal := ValueType(fmt.Sprintf("v%d", k))
+		if resultValues[i] != expectedVal {
+			t.Errorf("value mismatch at index %d: expected %v, got %v", i, expectedVal, resultValues[i])
+		}
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestRangeQueryEdgeCases(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert test data
+	keys := []KeyType{10, 20, 30, 40, 50}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Test empty range (no keys in range)
+	resultKeys, _, err := tree.SearchRange(35, 38)
+	if err != nil {
+		t.Fatalf("range query failed: %v", err)
+	}
+	if len(resultKeys) != 0 {
+		t.Errorf("expected empty result, got %d keys", len(resultKeys))
+	}
+
+	// Test single key range
+	resultKeys, resultValues, err := tree.SearchRange(30, 30)
+	if err != nil {
+		t.Fatalf("range query failed: %v", err)
+	}
+	if len(resultKeys) != 1 || resultKeys[0] != 30 {
+		t.Errorf("expected single key 30, got %v", resultKeys)
+	}
+	if resultValues[0] != "v30" {
+		t.Errorf("expected value v30, got %v", resultValues[0])
+	}
+
+	// Test full range
+	resultKeys, _, err = tree.SearchRange(10, 50)
+	if err != nil {
+		t.Fatalf("range query failed: %v", err)
+	}
+	if len(resultKeys) != 5 {
+		t.Errorf("expected 5 keys, got %d", len(resultKeys))
+	}
+
+	// Test range beyond existing keys
+	resultKeys, _, err = tree.SearchRange(60, 100)
+	if err != nil {
+		t.Fatalf("range query failed: %v", err)
+	}
+	if len(resultKeys) != 0 {
+		t.Errorf("expected empty result for out of range, got %d keys", len(resultKeys))
+	}
+
+	// Test range starting before first key
+	resultKeys, _, err = tree.SearchRange(5, 25)
+	if err != nil {
+		t.Fatalf("range query failed: %v", err)
+	}
+	if len(resultKeys) != 2 || resultKeys[0] != 10 || resultKeys[1] != 20 {
+		t.Errorf("expected keys [10, 20], got %v", resultKeys)
+	}
+
+	// Test invalid range (start > end)
+	_, _, err = tree.SearchRange(50, 10)
+	if err == nil {
+		t.Error("expected error for invalid range, got nil")
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestRangeQueryAcrossPages(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert enough data to span multiple leaf pages
+	keys := make([]KeyType, 20)
+	for i := 0; i < 20; i++ {
+		keys[i] = KeyType((i + 1) * 5)
+	}
+
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Query range that should span multiple leaves
+	resultKeys, resultValues, err := tree.SearchRange(20, 70)
+	if err != nil {
+		t.Fatalf("range query failed: %v", err)
+	}
+
+	// Verify results
+	expected := []KeyType{20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70}
+	if len(resultKeys) != len(expected) {
+		t.Fatalf("expected %d keys, got %d", len(expected), len(resultKeys))
+	}
+
+	for i, k := range expected {
+		if resultKeys[i] != k {
+			t.Errorf("key mismatch at index %d: expected %d, got %d", i, k, resultKeys[i])
+		}
+		expectedVal := ValueType(fmt.Sprintf("v%d", k))
+		if resultValues[i] != expectedVal {
+			t.Errorf("value mismatch at index %d: expected %v, got %v", i, expectedVal, resultValues[i])
+		}
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+// -----------------------------
+// Test Update Operation
+// -----------------------------
+
+func TestUpdateSimple(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert test data
+	keys := []KeyType{10, 20, 30, 40, 50}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Update a value
+	if err := tree.Update(30, "updated_v30"); err != nil {
+		t.Fatalf("update failed: %v", err)
+	}
+
+	// Verify the update
+	val, err := tree.Search(30)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if val != "updated_v30" {
+		t.Errorf("expected updated_v30, got %v", val)
+	}
+
+	// Verify other keys unchanged
+	for _, k := range []KeyType{10, 20, 40, 50} {
+		val, err := tree.Search(k)
+		if err != nil {
+			t.Errorf("key %d not found: %v", k, err)
+		}
+		expected := ValueType(fmt.Sprintf("v%d", k))
+		if val != expected {
+			t.Errorf("key %d: expected %v, got %v", k, expected, val)
+		}
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestUpdateNonExistentKey(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert test data
+	if err := tree.Insert(10, "v10"); err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+
+	// Try to update non-existent key
+	err = tree.Update(99, "v99")
+	if err == nil {
+		t.Error("expected error for non-existent key, got nil")
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestUpdateWithLargeValue(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert keys with small values
+	keys := []KeyType{10, 20, 30}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Update with a much larger value (should trigger delete + insert)
+	largeValue := ValueType(fmt.Sprintf("%0*d", 1000, 30))
+	if err := tree.Update(20, largeValue); err != nil {
+		t.Fatalf("update with large value failed: %v", err)
+	}
+
+	// Verify the update
+	val, err := tree.Search(20)
+	if err != nil {
+		t.Fatalf("search failed: %v", err)
+	}
+	if val != largeValue {
+		t.Errorf("value mismatch after update with large value")
+	}
+
+	// Verify all keys still exist
+	for _, k := range keys {
+		if _, err := tree.Search(k); err != nil {
+			t.Errorf("key %d not found after update: %v", k, err)
+		}
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}
+
+func TestUpdateMultiple(t *testing.T) {
+	dbDir := "testdata"
+	_ = os.MkdirAll(dbDir, 0755)
+	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	pm := NewPageManagerWithFile(dbfile, true)
+	defer pm.Close()
+	
+	m, err := pm.ReadMeta()
+	if err != nil {
+		t.Fatalf("failed to read meta: %v", err)
+	}
+	tree := &BPlusTree{
+		pager: pm,
+		meta:  m,
+	}
+
+	// Insert test data
+	keys := []KeyType{5, 10, 15, 20, 25, 30, 35, 40}
+	for _, k := range keys {
+		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+	}
+
+	// Update multiple keys
+	toUpdate := map[KeyType]ValueType{
+		10: "updated_10",
+		25: "updated_25",
+		40: "updated_40",
+	}
+
+	for k, v := range toUpdate {
+		if err := tree.Update(k, v); err != nil {
+			t.Fatalf("update %d failed: %v", k, err)
+		}
+	}
+
+	// Verify all updates
+	for k, expectedVal := range toUpdate {
+		val, err := tree.Search(k)
+		if err != nil {
+			t.Errorf("key %d not found: %v", k, err)
+		}
+		if val != expectedVal {
+			t.Errorf("key %d: expected %v, got %v", k, expectedVal, val)
+		}
+	}
+
+	// Verify non-updated keys unchanged
+	for _, k := range []KeyType{5, 15, 20, 30, 35} {
+		val, err := tree.Search(k)
+		if err != nil {
+			t.Errorf("key %d not found: %v", k, err)
+		}
+		expected := ValueType(fmt.Sprintf("v%d", k))
+		if val != expected {
+			t.Errorf("key %d: expected %v, got %v", k, expected, val)
+		}
+	}
+
+	out := filepath.Join(dbDir, t.Name()+".db.txt")
+	if err := dumpTreeStructure(tree, out); err != nil {
+		t.Logf("dumpTreeStructure failed: %v", err)
+	}
+}

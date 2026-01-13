@@ -1,2 +1,0 @@
-Page 1 META root=2 pageSize=4096 order=4 version=1
-Page 2 LEAF parent=0 prev=0 next=0 keyCount=3 free=4001 keys=[10 20 30] values=[A B C]
