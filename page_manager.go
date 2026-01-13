@@ -274,3 +274,11 @@ func (pm *PageManager) FlushAll() error {
 	}
 	return nil
 }
+
+// GetFileName returns the name of the database file
+func (pm *PageManager) GetFileName() string {
+	if pm.file == nil {
+		return ""
+	}
+	return pm.file.Name()
+}
