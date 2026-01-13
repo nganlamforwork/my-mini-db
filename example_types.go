@@ -3,7 +3,7 @@ package main
 import "fmt"
 
 // Example: Using composite keys and structured rows
-func ExampleCompositeKeyAndRow() {
+func ExampleCompositeKeyAndRecord() {
 	// Create a composite key with (userID, timestamp)
 	key1 := NewCompositeKey(
 		NewInt(1001),      // userID
@@ -11,7 +11,7 @@ func ExampleCompositeKeyAndRow() {
 	)
 
 	// Create a row with user data
-	row1 := NewRow(
+	row1 := NewRecord(
 		NewString("John Doe"),
 		NewInt(30),
 		NewString("john@example.com"),
@@ -19,7 +19,7 @@ func ExampleCompositeKeyAndRow() {
 	)
 
 	fmt.Println("Key:", key1)
-	fmt.Println("Row:", row1)
+	fmt.Println("Record:", row1)
 
 	// Create another composite key
 	key2 := NewCompositeKey(
@@ -39,7 +39,7 @@ func ExampleCompositeKeyAndRow() {
 
 	// Output:
 	// Key: (1001, 1704067200)
-	// Row: {John Doe, 30, john@example.com, true}
+	// Record: {John Doe, 30, john@example.com, true}
 	// key1 < key2
 }
 
@@ -49,7 +49,7 @@ func ExampleSimpleKeyValue() {
 	key := NewCompositeKey(NewInt(42))
 
 	// Single column value (string)
-	value := NewRow(NewString("Hello, World!"))
+	value := NewRecord(NewString("Hello, World!"))
 
 	fmt.Println("Simple Key:", key)
 	fmt.Println("Simple Value:", value)
@@ -67,8 +67,8 @@ func ExampleMixedTypes() {
 		NewString("A"),
 	)
 
-	// Row with different types
-	row := NewRow(
+	// Record with different types
+	row := NewRecord(
 		NewString("Product Name"),
 		NewFloat(99.99),
 		NewInt(50), // quantity
@@ -76,9 +76,9 @@ func ExampleMixedTypes() {
 	)
 
 	fmt.Printf("Key size: %d bytes\n", key.Size())
-	fmt.Printf("Row size: %d bytes\n", row.Size())
+	fmt.Printf("Record size: %d bytes\n", row.Size())
 
 	// Output:
 	// Key size: 20 bytes
-	// Row size: 36 bytes
+	// Record size: 36 bytes
 }

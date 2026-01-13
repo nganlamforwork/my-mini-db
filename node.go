@@ -2,7 +2,7 @@ package main
 
 // Type aliases for composite keys and structured rows
 type KeyType = CompositeKey
-type ValueType = Row
+type ValueType = Record
 
 const (
 	PageTypeMeta     PageType = 0

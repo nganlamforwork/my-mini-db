@@ -55,12 +55,12 @@ type CompositeKey struct {
 [numValues:4][type:1][value][type:1][value]...
 ```
 
-#### **Row**
+#### **Record**
 
 A row represents a complete database record with multiple typed columns:
 
 ```go
-type Row struct {
+type Record struct {
     Columns []Column  // Data columns
 }
 ```
@@ -81,7 +81,7 @@ type Row struct {
 
 ```go
 type KeyType = CompositeKey
-type ValueType = Row
+type ValueType = Record
 ```
 
 ---
@@ -169,7 +169,7 @@ Children[]    uint64        // Array of child page IDs (KeyCount + 1 entries)
 ```
 PageHeader    (56 bytes)
 Keys[]        CompositeKey  // Array of keys (KeyCount entries)
-Values[]      Row           // Array of row values (KeyCount entries)
+Values[]      Record           // Array of row values (KeyCount entries)
 ```
 
 **Leaf Properties:**
@@ -177,7 +177,7 @@ Values[]      Row           // Array of row values (KeyCount entries)
 - Keys maintained in sorted order using Compare method
 - Doubly-linked list structure enables O(k) range scans
 - All leaves at same depth (balanced tree property)
-- Each value is a complete Row with multiple columns
+- Each value is a complete Record with multiple columns
 
 ---
 
@@ -195,14 +195,14 @@ Internal Node Capacity:
 Leaf Node Capacity:
   - Variable based on key and value sizes
   - Keys: Each CompositeKey has variable size based on column types
-  - Values: Each Row has variable size based on column data
+  - Values: Each Record has variable size based on column data
   - Page split occurs when payload exceeds available space (4040 bytes)
 ```
 
 **Size Calculation Methods:**
 
 - `CompositeKey.Size()`: Returns bytes needed for serialization
-- `Row.Size()`: Returns bytes needed for serialization
+- `Record.Size()`: Returns bytes needed for serialization
 - `computeLeafPayloadSize()`: Sums all key and value sizes in a leaf
 
 ### File Structure
@@ -233,7 +233,7 @@ Offset 8192:  Page 3 (Internal/Leaf)  - 4096 bytes
 ### Data Model Features
 
 ✅ **Composite Keys** - Multi-column primary keys with lexicographic ordering  
-✅ **Structured Rows** - Full database rows with typed columns (Int, String, Float, Bool)  
+✅ **Structured Records** - Full database rows with typed columns (Int, String, Float, Bool)  
 ✅ **Variable-Length Serialization** - Efficient binary encoding for keys and values  
 ✅ **Type-Safe Comparisons** - Compare method for proper key ordering
 
@@ -649,10 +649,10 @@ function FlushAll():
 
 **Core Implementation:**
 
-- `types.go` - **NEW** CompositeKey and Row types with serialization (400+ lines)
-- `node.go` - Updated type aliases to use CompositeKey and Row
+- `types.go` - **NEW** CompositeKey and Record types with serialization (400+ lines)
+- `node.go` - Updated type aliases to use CompositeKey and Record
 - `tree.go` - Updated all operations to use Compare method (800+ lines total)
-- `leaf_page.go` - Updated serialization for CompositeKey/Row
+- `leaf_page.go` - Updated serialization for CompositeKey/Record
 - `internal_page.go` - Updated serialization for CompositeKey
 - `page_manager.go` - Added FlushAll() for persistence
 

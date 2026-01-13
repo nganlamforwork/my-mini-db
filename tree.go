@@ -264,13 +264,13 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 	// Empty tree
 	if tree.meta == nil || tree.meta.RootPage == 0 {
-		return Row{}, fmt.Errorf("key not found: %v (empty tree)", key)
+		return Record{}, fmt.Errorf("key not found: %v (empty tree)", key)
 	}
 
 	// Find the leaf that should contain the key
 	leaf, _, err := tree.findLeaf(key)
 	if err != nil {
-		return Row{}, err
+		return Record{}, err
 	}
 
 	// Search for the key in the leaf
@@ -280,7 +280,7 @@ func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 		}
 	}
 
-	return Row{}, fmt.Errorf("key not found: %v", key)
+	return Record{}, fmt.Errorf("key not found: %v", key)
 }
 
 // -----------------------------

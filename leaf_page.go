@@ -46,7 +46,7 @@ func insertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
 
 	// grow slices by one and shift elements right to make room
 	page.keys = append(page.keys, CompositeKey{})
-	page.values = append(page.values, Row{})
+	page.values = append(page.values, Record{})
 
 	copy(page.keys[i+1:], page.keys[i:])
 	copy(page.values[i+1:], page.values[i:])
@@ -119,7 +119,7 @@ func splitLeaf(page *LeafPage, newLeaf *LeafPage) KeyType {
 // WriteToBuffer serializes the leaf page into buf. Format:
 //  - header (PageHeader.WriteToBuffer)
 //  - keys (KeyCount entries, each serialized via CompositeKey.WriteTo)
-//  - values (KeyCount entries, each serialized via Row.WriteTo)
+//  - values (KeyCount entries, each serialized via Record.WriteTo)
 func (p *LeafPage) WriteToBuffer(buf *bytes.Buffer) error {
 	if err := p.Header.WriteToBuffer(buf); err != nil {
 		return err
@@ -158,7 +158,7 @@ func (p *LeafPage) ReadFromBuffer(buf *bytes.Reader) error {
 
 	p.values = make([]ValueType, 0, keyCount)
 	for i := 0; i < keyCount; i++ {
-		v, err := ReadRowFrom(buf)
+		v, err := ReadRecordFrom(buf)
 		if err != nil {
 			return err
 		}

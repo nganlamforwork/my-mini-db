@@ -4,7 +4,7 @@ A file-backed B+Tree database implementation in Go featuring **composite keys** 
 
 ## Features
 
-### ✅ Composite Keys & Structured Rows
+### ✅ Composite Keys & Structured Records
 
 - **Multi-column primary keys** - Support for composite keys like `(userID, timestamp)`
 - **Typed columns** - Int64, String, Float64, Boolean
@@ -70,7 +70,7 @@ key := NewCompositeKey(
 )
 
 // Structured row: (name, age, email, active)
-row := NewRow(
+row := NewRecord(
     NewString("John Doe"),
     NewInt(30),
     NewString("john@example.com"),
@@ -101,8 +101,8 @@ type CompositeKey struct {
     Values []Column
 }
 
-// Row value
-type Row struct {
+// Record value
+type Record struct {
     Columns []Column
 }
 ```
@@ -131,7 +131,7 @@ productKey := NewCompositeKey(
     NewInt(12345),
 )
 
-productRow := NewRow(
+productRecord := NewRecord(
     NewString("Laptop"),
     NewFloat(999.99),
     NewInt(50),
@@ -148,7 +148,7 @@ sensorKey := NewCompositeKey(
     NewInt(1704067200),
 )
 
-sensorData := NewRow(
+sensorData := NewRecord(
     NewFloat(23.5),  // temperature
     NewFloat(65.0),  // humidity
     NewFloat(87.5),  // battery %
@@ -210,7 +210,7 @@ All 18 tests pass covering:
 
 ```
 .
-├── types.go           # CompositeKey and Row types
+├── types.go           # CompositeKey and Record types
 ├── node.go            # Type aliases
 ├── tree.go            # B+Tree operations
 ├── leaf_page.go       # Leaf serialization

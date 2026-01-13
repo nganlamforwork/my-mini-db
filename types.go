@@ -23,8 +23,8 @@ type Column struct {
 	Value interface{} // int64, string, float64, or bool
 }
 
-// Row represents a database row with multiple columns
-type Row struct {
+// Record represents a database row with multiple columns
+type Record struct {
 	Columns []Column
 }
 
@@ -34,12 +34,12 @@ type CompositeKey struct {
 }
 
 // -----------------------------
-// Row Methods
+// Record Methods
 // -----------------------------
 
-// NewRow creates a new Row with the given columns
-func NewRow(columns ...Column) Row {
-	return Row{Columns: columns}
+// NewRecord creates a new Record with the given columns
+func NewRecord(columns ...Column) Record {
+	return Record{Columns: columns}
 }
 
 // NewInt creates an integer column
@@ -62,8 +62,8 @@ func NewBool(val bool) Column {
 	return Column{Type: TypeBool, Value: val}
 }
 
-// Size returns the number of bytes needed to serialize this Row
-func (r Row) Size() int {
+// Size returns the number of bytes needed to serialize this Record
+func (r Record) Size() int {
 	size := 4 // uint32 for number of columns
 	for _, col := range r.Columns {
 		size += 1 // column type byte
@@ -81,8 +81,8 @@ func (r Row) Size() int {
 	return size
 }
 
-// WriteTo serializes the Row to a writer
-func (r Row) WriteTo(w io.Writer) error {
+// WriteTo serializes the Record to a writer
+func (r Record) WriteTo(w io.Writer) error {
 	// write number of columns
 	if err := binary.Write(w, binary.BigEndian, uint32(len(r.Columns))); err != nil {
 		return err
@@ -126,18 +126,18 @@ func (r Row) WriteTo(w io.Writer) error {
 	return nil
 }
 
-// ReadRowFrom deserializes a Row from a reader
-func ReadRowFrom(r io.Reader) (Row, error) {
+// ReadRecordFrom deserializes a Record from a reader
+func ReadRecordFrom(r io.Reader) (Record, error) {
 	var numCols uint32
 	if err := binary.Read(r, binary.BigEndian, &numCols); err != nil {
-		return Row{}, err
+		return Record{}, err
 	}
 
 	columns := make([]Column, numCols)
 	for i := 0; i < int(numCols); i++ {
 		var colType uint8
 		if err := binary.Read(r, binary.BigEndian, &colType); err != nil {
-			return Row{}, err
+			return Record{}, err
 		}
 
 		col := Column{Type: ColumnType(colType)}
@@ -145,42 +145,42 @@ func ReadRowFrom(r io.Reader) (Row, error) {
 		case TypeInt:
 			var val int64
 			if err := binary.Read(r, binary.BigEndian, &val); err != nil {
-				return Row{}, err
+				return Record{}, err
 			}
 			col.Value = val
 		case TypeString:
 			var length uint32
 			if err := binary.Read(r, binary.BigEndian, &length); err != nil {
-				return Row{}, err
+				return Record{}, err
 			}
 			buf := make([]byte, length)
 			if _, err := io.ReadFull(r, buf); err != nil {
-				return Row{}, err
+				return Record{}, err
 			}
 			col.Value = string(buf)
 		case TypeFloat:
 			var val float64
 			if err := binary.Read(r, binary.BigEndian, &val); err != nil {
-				return Row{}, err
+				return Record{}, err
 			}
 			col.Value = val
 		case TypeBool:
 			var val uint8
 			if err := binary.Read(r, binary.BigEndian, &val); err != nil {
-				return Row{}, err
+				return Record{}, err
 			}
 			col.Value = val == 1
 		default:
-			return Row{}, fmt.Errorf("unknown column type: %d", colType)
+			return Record{}, fmt.Errorf("unknown column type: %d", colType)
 		}
 		columns[i] = col
 	}
 
-	return Row{Columns: columns}, nil
+	return Record{Columns: columns}, nil
 }
 
-// String returns a string representation of the Row
-func (r Row) String() string {
+// String returns a string representation of the Record
+func (r Record) String() string {
 	var buf bytes.Buffer
 	buf.WriteString("{")
 	for i, col := range r.Columns {
@@ -304,7 +304,7 @@ func (k CompositeKey) WriteTo(w io.Writer) error {
 		return err
 	}
 
-	// write each value (same as Row columns)
+	// write each value (same as Record columns)
 	for _, col := range k.Values {
 		if err := binary.Write(w, binary.BigEndian, uint8(col.Type)); err != nil {
 			return err

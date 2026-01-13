@@ -17,7 +17,7 @@ func K(val int64) KeyType {
 
 // V creates a simple single-column string row value
 func V(val string) ValueType {
-	return NewRow(NewString(val))
+	return NewRecord(NewString(val))
 }
 
 // KI extracts the int64 value from a single-column composite key
