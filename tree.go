@@ -56,7 +56,7 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 			pos := -1
 			for left <= right {
 				mid := (left + right) / 2
-				if p.keys[mid] <= key {
+				if p.keys[mid].Compare(key) <= 0 {
 					pos = mid
 					left = mid + 1
 				} else {
@@ -127,7 +127,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 	// Check for duplicate keys
 	for _, existingKey := range leaf.keys {
-		if existingKey == key {
+		if existingKey.Compare(key) == 0 {
 			return fmt.Errorf("duplicate key insertion: %v", key)
 		}
 	}
@@ -264,23 +264,23 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 	// Empty tree
 	if tree.meta == nil || tree.meta.RootPage == 0 {
-		return "", fmt.Errorf("key not found: %v (empty tree)", key)
+		return Row{}, fmt.Errorf("key not found: %v (empty tree)", key)
 	}
 
 	// Find the leaf that should contain the key
 	leaf, _, err := tree.findLeaf(key)
 	if err != nil {
-		return "", err
+		return Row{}, err
 	}
 
 	// Search for the key in the leaf
 	for i, k := range leaf.keys {
-		if k == key {
+		if k.Compare(key) == 0 {
 			return leaf.values[i], nil
 		}
 	}
 
-	return "", fmt.Errorf("key not found: %v", key)
+	return Row{}, fmt.Errorf("key not found: %v", key)
 }
 
 // -----------------------------
@@ -294,7 +294,7 @@ func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 // Time complexity: O(log n + k) where k is the number of results
 func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []ValueType, error) {
 	// Validate range
-	if startKey > endKey {
+	if startKey.Compare(endKey) > 0 {
 		return nil, nil, fmt.Errorf("invalid range: startKey %v > endKey %v", startKey, endKey)
 	}
 
@@ -316,18 +316,18 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 	for leaf != nil {
 		// Scan keys in current leaf
 		for i, k := range leaf.keys {
-			if k >= startKey && k <= endKey {
+			if k.Compare(startKey) >= 0 && k.Compare(endKey) <= 0 {
 				keys = append(keys, k)
 				values = append(values, leaf.values[i])
 			}
 			// Early exit if we've passed endKey
-			if k > endKey {
+			if k.Compare(endKey) > 0 {
 				return keys, values, nil
 			}
 		}
 
 		// If last key in this leaf is still < endKey, continue to next leaf
-		if len(leaf.keys) > 0 && leaf.keys[len(leaf.keys)-1] < endKey {
+		if len(leaf.keys) > 0 && leaf.keys[len(leaf.keys)-1].Compare(endKey) < 0 {
 			if leaf.Header.NextPage == 0 {
 				break
 			}
@@ -371,7 +371,7 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 	// Find the key in the leaf
 	keyIndex := -1
 	for i, k := range leaf.keys {
-		if k == key {
+		if k.Compare(key) == 0 {
 			keyIndex = i
 			break
 		}
@@ -384,8 +384,8 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 	oldValue := leaf.values[keyIndex]
 	
 	// Calculate size change
-	oldSize := 4 + len([]byte(oldValue))
-	newSize := 4 + len([]byte(newValue))
+	oldSize := oldValue.Size()
+	newSize := newValue.Size()
 	sizeDelta := newSize - oldSize
 
 	// Check if new value fits in current page
@@ -449,7 +449,7 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	// Find and remove the key from the leaf
 	keyIndex := -1
 	for i, k := range leaf.keys {
-		if k == key {
+		if k.Compare(key) == 0 {
 			keyIndex = i
 			break
 		}

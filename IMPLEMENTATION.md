@@ -5,14 +5,84 @@
 
 ## Overview
 
-This document presents the architecture and implementation of a file-backed B+Tree database with full CRUD operations (insert, search, delete) and persistent storage capabilities. The implementation demonstrates proper B+Tree rebalancing algorithms including node splitting, borrowing, and merging while maintaining all tree invariants.
+This document presents the architecture and implementation of a file-backed B+Tree database with full CRUD operations (insert, search, update, delete, range query) and persistent storage capabilities. The implementation demonstrates proper B+Tree rebalancing algorithms including node splitting, borrowing, and merging while maintaining all tree invariants.
 
 **Key Highlights:**
 
 - Complete B+Tree with disk persistence and in-memory caching
+- **Composite keys and structured row values** - Support for multi-column primary keys and full database rows
 - Proper delete implementation with borrow and merge operations
+- Range query support leveraging leaf-level linked list
 - Page-based storage architecture with 4KB pages
 - Comprehensive test coverage with both binary and human-readable outputs
+
+---
+
+## Data Model
+
+### Type System
+
+MiniDB supports structured data with composite keys and multi-column rows, mimicking real database behavior.
+
+#### **Column Types**
+
+```go
+TypeInt    = 0  // int64
+TypeString = 1  // string
+TypeFloat  = 2  // float64
+TypeBool   = 3  // bool
+```
+
+#### **CompositeKey**
+
+A composite key consists of one or more column values, enabling multi-column primary keys:
+
+```go
+type CompositeKey struct {
+    Values []Column  // Ordered list of key columns
+}
+```
+
+**Features:**
+
+- Compare method for ordering: returns -1, 0, or 1
+- Supports single-column keys (e.g., `K(10)`) or multi-column (e.g., `(10, "John")`)
+- Lexicographic comparison: compares column-by-column left-to-right
+
+**Serialization Format:**
+
+```
+[numValues:4][type:1][value][type:1][value]...
+```
+
+#### **Row**
+
+A row represents a complete database record with multiple typed columns:
+
+```go
+type Row struct {
+    Columns []Column  // Data columns
+}
+```
+
+**Features:**
+
+- Each column has a type (Int, String, Float, Bool) and value
+- Variable-length serialization based on content
+- Size() method for space calculation
+
+**Serialization Format:**
+
+```
+[numColumns:4][type:1][value][type:1][value]...
+```
+
+#### **Type Aliases**
+
+```go
+type KeyType = CompositeKey
+type ValueType = Row
+```
 
 ---
 
@@ -76,8 +146,8 @@ Version       uint16   // Format version
 
 ```
 PageHeader    (56 bytes)
-Keys[]        int64    // Array of separator keys (KeyCount entries)
-Children[]    uint64   // Array of child page IDs (KeyCount + 1 entries)
+Keys[]        CompositeKey  // Array of separator keys (KeyCount entries)
+Children[]    uint64        // Array of child page IDs (KeyCount + 1 entries)
 ```
 
 **Routing Invariant:** For internal node with keys K[0..n-1] and children C[0..n]:
@@ -86,11 +156,11 @@ Children[]    uint64   // Array of child page IDs (KeyCount + 1 entries)
 - C[0] contains all keys ≤ K[0]
 - C[n] contains all keys > K[n-1]
 
-**Example:** An internal node with keys [30, 60] routes to 3 children:
+**Example:** An internal node with keys [(30), (60)] routes to 3 children:
 
-- Child 0: keys ≤ 30
-- Child 1: keys 31-60
-- Child 2: keys > 60
+- Child 0: keys ≤ (30)
+- Child 1: keys (31) to (60)
+- Child 2: keys > (60)
 
 #### **LeafPage Structure**
 
@@ -98,46 +168,42 @@ Children[]    uint64   // Array of child page IDs (KeyCount + 1 entries)
 
 ```
 PageHeader    (56 bytes)
-Keys[]        int64    // Array of keys (KeyCount entries)
-Values[]      string   // Array of values (each: uint32 length + bytes)
+Keys[]        CompositeKey  // Array of keys (KeyCount entries)
+Values[]      Row           // Array of row values (KeyCount entries)
 ```
 
 **Leaf Properties:**
 
-- Keys maintained in sorted order for binary search
+- Keys maintained in sorted order using Compare method
 - Doubly-linked list structure enables O(k) range scans
 - All leaves at same depth (balanced tree property)
+- Each value is a complete Row with multiple columns
 
-### Key Type & Value Type
+---
 
-```go
-type KeyType = int        // Keys are integers
-type ValueType = string   // Values are variable-length strings
-```
-
-**Serialization Format:**
-
-- Keys: 8 bytes (int64, big-endian)
-- Values: 4-byte length prefix (uint32) + raw bytes
-
-This design supports efficient fixed-size key storage while accommodating variable-length values through length-prefixed encoding.
-
-### Page Layout Calculation
+## Page Layout Calculation
 
 ```
 Available Payload = PageSize - PageHeaderSize
                   = 4096 - 56 = 4040 bytes
 
 Internal Node Capacity:
-  - Keys: MAX_KEYS × 8 bytes = 24 bytes
+  - Keys: Variable (depends on key column types and values)
   - Children: (MAX_KEYS + 1) × 8 bytes = 32 bytes
-  - Total: 56 bytes payload (fits easily in 4040 bytes)
+  - Typical small keys fit easily in available space
 
 Leaf Node Capacity:
-  - Keys: MAX_KEYS × 8 bytes = 24 bytes
-  - Values: Variable (depends on string length)
-  - Maximum: ~4016 bytes for values when MAX_KEYS = 3
+  - Variable based on key and value sizes
+  - Keys: Each CompositeKey has variable size based on column types
+  - Values: Each Row has variable size based on column data
+  - Page split occurs when payload exceeds available space (4040 bytes)
 ```
+
+**Size Calculation Methods:**
+
+- `CompositeKey.Size()`: Returns bytes needed for serialization
+- `Row.Size()`: Returns bytes needed for serialization
+- `computeLeafPayloadSize()`: Sums all key and value sizes in a leaf
 
 ### File Structure
 
@@ -157,12 +223,19 @@ Offset 8192:  Page 3 (Internal/Leaf)  - 4096 bytes
 3. **Occupancy:** Non-root nodes have ≥ ceil(ORDER/2) - 1 keys
 4. **Leaf Linking:** All leaves connected in sorted order via NextPage
 5. **Parent Pointers:** All non-root pages correctly reference parent
-6. **Key Ordering:** Keys in each node are sorted
+6. **Key Ordering:** Keys in each node are sorted using Compare method
 7. **Separator Keys:** Internal node keys correctly partition child subtrees
 
 ---
 
 ## What Was Implemented
+
+### Data Model Features
+
+✅ **Composite Keys** - Multi-column primary keys with lexicographic ordering  
+✅ **Structured Rows** - Full database rows with typed columns (Int, String, Float, Bool)  
+✅ **Variable-Length Serialization** - Efficient binary encoding for keys and values  
+✅ **Type-Safe Comparisons** - Compare method for proper key ordering
 
 ### 1. **Load from Disk Functionality**
 
@@ -529,20 +602,15 @@ function FlushAll():
    - Implement prefix compression for keys in internal nodes
    - Reduces space, increases fanout
 
-8. **Multi-Column Keys**
-
-   - Support composite keys (e.g., `(userID, timestamp)`)
-   - Requires custom comparator
-
-9. **Snapshot Isolation**
+8. **Snapshot Isolation**
 
    - MVCC (Multi-Version Concurrency Control)
    - Readers don't block writers
 
-10. **Performance Benchmarks**
-    - Add benchmark tests for insert/search/delete/update/range throughput
-    - Compare against other embedded DBs (BoltDB, BadgerDB)
-    - Profile memory usage and I/O patterns
+9. **Performance Benchmarks**
+   - Add benchmark tests for insert/search/delete/update/range throughput
+   - Compare against other embedded DBs (BoltDB, BadgerDB)
+   - Profile memory usage and I/O patterns
 
 ---
 
@@ -552,7 +620,6 @@ function FlushAll():
 - **Memory Usage:** All pages loaded into memory; consider LRU cache eviction
 - **File Format Version:** Add version handling for schema migration
 - **Crash Recovery:** Need WAL for durability guarantees
-- **Key/Value Size Limits:** Document and enforce maximum sizes
 - **Defragmentation:** Deleted pages not reused; implement free page list
 
 ---
@@ -574,6 +641,7 @@ function FlushAll():
 - Page size = 4KB
 - No buffer pool (all pages in memory)
 - Single-threaded access only
+- Variable-length keys/values based on data content
 
 ---
 
@@ -581,22 +649,27 @@ function FlushAll():
 
 **Core Implementation:**
 
-- `tree.go` - Added Load(), Search(), Delete(), SearchRange(), Update() with 500+ lines of tree operations and rebalancing logic
+- `types.go` - **NEW** CompositeKey and Row types with serialization (400+ lines)
+- `node.go` - Updated type aliases to use CompositeKey and Row
+- `tree.go` - Updated all operations to use Compare method (800+ lines total)
+- `leaf_page.go` - Updated serialization for CompositeKey/Row
+- `internal_page.go` - Updated serialization for CompositeKey
 - `page_manager.go` - Added FlushAll() for persistence
 
 **Tests:**
 
-- `tree_test.go` - Added 15 new test functions covering all operations (1,200+ lines)
+- `tree_test.go` - Updated all 18 tests for new type system (1,200+ lines)
+- Helper functions: K(), V(), KI(), VS() for test readability
 
 **Test Output:**
 
 - `testdata/*.db` - Binary database files
 - `testdata/*.db.txt` - Human-readable structure dumps
 
-**Total Code Added:** ~900 lines (implementation + tests)
+**Total Code:** ~1,500 lines (implementation + tests)
 
 **Test Statistics:**
 
 - 18 total tests
 - 100% pass rate
-- Coverage: Insert, Search, Delete, Update, Range Query, Load, Edge Cases
+- Coverage: Insert, Search, Delete, Update, Range Query, Load, Edge Cases, Multi-column data

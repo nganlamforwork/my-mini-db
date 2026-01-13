@@ -8,6 +8,28 @@ import (
 	"testing"
 )
 
+// Helper functions for tests
+
+// K creates a simple single-column integer composite key
+func K(val int64) KeyType {
+	return NewCompositeKey(NewInt(val))
+}
+
+// V creates a simple single-column string row value
+func V(val string) ValueType {
+	return NewRow(NewString(val))
+}
+
+// KI extracts the int64 value from a single-column composite key
+func KI(key KeyType) int64 {
+	return key.Values[0].Value.(int64)
+}
+
+// VS extracts the string value from a single-column row value
+func VS(val ValueType) string {
+	return val.Columns[0].Value.(string)
+}
+
 func TestInsertWithoutSplit(t *testing.T) {
 	// use a persistent per-test DB file under testdata/ so it can be inspected
 	dbDir := "testdata"
@@ -31,8 +53,8 @@ func TestInsertWithoutSplit(t *testing.T) {
 	}()
 
 	// Insert keys without causing a split
-	keys := []KeyType{10, 20, 30}
-	values := []ValueType{"A", "B", "C"}
+	keys := []KeyType{K(10), K(20), K(30)}
+	values := []ValueType{V("A"), V("B"), V("C")}
 
 	for i, key := range keys {
 		err := tree.Insert(key, values[i])
@@ -53,7 +75,7 @@ func TestInsertWithoutSplit(t *testing.T) {
 	}
 
 	for i, key := range keys {
-		if lp.keys[i] != key || lp.values[i] != values[i] {
+		if lp.keys[i].Compare(key) != 0 || VS(lp.values[i]) != VS(values[i]) {
 			t.Fatalf("Expected key-value pair (%v, %v), got (%v, %v)", key, values[i], lp.keys[i], lp.values[i])
 		}
 	}
@@ -86,8 +108,8 @@ func TestInsertWithSplit(t *testing.T) {
 	}()
 
 	// Insert keys to cause a split
-	keys := []KeyType{10, 20, 30, 40, 50}
-	values := []ValueType{"A", "B", "C", "D", "E"}
+	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
+	values := []ValueType{V("A"), V("B"), V("C"), V("D"), V("E")}
 
 	for i, key := range keys {
 		err := tree.Insert(key, values[i])
@@ -132,13 +154,13 @@ func TestInsertWithSplit(t *testing.T) {
 	}
 
 	// Check content order
-	for i, key := range []KeyType{10, 20} {
-		if leftChild.keys[i] != key {
+	for i, key := range []KeyType{K(10), K(20)} {
+		if KI(leftChild.keys[i]) != KI(key) {
 			t.Fatalf("Expected key %v in left child, got %v", key, leftChild.keys[i])
 		}
 	}
-	for i, key := range []KeyType{30, 40, 50} {
-		if rightChild.keys[i] != key {
+	for i, key := range []KeyType{K(30), K(40), K(50)} {
+		if KI(rightChild.keys[i]) != KI(key) {
 			t.Fatalf("Expected key %v in right child, got %v", key, rightChild.keys[i])
 		}
 	}
@@ -180,10 +202,10 @@ func TestInsertManyComplex(t *testing.T) {
 
 	// 20 keys (more than 15) inserted in a shuffled order to
 	// provoke splits at multiple levels.
-	keys := []KeyType{5, 1, 3, 2, 8, 7, 9, 10, 15, 12, 11, 14, 13, 6, 4, 16, 17, 18, 19, 20}
+	keys := []KeyType{K(5), K(1), K(3), K(2), K(8), K(7), K(9), K(10), K(15), K(12), K(11), K(14), K(13), K(6), K(4), K(16), K(17), K(18), K(19), K(20)}
 
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("unexpected insert error for %v: %v", k, err)
 		}
 	}
@@ -239,10 +261,10 @@ Traversal:
 	// Keys should be in ascending order in leaf scan
 	expected := make([]KeyType, len(keys))
 	copy(expected, keys)
-	sort.Slice(expected, func(i, j int) bool { return expected[i] < expected[j] })
+	sort.Slice(expected, func(i, j int) bool { return expected[i].Compare(expected[j]) < 0 })
 
 	for i := range expected {
-		if collected[i] != expected[i] {
+		if collected[i].Compare(expected[i]) != 0 {
 			t.Fatalf("expected key %v at index %d, got %v", expected[i], i, collected[i])
 		}
 	}
@@ -353,9 +375,9 @@ func TestLoadFromDisk(t *testing.T) {
 	}
 
 	// Insert test data
-	keys := []KeyType{10, 20, 30, 40, 50, 60, 70, 80}
+	keys := []KeyType{K(10), K(20), K(30), K(40), K(50), K(60), K(70), K(80)}
 	for _, k := range keys {
-		if err := tree1.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree1.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
@@ -378,11 +400,11 @@ func TestLoadFromDisk(t *testing.T) {
 	for _, k := range keys {
 		val, err := tree2.Search(k)
 		if err != nil {
-			t.Errorf("key %d not found after load: %v", k, err)
+			t.Errorf("key %d not found after load: %v", KI(k), err)
 		}
-		expected := ValueType(fmt.Sprintf("v%d", k))
-		if val != expected {
-			t.Errorf("key %d: expected value %v, got %v", k, expected, val)
+		expected := V(fmt.Sprintf("v%d", KI(k)))
+		if VS(val) != VS(expected) {
+			t.Errorf("key %d: expected value %v, got %v", KI(k), expected, val)
 		}
 	}
 
@@ -414,33 +436,37 @@ func TestSearch(t *testing.T) {
 	}
 
 	// Insert test data
-	testData := map[KeyType]ValueType{
-		10: "ten",
-		20: "twenty",
-		30: "thirty",
-		40: "forty",
-		50: "fifty",
+	testData := map[string]string{
+		"10": "ten",
+		"20": "twenty",
+		"30": "thirty",
+		"40": "forty",
+		"50": "fifty",
 	}
 
-	for k, v := range testData {
-		if err := tree.Insert(k, v); err != nil {
+	for kStr, vStr := range testData {
+		var kInt int64
+		fmt.Sscanf(kStr, "%d", &kInt)
+		if err := tree.Insert(K(kInt), V(vStr)); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Test successful searches
-	for k, expectedVal := range testData {
-		val, err := tree.Search(k)
+	for kStr, expectedVal := range testData {
+		var kInt int64
+		fmt.Sscanf(kStr, "%d", &kInt)
+		val, err := tree.Search(K(kInt))
 		if err != nil {
-			t.Errorf("search for key %d failed: %v", k, err)
+			t.Errorf("search for key %d failed: %v", kInt, err)
 		}
-		if val != expectedVal {
-			t.Errorf("key %d: expected %v, got %v", k, expectedVal, val)
+		if VS(val) != expectedVal {
+			t.Errorf("key %d: expected %v, got %v", kInt, expectedVal, val)
 		}
 	}
 
 	// Test search for non-existent key
-	_, err = tree.Search(99)
+	_, err = tree.Search(K(99))
 	if err == nil {
 		t.Error("expected error for non-existent key, got nil")
 	}
@@ -472,26 +498,26 @@ func TestDeleteSimple(t *testing.T) {
 	}
 
 	// Insert keys
-	keys := []KeyType{10, 20, 30}
+	keys := []KeyType{K(10), K(20), K(30)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Delete one key
-	if err := tree.Delete(20); err != nil {
+	if err := tree.Delete(K(20)); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 
 	// Verify key is gone
-	_, err = tree.Search(20)
+	_, err = tree.Search(K(20))
 	if err == nil {
 		t.Error("deleted key still found")
 	}
 
 	// Verify other keys still exist
-	for _, k := range []KeyType{10, 30} {
+	for _, k := range []KeyType{K(10), K(30)} {
 		if _, err := tree.Search(k); err != nil {
 			t.Errorf("key %d not found after delete: %v", k, err)
 		}
@@ -520,20 +546,20 @@ func TestDeleteWithBorrowFromRight(t *testing.T) {
 	}
 
 	// Insert keys to create structure: [10,20] | [30,40,50]
-	keys := []KeyType{10, 20, 30, 40, 50}
+	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Delete from left leaf to trigger borrow from right
-	if err := tree.Delete(10); err != nil {
+	if err := tree.Delete(K(10)); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 
 	// Verify structure: should have borrowed 30 from right
-	remaining := []KeyType{20, 30, 40, 50}
+	remaining := []KeyType{K(20), K(30), K(40), K(50)}
 	for _, k := range remaining {
 		if _, err := tree.Search(k); err != nil {
 			t.Errorf("key %d not found: %v", k, err)
@@ -541,7 +567,7 @@ func TestDeleteWithBorrowFromRight(t *testing.T) {
 	}
 
 	// Verify 10 is gone
-	if _, err := tree.Search(10); err == nil {
+	if _, err := tree.Search(K(10)); err == nil {
 		t.Error("deleted key 10 still found")
 	}
 
@@ -568,20 +594,20 @@ func TestDeleteWithBorrowFromLeft(t *testing.T) {
 	}
 
 	// Insert keys to create structure: [10,20,30] | [40,50]
-	keys := []KeyType{10, 20, 30, 40, 50}
+	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Delete from right leaf to trigger borrow from left
-	if err := tree.Delete(50); err != nil {
+	if err := tree.Delete(K(50)); err != nil {
 		t.Fatalf("delete failed: %v", err)
 	}
 
 	// Verify remaining keys
-	remaining := []KeyType{10, 20, 30, 40}
+	remaining := []KeyType{K(10), K(20), K(30), K(40)}
 	for _, k := range remaining {
 		if _, err := tree.Search(k); err != nil {
 			t.Errorf("key %d not found: %v", k, err)
@@ -589,7 +615,7 @@ func TestDeleteWithBorrowFromLeft(t *testing.T) {
 	}
 
 	// Verify 50 is gone
-	if _, err := tree.Search(50); err == nil {
+	if _, err := tree.Search(K(50)); err == nil {
 		t.Error("deleted key 50 still found")
 	}
 
@@ -616,15 +642,15 @@ func TestDeleteWithMerge(t *testing.T) {
 	}
 
 	// Insert keys to create structure that will require merge
-	keys := []KeyType{10, 20, 30, 40, 50}
+	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Delete keys to trigger merge
-	toDelete := []KeyType{50, 40}
+	toDelete := []KeyType{K(50), K(40)}
 	for _, k := range toDelete {
 		if err := tree.Delete(k); err != nil {
 			t.Fatalf("delete %d failed: %v", k, err)
@@ -632,7 +658,7 @@ func TestDeleteWithMerge(t *testing.T) {
 	}
 
 	// Verify remaining keys
-	remaining := []KeyType{10, 20, 30}
+	remaining := []KeyType{K(10), K(20), K(30)}
 	for _, k := range remaining {
 		if _, err := tree.Search(k); err != nil {
 			t.Errorf("key %d not found: %v", k, err)
@@ -669,34 +695,34 @@ func TestDeleteComplex(t *testing.T) {
 	}
 
 	// Insert many keys
-	keys := []KeyType{5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80}
+	keys := []KeyType{K(5), K(10), K(15), K(20), K(25), K(30), K(35), K(40), K(45), K(50), K(55), K(60), K(65), K(70), K(75), K(80)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Delete several keys in various patterns
-	toDelete := []KeyType{15, 45, 65, 25, 75, 5}
+	toDelete := []KeyType{K(15), K(45), K(65), K(25), K(75), K(5)}
 	for _, k := range toDelete {
 		if err := tree.Delete(k); err != nil {
-			t.Fatalf("delete %d failed: %v", k, err)
+			t.Fatalf("delete %d failed: %v", KI(k), err)
 		}
 	}
 
 	// Build expected remaining keys
-	remainingMap := make(map[KeyType]bool)
+	remainingMap := make(map[int64]bool)
 	for _, k := range keys {
-		remainingMap[k] = true
+		remainingMap[KI(k)] = true
 	}
 	for _, k := range toDelete {
-		delete(remainingMap, k)
+		delete(remainingMap, KI(k))
 	}
 
 	// Verify remaining keys
-	for k := range remainingMap {
-		if _, err := tree.Search(k); err != nil {
-			t.Errorf("key %d not found: %v", k, err)
+	for kInt := range remainingMap {
+		if _, err := tree.Search(K(kInt)); err != nil {
+			t.Errorf("key %d not found: %v", kInt, err)
 		}
 	}
 
@@ -740,7 +766,7 @@ Traverse:
 
 	// Verify collected keys are sorted
 	for i := 1; i < len(collected); i++ {
-		if collected[i] <= collected[i-1] {
+		if collected[i].Compare(collected[i-1]) <= 0 {
 			t.Errorf("keys not in order: %v", collected)
 			break
 		}
@@ -769,9 +795,9 @@ func TestDeleteAll(t *testing.T) {
 	}
 
 	// Insert keys
-	keys := []KeyType{10, 20, 30, 40, 50}
+	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
@@ -821,30 +847,30 @@ func TestRangeQuerySimple(t *testing.T) {
 	}
 
 	// Insert test data
-	keys := []KeyType{10, 20, 30, 40, 50, 60, 70, 80, 90}
+	keys := []KeyType{K(10), K(20), K(30), K(40), K(50), K(60), K(70), K(80), K(90)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Test range query [30, 60]
-	resultKeys, resultValues, err := tree.SearchRange(30, 60)
+	resultKeys, resultValues, err := tree.SearchRange(K(30), K(60))
 	if err != nil {
 		t.Fatalf("range query failed: %v", err)
 	}
 
-	expectedKeys := []KeyType{30, 40, 50, 60}
+	expectedKeys := []KeyType{K(30), K(40), K(50), K(60)}
 	if len(resultKeys) != len(expectedKeys) {
 		t.Fatalf("expected %d keys, got %d", len(expectedKeys), len(resultKeys))
 	}
 
 	for i, k := range expectedKeys {
-		if resultKeys[i] != k {
-			t.Errorf("key mismatch at index %d: expected %d, got %d", i, k, resultKeys[i])
+		if resultKeys[i].Compare(k) != 0 {
+			t.Errorf("key mismatch at index %d: expected %d, got %d", i, KI(k), KI(resultKeys[i]))
 		}
-		expectedVal := ValueType(fmt.Sprintf("v%d", k))
-		if resultValues[i] != expectedVal {
+		expectedVal := V(fmt.Sprintf("v%d", KI(k)))
+		if VS(resultValues[i]) != VS(expectedVal) {
 			t.Errorf("value mismatch at index %d: expected %v, got %v", i, expectedVal, resultValues[i])
 		}
 	}
@@ -872,15 +898,15 @@ func TestRangeQueryEdgeCases(t *testing.T) {
 	}
 
 	// Insert test data
-	keys := []KeyType{10, 20, 30, 40, 50}
+	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Test empty range (no keys in range)
-	resultKeys, _, err := tree.SearchRange(35, 38)
+	resultKeys, _, err := tree.SearchRange(K(35), K(38))
 	if err != nil {
 		t.Fatalf("range query failed: %v", err)
 	}
@@ -889,19 +915,19 @@ func TestRangeQueryEdgeCases(t *testing.T) {
 	}
 
 	// Test single key range
-	resultKeys, resultValues, err := tree.SearchRange(30, 30)
+	resultKeys, resultValues, err := tree.SearchRange(K(30), K(30))
 	if err != nil {
 		t.Fatalf("range query failed: %v", err)
 	}
-	if len(resultKeys) != 1 || resultKeys[0] != 30 {
+	if len(resultKeys) != 1 || KI(resultKeys[0]) != 30 {
 		t.Errorf("expected single key 30, got %v", resultKeys)
 	}
-	if resultValues[0] != "v30" {
+	if VS(resultValues[0]) != "v30" {
 		t.Errorf("expected value v30, got %v", resultValues[0])
 	}
 
 	// Test full range
-	resultKeys, _, err = tree.SearchRange(10, 50)
+	resultKeys, _, err = tree.SearchRange(K(10), K(50))
 	if err != nil {
 		t.Fatalf("range query failed: %v", err)
 	}
@@ -910,7 +936,7 @@ func TestRangeQueryEdgeCases(t *testing.T) {
 	}
 
 	// Test range beyond existing keys
-	resultKeys, _, err = tree.SearchRange(60, 100)
+	resultKeys, _, err = tree.SearchRange(K(60), K(100))
 	if err != nil {
 		t.Fatalf("range query failed: %v", err)
 	}
@@ -919,16 +945,16 @@ func TestRangeQueryEdgeCases(t *testing.T) {
 	}
 
 	// Test range starting before first key
-	resultKeys, _, err = tree.SearchRange(5, 25)
+	resultKeys, _, err = tree.SearchRange(K(5), K(25))
 	if err != nil {
 		t.Fatalf("range query failed: %v", err)
 	}
-	if len(resultKeys) != 2 || resultKeys[0] != 10 || resultKeys[1] != 20 {
+	if len(resultKeys) != 2 || KI(resultKeys[0]) != 10 || KI(resultKeys[1]) != 20 {
 		t.Errorf("expected keys [10, 20], got %v", resultKeys)
 	}
 
 	// Test invalid range (start > end)
-	_, _, err = tree.SearchRange(50, 10)
+	_, _, err = tree.SearchRange(K(50), K(10))
 	if err == nil {
 		t.Error("expected error for invalid range, got nil")
 	}
@@ -958,33 +984,33 @@ func TestRangeQueryAcrossPages(t *testing.T) {
 	// Insert enough data to span multiple leaf pages
 	keys := make([]KeyType, 20)
 	for i := 0; i < 20; i++ {
-		keys[i] = KeyType((i + 1) * 5)
+		keys[i] = K(int64((i + 1) * 5))
 	}
 
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Query range that should span multiple leaves
-	resultKeys, resultValues, err := tree.SearchRange(20, 70)
+	resultKeys, resultValues, err := tree.SearchRange(K(20), K(70))
 	if err != nil {
 		t.Fatalf("range query failed: %v", err)
 	}
 
 	// Verify results
-	expected := []KeyType{20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70}
+	expected := []KeyType{K(20), K(25), K(30), K(35), K(40), K(45), K(50), K(55), K(60), K(65), K(70)}
 	if len(resultKeys) != len(expected) {
 		t.Fatalf("expected %d keys, got %d", len(expected), len(resultKeys))
 	}
 
 	for i, k := range expected {
-		if resultKeys[i] != k {
-			t.Errorf("key mismatch at index %d: expected %d, got %d", i, k, resultKeys[i])
+		if resultKeys[i].Compare(k) != 0 {
+			t.Errorf("key mismatch at index %d: expected %d, got %d", i, KI(k), KI(resultKeys[i]))
 		}
-		expectedVal := ValueType(fmt.Sprintf("v%d", k))
-		if resultValues[i] != expectedVal {
+		expectedVal := V(fmt.Sprintf("v%d", KI(k)))
+		if VS(resultValues[i]) != VS(expectedVal) {
 			t.Errorf("value mismatch at index %d: expected %v, got %v", i, expectedVal, resultValues[i])
 		}
 	}
@@ -1016,36 +1042,36 @@ func TestUpdateSimple(t *testing.T) {
 	}
 
 	// Insert test data
-	keys := []KeyType{10, 20, 30, 40, 50}
+	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Update a value
-	if err := tree.Update(30, "updated_v30"); err != nil {
+	if err := tree.Update(K(30), V("updated_v30")); err != nil {
 		t.Fatalf("update failed: %v", err)
 	}
 
 	// Verify the update
-	val, err := tree.Search(30)
+	val, err := tree.Search(K(30))
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
-	if val != "updated_v30" {
+	if VS(val) != "updated_v30" {
 		t.Errorf("expected updated_v30, got %v", val)
 	}
 
 	// Verify other keys unchanged
-	for _, k := range []KeyType{10, 20, 40, 50} {
+	for _, k := range []KeyType{K(10), K(20), K(40), K(50)} {
 		val, err := tree.Search(k)
 		if err != nil {
-			t.Errorf("key %d not found: %v", k, err)
+			t.Errorf("key %d not found: %v", KI(k), err)
 		}
-		expected := ValueType(fmt.Sprintf("v%d", k))
-		if val != expected {
-			t.Errorf("key %d: expected %v, got %v", k, expected, val)
+		expected := V(fmt.Sprintf("v%d", KI(k)))
+		if VS(val) != VS(expected) {
+			t.Errorf("key %d: expected %v, got %v", KI(k), expected, val)
 		}
 	}
 
@@ -1072,12 +1098,12 @@ func TestUpdateNonExistentKey(t *testing.T) {
 	}
 
 	// Insert test data
-	if err := tree.Insert(10, "v10"); err != nil {
+	if err := tree.Insert(K(10), V("v10")); err != nil {
 		t.Fatalf("insert failed: %v", err)
 	}
 
 	// Try to update non-existent key
-	err = tree.Update(99, "v99")
+	err = tree.Update(K(99), V("v99"))
 	if err == nil {
 		t.Error("expected error for non-existent key, got nil")
 	}
@@ -1105,32 +1131,32 @@ func TestUpdateWithLargeValue(t *testing.T) {
 	}
 
 	// Insert keys with small values
-	keys := []KeyType{10, 20, 30}
+	keys := []KeyType{K(10), K(20), K(30)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Update with a much larger value (should trigger delete + insert)
-	largeValue := ValueType(fmt.Sprintf("%0*d", 1000, 30))
-	if err := tree.Update(20, largeValue); err != nil {
+	largeValue := V(fmt.Sprintf("%0*d", 1000, 30))
+	if err := tree.Update(K(20), largeValue); err != nil {
 		t.Fatalf("update with large value failed: %v", err)
 	}
 
 	// Verify the update
-	val, err := tree.Search(20)
+	val, err := tree.Search(K(20))
 	if err != nil {
 		t.Fatalf("search failed: %v", err)
 	}
-	if val != largeValue {
+	if VS(val) != VS(largeValue) {
 		t.Errorf("value mismatch after update with large value")
 	}
 
 	// Verify all keys still exist
 	for _, k := range keys {
 		if _, err := tree.Search(k); err != nil {
-			t.Errorf("key %d not found after update: %v", k, err)
+			t.Errorf("key %d not found after update: %v", KI(k), err)
 		}
 	}
 
@@ -1157,46 +1183,46 @@ func TestUpdateMultiple(t *testing.T) {
 	}
 
 	// Insert test data
-	keys := []KeyType{5, 10, 15, 20, 25, 30, 35, 40}
+	keys := []KeyType{K(5), K(10), K(15), K(20), K(25), K(30), K(35), K(40)}
 	for _, k := range keys {
-		if err := tree.Insert(k, ValueType(fmt.Sprintf("v%d", k))); err != nil {
+		if err := tree.Insert(k, V(fmt.Sprintf("v%d", KI(k)))); err != nil {
 			t.Fatalf("insert failed: %v", err)
 		}
 	}
 
 	// Update multiple keys
-	toUpdate := map[KeyType]ValueType{
+	toUpdate := map[int64]string{
 		10: "updated_10",
 		25: "updated_25",
 		40: "updated_40",
 	}
 
-	for k, v := range toUpdate {
-		if err := tree.Update(k, v); err != nil {
-			t.Fatalf("update %d failed: %v", k, err)
+	for kInt, vStr := range toUpdate {
+		if err := tree.Update(K(kInt), V(vStr)); err != nil {
+			t.Fatalf("update %d failed: %v", kInt, err)
 		}
 	}
 
 	// Verify all updates
-	for k, expectedVal := range toUpdate {
-		val, err := tree.Search(k)
+	for kInt, expectedVal := range toUpdate {
+		val, err := tree.Search(K(kInt))
 		if err != nil {
-			t.Errorf("key %d not found: %v", k, err)
+			t.Errorf("key %d not found: %v", kInt, err)
 		}
-		if val != expectedVal {
-			t.Errorf("key %d: expected %v, got %v", k, expectedVal, val)
+		if VS(val) != expectedVal {
+			t.Errorf("key %d: expected %v, got %v", kInt, expectedVal, val)
 		}
 	}
 
 	// Verify non-updated keys unchanged
-	for _, k := range []KeyType{5, 15, 20, 30, 35} {
+	for _, k := range []KeyType{K(5), K(15), K(20), K(30), K(35)} {
 		val, err := tree.Search(k)
 		if err != nil {
-			t.Errorf("key %d not found: %v", k, err)
+			t.Errorf("key %d not found: %v", KI(k), err)
 		}
-		expected := ValueType(fmt.Sprintf("v%d", k))
-		if val != expected {
-			t.Errorf("key %d: expected %v, got %v", k, expected, val)
+		expected := V(fmt.Sprintf("v%d", KI(k)))
+		if VS(val) != VS(expected) {
+			t.Errorf("key %d: expected %v, got %v", KI(k), expected, val)
 		}
 	}
 
