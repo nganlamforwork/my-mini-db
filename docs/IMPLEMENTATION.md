@@ -33,15 +33,20 @@
     - [Data Model Features](#data-model-features)
     - [1. **Load from Disk Functionality**](#1-load-from-disk-functionality)
     - [2. **Search Operation**](#2-search-operation)
-    - [3. **Range Query Operation**](#3-range-query-operation)
-    - [4. **Update Operation**](#4-update-operation)
-    - [5. **Delete Operation with Rebalancing**](#5-delete-operation-with-rebalancing)
-    - [6. **Page Persistence Enhancement**](#6-page-persistence-enhancement)
-    - [7. **Transaction Support with Write-Ahead Logging (WAL)**](#7-transaction-support-with-write-ahead-logging-wal)
-      - [7.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**](#71-auto-commit-transactions-crash-recovery-for-single-operations)
-      - [7.2. **Explicit Transactions (Multi-Operation Atomicity)**](#72-explicit-transactions-multi-operation-atomicity)
-      - [7.3. **Write-Ahead Logging (WAL) Implementation**](#73-write-ahead-logging-wal-implementation)
-      - [7.4. **Transaction States and Lifecycle**](#74-transaction-states-and-lifecycle)
+    - [3. **Insert Operation**](#3-insert-operation)
+      - [3.1. **Leaf Split**](#31-leaf-split)
+      - [3.2. **Internal Node Split**](#32-internal-node-split)
+    - [4. **Range Query Operation**](#4-range-query-operation)
+    - [5. **Update Operation**](#5-update-operation)
+    - [6. **Delete Operation with Rebalancing**](#6-delete-operation-with-rebalancing)
+      - [6.1. **Borrow from Sibling**](#61-borrow-from-sibling)
+      - [6.2. **Merge Nodes**](#62-merge-nodes)
+    - [7. **Page Persistence Enhancement**](#7-page-persistence-enhancement)
+    - [8. **Transaction Support with Write-Ahead Logging (WAL)**](#8-transaction-support-with-write-ahead-logging-wal)
+      - [8.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**](#81-auto-commit-transactions-crash-recovery-for-single-operations)
+      - [8.2. **Explicit Transactions (Multi-Operation Atomicity)**](#82-explicit-transactions-multi-operation-atomicity)
+      - [8.3. **Write-Ahead Logging (WAL) Implementation**](#83-write-ahead-logging-wal-implementation)
+      - [8.4. **Transaction States and Lifecycle**](#84-transaction-states-and-lifecycle)
   - [Checklist: Completed Features](#checklist-completed-features)
     - [Core Operations](#core-operations)
     - [Transaction \& Durability](#transaction--durability)
@@ -328,7 +333,7 @@ function loadPageRecursively(pageID):
 
 ### 2. **Search Operation**
 
-**Overview:** Standard B+Tree search with O(log n) complexity through binary search at internal nodes and linear scan at leaves.
+**Overview:** Standard B+Tree search with O(log n) complexity through binary search at internal nodes and linear scan at leaves. The search traverses from root to leaf using binary search to determine the correct path, then performs a linear search within the target leaf.
 
 **Algorithm Steps:**
 
@@ -343,31 +348,249 @@ function loadPageRecursively(pageID):
 ```
 function Search(key):
     if tree is empty:
-        return error "empty tree"
+        return error
 
-    leaf, path = findLeaf(key)
+    currentPage = rootPage
 
-    for i, k in leaf.keys:
-        if k == key:
-            return leaf.values[i]
+    while currentPage is not a leaf:
+        // Binary search to find rightmost key <= search key
+        pos = binarySearch(currentPage.keys, key)
+
+        if pos == -1:
+            // All keys > search key, follow leftmost child
+            currentPage = currentPage.children[0]
+        else:
+            // Follow child after found key
+            currentPage = currentPage.children[pos + 1]
+
+    // Search in leaf
+    for each key in currentPage.keys:
+        if key == searchKey:
+            return currentPage.values[index]
 
     return error "key not found"
 ```
 
+**Key Concepts:**
+
+- **Binary Search**: At each internal node, find the rightmost key ≤ search key to determine which child subtree to follow.
+- **Child Selection**: If key found at position `i`, follow `children[i+1]` (subtree with keys ≥ `keys[i]`).
+- **Linear Search**: Once at leaf, scan keys sequentially to find exact match.
+
+**Time Complexity:** O(log n) - One path traversal from root to leaf, with binary search at each internal node level.
+
 ---
 
-### 3. **Range Query Operation**
+### 3. **Insert Operation**
+
+**Overview:** B+Tree insertion with automatic node splitting to maintain balance. The operation handles two cases: simple insertion (no split) and insertion with splits that propagate upward. All insertions maintain sorted order and tree balance properties.
+
+**Algorithm Steps:**
+
+1. **Handle empty tree** - Create root leaf if tree is empty
+2. **Find target leaf** - Navigate to leaf that should contain the key
+3. **Check duplicates** - Return error if key already exists
+4. **Insert into leaf** - Add key-value pair in sorted order
+5. **Check overflow** - Verify if leaf exceeds capacity (key count or payload size)
+6. **Split if needed** - Split leaf and propagate split upward through internal nodes
+7. **Create new root** - If root splits, create new root internal node
+
+**Pseudo Code:**
+
+```
+function Insert(key, value):
+    if tree is empty:
+        // Create root leaf
+        rootLeaf = createLeaf()
+        rootLeaf.keys.append(key)
+        rootLeaf.values.append(value)
+        meta.rootPage = rootLeaf.pageID
+        return
+
+    // Find target leaf and path to root
+    leaf, path = findLeaf(key)
+
+    // Check for duplicate key
+    if key exists in leaf.keys:
+        return error "duplicate key"
+
+    // Insert key-value in sorted order
+    insertIntoLeaf(leaf, key, value)
+
+    // Check if leaf overflows
+    if leaf.keyCount <= MAX_KEYS and leaf.payloadSize <= pageCapacity:
+        return  // No split needed
+
+    // Split leaf: redistribute keys between old and new leaf
+    newLeaf = createLeaf()
+    promotedKey = splitLeaf(leaf, newLeaf)
+
+    // Propagate split upward through internal nodes
+    currentChildID = newLeaf.pageID
+
+    while path is not empty:
+        parentID = path.pop()
+        parent = getPage(parentID)
+
+        // Insert promoted key and child pointer into parent
+        insertIntoInternal(parent, promotedKey, currentChildID)
+
+        if parent.keyCount < ORDER:
+            return  // Parent didn't overflow, stop propagation
+
+        // Parent overflowed, split it too
+        newInternal = createInternal()
+        promotedKey = splitInternal(parent, newInternal)
+        currentChildID = newInternal.pageID
+
+    // Root split: create new root
+    newRoot = createInternal()
+    newRoot.keys.append(promotedKey)
+    newRoot.children.append(oldRootID)
+    newRoot.children.append(currentChildID)
+    meta.rootPage = newRoot.pageID
+```
+
+**Key Concepts:**
+
+- **Simple Insert**: When leaf has space, just insert key-value in sorted order (no split).
+- **Leaf Split**: When leaf overflows, split into two leaves, promote middle key to parent.
+- **Split Propagation**: If parent internal node overflows after receiving promoted key, split it too and continue upward.
+- **Root Split**: If root splits, create new root with single key and two children, increasing tree height.
+
+**Time Complexity:**
+
+- **Best case:** O(log n) - Insert without split
+- **Worst case:** O(log n) - Insert with splits propagating to root
+
+---
+
+#### 3.1. **Leaf Split**
+
+**Overview:** When a leaf page overflows (exceeds key count or payload capacity), it must be split into two leaves. The split redistributes keys evenly and promotes the first key of the right leaf to the parent internal node.
+
+**Algorithm Steps:**
+
+1. **Calculate midpoint** - Divide keys at midpoint for even distribution
+2. **Create new leaf** - Allocate new leaf page for right half
+3. **Redistribute keys** - Move keys from midpoint onward to new leaf
+4. **Update sibling links** - Maintain doubly-linked list between leaves
+5. **Promote separator** - First key of new leaf becomes separator for parent
+6. **Update metadata** - Recompute free space for both leaves
+
+**Pseudo Code:**
+
+```
+function splitLeaf(leaf, newLeaf):
+    // Calculate midpoint for even key distribution
+    mid = leaf.keys.length / 2
+
+    // Move right half to new leaf
+    newLeaf.keys = leaf.keys[mid:]
+    newLeaf.values = leaf.values[mid:]
+
+    // Keep left half in original leaf
+    leaf.keys = leaf.keys[:mid]
+    leaf.values = leaf.values[:mid]
+
+    // Update sibling links to maintain leaf chain
+    newLeaf.nextPage = leaf.nextPage
+    newLeaf.prevPage = leaf.pageID
+    leaf.nextPage = newLeaf.pageID
+
+    // Update next sibling's prev pointer if exists
+    if newLeaf.nextPage exists:
+        nextSibling.prevPage = newLeaf.pageID
+
+    // Update key counts
+    leaf.keyCount = leaf.keys.length
+    newLeaf.keyCount = newLeaf.keys.length
+
+    // Recompute free space for both pages
+    updateFreeSpace(leaf)
+    updateFreeSpace(newLeaf)
+
+    // Return first key of new leaf as separator for parent
+    return newLeaf.keys[0]
+```
+
+**Key Concepts:**
+
+- **Even Distribution**: Midpoint split ensures roughly equal keys in both leaves.
+- **Separator Key**: First key of right leaf is promoted to parent (not copied, moved up).
+- **Sibling Links**: NextPage/PrevPage pointers maintain leaf chain for range queries.
+- **Free Space**: Recalculated after split to reflect actual payload usage.
+
+---
+
+#### 3.2. **Internal Node Split**
+
+**Overview:** When an internal node overflows after receiving a promoted key from a child split, it must also be split. The middle key is promoted to the parent, and keys/children are redistributed between left and right nodes.
+
+**Algorithm Steps:**
+
+1. **Calculate midpoint** - Find middle key to promote
+2. **Create new internal node** - Allocate new internal page for right half
+3. **Redistribute keys** - Move keys after midpoint to new node
+4. **Redistribute children** - Move corresponding child pointers
+5. **Update parent pointers** - Set parent of moved children to new node
+6. **Promote middle key** - Middle key moves up to parent (not kept in either node)
+7. **Update metadata** - Recompute free space for both nodes
+
+**Pseudo Code:**
+
+```
+function splitInternal(node, newNode, pageManager):
+    // Calculate midpoint
+    mid = node.keys.length / 2
+    midKey = node.keys[mid]  // Key to promote (not kept in either node)
+
+    // Move right half to new node
+    newNode.keys = node.keys[mid+1:]
+    newNode.children = node.children[mid+1:]
+
+    // Keep left half in original node (including child at mid+1)
+    node.keys = node.keys[:mid]
+    node.children = node.children[:mid+1]
+
+    // Update parent pointers of children moved to new node
+    for each childID in newNode.children:
+        child = pageManager.get(childID)
+        child.parentPage = newNode.pageID
+
+    // Update key counts
+    node.keyCount = node.keys.length
+    newNode.keyCount = newNode.keys.length
+
+    // Recompute free space
+    updateFreeSpace(node)
+    updateFreeSpace(newNode)
+
+    // Return middle key to be promoted to parent
+    return midKey
+```
+
+**Key Concepts:**
+
+- **Middle Key Promotion**: The middle key is removed from the node and promoted to parent (not kept in either split node).
+- **Child Pointer Redistribution**: Children after midpoint move with their keys to the new node.
+- **Parent Pointer Updates**: All moved children must have their parent pointers updated to point to the new node.
+- **Key-Child Alignment**: For internal nodes, there's always one more child than keys (children[i] for keys < keys[i], children[i+1] for keys >= keys[i]).
+
+---
+
+### 4. **Range Query Operation**
 
 **Overview:** Efficient range scanning leveraging the leaf-level doubly-linked list. Unlike point queries that require tree traversal, range queries follow horizontal links between leaves after locating the start position, achieving O(log n + k) complexity where k is the result count.
 
 **Algorithm Steps:**
 
-1. **Validate range** - Ensure startKey ≤ endKey to avoid invalid queries
-2. **Locate start position** - Use standard search to find leaf containing or after startKey
-3. **Scan current leaf** - Collect all keys within range from the current leaf node
-4. **Follow leaf chain** - Use NextPage pointer to traverse to subsequent leaves
-5. **Early termination** - Stop scanning when keys exceed endKey
-6. **Return results** - Aggregate all collected key-value pairs
+1. **Validate range** - Ensure startKey ≤ endKey
+2. **Locate start leaf** - Find leaf containing or after startKey
+3. **Scan current leaf** - Collect keys within range
+4. **Follow leaf chain** - Use NextPage pointer to traverse horizontally
+5. **Early termination** - Stop when keys exceed endKey
+6. **Return results** - Aggregate collected key-value pairs
 
 **Pseudo Code:**
 
@@ -376,164 +599,433 @@ function SearchRange(startKey, endKey):
     if startKey > endKey:
         return error "invalid range"
 
+    // Find starting leaf using standard search
     leaf = findLeaf(startKey)
     results = []
 
+    // Scan leaves horizontally using linked list
     while leaf != null:
-        for key, value in leaf:
+        // Collect keys in current leaf that fall within range
+        for each key, value in leaf.keys:
             if key >= startKey and key <= endKey:
                 results.append((key, value))
+
+            // Early exit if we've passed endKey
             if key > endKey:
                 return results
 
-        if leaf.lastKey < endKey:
-            leaf = leaf.nextPage
+        // Continue to next leaf if last key still < endKey
+        if leaf.lastKey < endKey and leaf.nextPage exists:
+            leaf = getPage(leaf.nextPage)
         else:
             break
 
     return results
 ```
 
-**Optimization Benefits:**
+**Key Concepts:**
 
-- No tree re-traversal for sequential keys
-- Cache-friendly sequential access pattern
-- Minimal computational overhead after initial seek
+- **Horizontal Traversal**: After initial O(log n) search, scan leaves horizontally using NextPage pointers.
+- **Early Termination**: Stop scanning when keys exceed endKey to avoid unnecessary work.
+- **Efficient**: O(log n + k) where k is result count, much better than k separate searches.
+
+**Time Complexity:** O(log n + k) - Initial search plus sequential leaf scanning.
 
 ---
 
-### 4. **Update Operation**
+### 5. **Update Operation**
 
 **Overview:** Atomic value modification that optimizes for the common case where the new value fits in the existing page. The implementation avoids unnecessary tree rebalancing by performing in-place updates when possible, falling back to delete-insert only when required.
 
 **Algorithm Steps:**
 
-1. **Locate key** - Navigate to leaf containing the target key
+1. **Locate key** - Find leaf containing target key
 2. **Verify existence** - Return error if key not found
-3. **Calculate size delta** - Compare old and new value sizes
-4. **Check page capacity** - Determine if new value fits in current page
-5. **In-place update** - If fits, directly replace value and update free space
-6. **Fallback to delete+insert** - If doesn't fit, remove old entry and re-insert
-7. **Maintain consistency** - Ensure page metadata reflects actual payload
+3. **Calculate size change** - Compare old and new value sizes
+4. **Check capacity** - Determine if new value fits in current page
+5. **In-place update** - If fits, replace value and update free space
+6. **Fallback** - If doesn't fit, delete old entry and re-insert
 
 **Pseudo Code:**
 
 ```
 function Update(key, newValue):
+    // Find leaf containing the key
     leaf = findLeaf(key)
 
+    // Find key index in leaf
     index = findKeyIndex(leaf, key)
     if index == -1:
         return error "key not found"
 
-    oldSize = sizeof(leaf.values[index])
-    newSize = sizeof(newValue)
+    // Calculate if new value fits
+    oldSize = leaf.values[index].size()
+    newSize = newValue.size()
     sizeDelta = newSize - oldSize
 
+    // Check if update fits in current page
     if leaf.usedSpace + sizeDelta <= pageCapacity:
-        // In-place update
+        // In-place update: just replace value
         leaf.values[index] = newValue
         updateFreeSpace(leaf)
         return success
     else:
-        // Delete and re-insert
+        // Value too large: delete and re-insert
         Delete(key)
         Insert(key, newValue)
         return success
 ```
 
-**Performance Characteristics:**
+**Key Concepts:**
 
-- **Best case:** O(log n) - in-place update without rebalancing
+- **In-Place Update**: When new value fits, directly replace without tree rebalancing (O(log n)).
+- **Delete+Insert Fallback**: When value too large, use delete then insert which may trigger rebalancing.
+- **Space Efficiency**: Avoids unnecessary splits when value size increases but still fits.
+
+**Time Complexity:**
+
+- **Best case:** O(log n) - in-place update
 - **Worst case:** O(log n) - delete + insert with potential rebalancing
-- Maintains page locality for similar-sized values
 
 ---
 
-### 5. **Delete Operation with Rebalancing**
+### 6. **Delete Operation with Rebalancing**
 
-**Overview:** Full B+Tree deletion implementation maintaining tree balance through two strategies: redistribution (borrowing from siblings) and merging. The algorithm handles both leaf and internal node rebalancing with proper separator key management.
+**Overview:** Full B+Tree deletion maintaining tree balance through redistribution (borrowing) and merging. The algorithm handles both leaf and internal node rebalancing with proper separator key management.
 
 **Algorithm Steps:**
 
-1. **Locate and remove** - Navigate to target leaf and remove the key/value pair
-2. **Check underflow condition** - Verify node maintains minimum occupancy (≥ minKeys)
-3. **Try redistribution (borrow)** - Attempt to borrow from adjacent sibling with surplus keys
-4. **Perform merge** - If siblings also at minimum, merge nodes and remove separator from parent
-5. **Update parent separators** - Adjust or remove separator keys based on operation type
-6. **Propagate upward** - Recursively rebalance parent if it underflows after merge
-7. **Handle root** - Reduce tree height when root has only one child remaining
+1. **Locate and remove** - Find leaf and remove key-value pair
+2. **Check underflow** - Verify node maintains minimum occupancy
+3. **Try borrowing** - Attempt to borrow from sibling with surplus keys
+4. **Merge if needed** - If siblings at minimum, merge nodes and remove separator
+5. **Propagate upward** - Recursively rebalance parent if it underflows
+6. **Handle root** - Reduce tree height when root has single child
 
 **Pseudo Code:**
 
 ```
 function Delete(key):
+    // Find leaf containing key and path to root
     leaf, path = findLeaf(key)
 
-    // Remove key from leaf
+    // Remove key-value from leaf
     removeKeyFromLeaf(leaf, key)
 
-    if leaf is root and leaf.keys.count == 0:
+    // Handle empty root
+    if leaf is root and leaf.keyCount == 0:
         meta.rootPage = 0
         return
 
+    // Check if rebalancing needed
     minKeys = ceil(ORDER/2) - 1
-    if leaf.keys.count >= minKeys:
-        return  // no underflow
+    if leaf.keyCount >= minKeys:
+        return  // No underflow
 
+    // Rebalance leaf
     rebalanceAfterDelete(leaf, path)
 
 function rebalanceAfterDelete(leaf, path):
     parent = getParent(leaf, path)
 
-    // Try borrow from right sibling
-    if rightSibling exists and rightSibling.keys.count > minKeys:
-        moveFirstKeyFromRightToLeft(leaf, rightSibling)
-        updateParentSeparator()
+    // Try borrow from right sibling first
+    if rightSibling exists and rightSibling.keyCount > minKeys:
+        // Move first key from right to left
+        borrowFromRight(leaf, rightSibling)
+        updateParentSeparator(parent, leaf)
         return
 
     // Try borrow from left sibling
-    if leftSibling exists and leftSibling.keys.count > minKeys:
-        moveLastKeyFromLeftToRight(leftSibling, leaf)
-        updateParentSeparator()
+    if leftSibling exists and leftSibling.keyCount > minKeys:
+        // Move last key from left to right
+        borrowFromLeft(leftSibling, leaf)
+        updateParentSeparator(parent, leftSibling)
         return
 
-    // Must merge
+    // Cannot borrow, must merge
     if rightSibling exists:
-        mergeWithRightSibling(leaf, rightSibling)
-        removeChildFromParent(parent, rightSibling)
+        mergeWithRight(leaf, rightSibling)
     else:
-        mergeWithLeftSibling(leftSibling, leaf)
-        removeChildFromParent(parent, leaf)
+        mergeWithLeft(leftSibling, leaf)
 
-    // Propagate to parent
+    // Remove separator from parent and propagate
+    removeSeparatorFromParent(parent, mergedNode)
     rebalanceInternalAfterDelete(parent, path)
 
 function rebalanceInternalAfterDelete(node, path):
-    if node is root and node.keys.count == 0 and node.children.count == 1:
-        // Make single child the new root
+    // Root reduction: if root has single child, make it new root
+    if node is root and node.keyCount == 0:
         meta.rootPage = node.children[0]
         return
 
-    if node.keys.count >= minKeys:
-        return
+    if node.keyCount >= minKeys:
+        return  // No underflow
 
     // Similar borrow/merge logic for internal nodes
-    // Includes pulling separators from parent during borrow
-    // Includes pushing separators during merge
+    // Borrow: pull separator from parent, push separator to parent
+    // Merge: combine nodes, remove separator from parent
+    // Propagate upward if parent underflows
 ```
 
-**Implementation Details:**
+**Key Concepts:**
 
-- **Borrow from Right:** Transfer first key from right sibling, update parent separator
-- **Borrow from Left:** Transfer last key from left sibling, update parent separator
-- **Merge:** Combine nodes, pull separator from parent, update sibling links
-- **Internal Node Rebalancing:** Apply same borrow/merge logic with separator key handling
-- **Root Reduction:** Decrease tree height when root has single child
+- **Borrowing**: Redistribute keys from sibling to avoid merge (preferred strategy).
+- **Merging**: Combine underflowed node with sibling when borrowing not possible.
+- **Separator Management**: Update parent separator keys when borrowing or merging.
+- **Propagation**: Rebalancing may propagate upward if parent underflows after merge.
+
+**Time Complexity:** O(log n) - May trigger O(log n) merges/borrows propagating to root.
 
 ---
 
-### 6. **Page Persistence Enhancement**
+#### 6.1. **Borrow from Sibling**
+
+**Overview:** When a node underflows after deletion, the preferred strategy is to borrow a key from a sibling that has surplus keys. This avoids merging and maintains better tree balance. Borrowing works differently for leaf and internal nodes due to separator key management.
+
+**Algorithm Steps (Leaf Nodes):**
+
+1. **Check siblings** - Try right sibling first, then left sibling
+2. **Borrow key-value** - Move first key from right (or last key from left)
+3. **Update parent separator** - Adjust separator key in parent to reflect new boundary
+4. **Update free space** - Recompute free space for both nodes
+
+**Pseudo Code (Leaf Borrow):**
+
+```
+function borrowFromRight(leaf, rightSibling, parent):
+    // Move first key-value from right to left
+    leaf.keys.append(rightSibling.keys[0])
+    leaf.values.append(rightSibling.values[0])
+
+    // Remove from right sibling
+    rightSibling.keys = rightSibling.keys[1:]
+    rightSibling.values = rightSibling.values[1:]
+
+    // Update parent separator: new boundary is first key of right sibling
+    parent.separatorKey = rightSibling.keys[0]
+
+    // Update key counts and free space
+    updateKeyCount(leaf)
+    updateKeyCount(rightSibling)
+    updateFreeSpace(leaf)
+    updateFreeSpace(rightSibling)
+
+function borrowFromLeft(leftSibling, leaf, parent):
+    // Move last key-value from left to right
+    lastIdx = leftSibling.keys.length - 1
+    leaf.keys.insert(0, leftSibling.keys[lastIdx])
+    leaf.values.insert(0, leftSibling.values[lastIdx])
+
+    // Remove from left sibling
+    leftSibling.keys = leftSibling.keys[:lastIdx]
+    leftSibling.values = leftSibling.values[:lastIdx]
+
+    // Update parent separator: new boundary is first key of current leaf
+    parent.separatorKey = leaf.keys[0]
+
+    // Update key counts and free space
+    updateKeyCount(leaf)
+    updateKeyCount(leftSibling)
+    updateFreeSpace(leaf)
+    updateFreeSpace(leftSibling)
+```
+
+**Algorithm Steps (Internal Nodes):**
+
+1. **Pull separator from parent** - Get separator key between node and sibling
+2. **Borrow key and child** - Move first key from right (or last key from left) along with child pointer
+3. **Push new separator to parent** - Update parent with new separator key
+4. **Update parent pointers** - Set parent of moved child to borrowing node
+
+**Pseudo Code (Internal Borrow):**
+
+```
+function borrowFromRight(node, rightSibling, parent):
+    // Pull separator from parent (key between node and rightSibling)
+    separatorKey = parent.keys[childIndex]
+
+    // Add separator and first child from right to current node
+    node.keys.append(separatorKey)
+    node.children.append(rightSibling.children[0])
+
+    // Update parent pointer of moved child
+    movedChild.parentPage = node.pageID
+
+    // Push first key of right sibling to parent as new separator
+    parent.keys[childIndex] = rightSibling.keys[0]
+
+    // Remove borrowed key and child from right sibling
+    rightSibling.keys = rightSibling.keys[1:]
+    rightSibling.children = rightSibling.children[1:]
+
+    // Update key counts
+    updateKeyCount(node)
+    updateKeyCount(rightSibling)
+
+function borrowFromLeft(leftSibling, node, parent):
+    // Pull separator from parent (key between leftSibling and node)
+    separatorKey = parent.keys[childIndex - 1]
+
+    // Add separator and last child from left to beginning of current node
+    node.keys.insert(0, separatorKey)
+    lastChildIdx = leftSibling.children.length - 1
+    node.children.insert(0, leftSibling.children[lastChildIdx])
+
+    // Update parent pointer of moved child
+    movedChild.parentPage = node.pageID
+
+    // Push last key of left sibling to parent as new separator
+    lastKeyIdx = leftSibling.keys.length - 1
+    parent.keys[childIndex - 1] = leftSibling.keys[lastKeyIdx]
+
+    // Remove borrowed key and child from left sibling
+    leftSibling.keys = leftSibling.keys[:lastKeyIdx]
+    leftSibling.children = leftSibling.children[:lastChildIdx]
+
+    // Update key counts
+    updateKeyCount(node)
+    updateKeyCount(leftSibling)
+```
+
+**Key Concepts:**
+
+- **Preferred Strategy**: Borrowing avoids merge, keeping tree more balanced.
+- **Separator Management**: Parent separator keys must be updated to reflect new boundaries.
+- **Child Pointer Updates**: For internal nodes, moved children need parent pointer updates.
+- **Direction Preference**: Try right sibling first, then left (arbitrary but consistent).
+
+---
+
+#### 6.2. **Merge Nodes**
+
+**Overview:** When a node underflows and neither sibling has surplus keys to borrow, the nodes must be merged. Merging combines two nodes and removes the separator key from the parent, which may cause the parent to underflow and propagate upward.
+
+**Algorithm Steps (Leaf Merge):**
+
+1. **Choose merge direction** - Prefer merging with right sibling, fallback to left
+2. **Combine keys and values** - Append all keys/values from one node to the other
+3. **Update sibling links** - Maintain leaf chain by updating NextPage/PrevPage pointers
+4. **Remove separator from parent** - Delete separator key and child pointer from parent
+5. **Propagate to parent** - Check if parent underflows after separator removal
+
+**Pseudo Code (Leaf Merge):**
+
+```
+function mergeWithRight(leaf, rightSibling, parent):
+    // Combine right sibling into current leaf
+    leaf.keys.append(rightSibling.keys)
+    leaf.values.append(rightSibling.values)
+
+    // Update sibling links
+    leaf.nextPage = rightSibling.nextPage
+    if rightSibling.nextPage exists:
+        nextSibling.prevPage = leaf.pageID
+
+    // Remove separator and right child from parent
+    removeSeparatorFromParent(parent, rightSibling)
+
+    // Update free space
+    updateFreeSpace(leaf)
+
+    // Check if parent underflows and propagate
+    if parent.keyCount < minKeys:
+        rebalanceInternalAfterDelete(parent, path)
+
+function mergeWithLeft(leftSibling, leaf, parent):
+    // Combine current leaf into left sibling
+    leftSibling.keys.append(leaf.keys)
+    leftSibling.values.append(leaf.values)
+
+    // Update sibling links
+    leftSibling.nextPage = leaf.nextPage
+    if leaf.nextPage exists:
+        nextSibling.prevPage = leftSibling.pageID
+
+    // Remove separator and current child from parent
+    removeSeparatorFromParent(parent, leaf)
+
+    // Update free space
+    updateFreeSpace(leftSibling)
+
+    // Check if parent underflows and propagate
+    if parent.keyCount < minKeys:
+        rebalanceInternalAfterDelete(parent, path)
+```
+
+**Algorithm Steps (Internal Merge):**
+
+1. **Pull separator from parent** - Get separator key between nodes to merge
+2. **Combine nodes** - Merge keys and children, inserting separator appropriately
+3. **Update parent pointers** - Set parent of all moved children to merged node
+4. **Remove separator from parent** - Delete separator key and child pointer
+5. **Propagate to parent** - Check if parent underflows after separator removal
+
+**Pseudo Code (Internal Merge):**
+
+```
+function mergeWithRight(node, rightSibling, parent):
+    // Pull separator from parent
+    separatorKey = parent.keys[childIndex]
+
+    // Combine: node keys + separator + rightSibling keys
+    node.keys.append(separatorKey)
+    node.keys.append(rightSibling.keys)
+
+    // Combine children: node children + rightSibling children
+    node.children.append(rightSibling.children)
+
+    // Update parent pointers of moved children
+    for each childID in rightSibling.children:
+        child = getPage(childID)
+        child.parentPage = node.pageID
+
+    // Remove separator and right child from parent
+    removeSeparatorFromParent(parent, rightSibling)
+
+    // Update key count
+    node.keyCount = node.keys.length
+
+    // Check if parent underflows and propagate
+    if parent.keyCount < minKeys:
+        rebalanceInternalAfterDelete(parent, path)
+
+function mergeWithLeft(leftSibling, node, parent):
+    // Pull separator from parent
+    separatorKey = parent.keys[childIndex - 1]
+
+    // Combine: leftSibling keys + separator + node keys
+    leftSibling.keys.append(separatorKey)
+    leftSibling.keys.append(node.keys)
+
+    // Combine children: leftSibling children + node children
+    leftSibling.children.append(node.children)
+
+    // Update parent pointers of moved children
+    for each childID in node.children:
+        child = getPage(childID)
+        child.parentPage = leftSibling.pageID
+
+    // Remove separator and current child from parent
+    removeSeparatorFromParent(parent, node)
+
+    // Update key count
+    leftSibling.keyCount = leftSibling.keys.length
+
+    // Check if parent underflows and propagate
+    if parent.keyCount < minKeys:
+        rebalanceInternalAfterDelete(parent, path)
+```
+
+**Key Concepts:**
+
+- **Separator Integration**: In internal node merge, separator key from parent is inserted between merged keys.
+- **Child Pointer Updates**: All children moved during merge need parent pointer updates.
+- **Propagation**: Merging removes a separator from parent, which may cause parent to underflow.
+- **Direction Preference**: Prefer merging with right sibling, fallback to left (consistent with borrow preference).
+
+---
+
+### 7. **Page Persistence Enhancement**
 
 **Challenge Addressed:** The initial implementation wrote pages only during allocation, not after subsequent modifications. This caused data loss when reopening the database.
 
@@ -549,7 +1041,7 @@ function FlushAll():
 
 ---
 
-### 7. **Transaction Support with Write-Ahead Logging (WAL)**
+### 8. **Transaction Support with Write-Ahead Logging (WAL)**
 
 **Overview:** Full ACID transaction support with Write-Ahead Logging for durability and crash recovery. MiniDB implements two types of transactions: **auto-commit transactions** (for single operations) and **explicit transactions** (for multi-operation queries). This dual approach ensures that every operation is crash-recoverable while also supporting atomic multi-operation transactions—critical for production database systems.
 
@@ -572,7 +1064,7 @@ Transaction support with WAL is a fundamental feature in production databases. T
 
 ---
 
-#### 7.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**
+#### 8.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**
 
 **Purpose:** Ensure that every operation, even simple single-operation queries, is crash-recoverable. This matches the behavior of real production databases where every operation is transactional.
 
@@ -665,7 +1157,7 @@ val, _ := tree2.Search(K(1))     // Data recovered successfully
 
 ---
 
-#### 7.2. **Explicit Transactions (Multi-Operation Atomicity)**
+#### 8.2. **Explicit Transactions (Multi-Operation Atomicity)**
 
 **Purpose:** Group multiple operations into a single atomic transaction. All operations either succeed together or fail together, maintaining database consistency.
 
@@ -796,7 +1288,7 @@ tree.Commit()             // Commits both operations atomically
 
 ---
 
-#### 7.3. **Write-Ahead Logging (WAL) Implementation**
+#### 8.3. **Write-Ahead Logging (WAL) Implementation**
 
 **WAL File Format:**
 
@@ -853,7 +1345,7 @@ This ensures the WAL doesn't grow indefinitely. In production systems, checkpoin
 
 ---
 
-#### 7.4. **Transaction States and Lifecycle**
+#### 8.4. **Transaction States and Lifecycle**
 
 **Transaction States:**
 

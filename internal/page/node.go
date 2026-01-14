@@ -20,16 +20,18 @@ type InternalPage struct {
 	Header PageHeader
 
 	// payload (in-memory view)
-	Keys     []KeyType // Exported for tests
-	Children []uint64 // PageID - Exported for tests
+	Keys     []KeyType 
+	// Store page IDs, not the pages themselves
+	Children []uint64 		
 }
 
 type LeafPage struct {
 	Header PageHeader
 
 	// payload (in-memory view)
-	Keys   []KeyType   // Exported for tests
-	Values []ValueType // Exported for tests
+	Keys   []KeyType   
+	// Store value pairs
+	Values []ValueType 
 }
 
 // -----------------------------
