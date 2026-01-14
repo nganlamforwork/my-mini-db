@@ -1,4 +1,4 @@
-package main
+package page
 
 import (
 	"bytes"
@@ -12,8 +12,8 @@ import (
 // inside a single database file (`minidb.db`). The PageManager also
 // keeps an in-memory map for quick access and updates.
 type PageManager struct {
-	pages    map[uint64]interface{}
-	next     uint64
+	Pages    map[uint64]interface{} // Exported for tests
+	Next     uint64                 // Exported for tests
 	file     *os.File
 	pageSize int
 }
@@ -42,7 +42,7 @@ func NewPageManagerWithFile(filename string, truncate bool) *PageManager {
 	}
 
 	pm := &PageManager{
-		pages:    make(map[uint64]interface{}),
+		Pages:    make(map[uint64]interface{}),
 		file:     f,
 		pageSize: DefaultPageSize,
 	}
@@ -66,22 +66,22 @@ func NewPageManagerWithFile(filename string, truncate bool) *PageManager {
 			Order:    uint16(ORDER),
 			Version:  1,
 		}
-		pm.pages[1] = meta
-		if err := pm.writePageToFile(1, meta); err != nil {
+		pm.Pages[1] = meta
+		if err := pm.WritePageToFile(1, meta); err != nil {
 			panic(err)
 		}
-		pm.next = 2
+		pm.Next = 2
 	} else {
 		pgCount := int(fi.Size()) / pm.pageSize
 		if pgCount >= 1 {
 			p, err := pm.readPageFromFile(1)
 			if err == nil {
 				if m, ok := p.(*MetaPage); ok {
-					pm.pages[1] = m
+					pm.Pages[1] = m
 				}
 			}
 		}
-		pm.next = uint64(pgCount) + 1
+		pm.Next = uint64(pgCount) + 1
 	}
 
 	return pm
@@ -91,13 +91,13 @@ func NewPageManagerWithFile(filename string, truncate bool) *PageManager {
 func (pm *PageManager) WriteMeta(m *MetaPage) error {
 	m.Header.PageID = 1
 	m.Header.PageType = PageTypeMeta
-	pm.pages[1] = m
-	return pm.writePageToFile(1, m)
+	pm.Pages[1] = m
+	return pm.WritePageToFile(1, m)
 }
 
 // ReadMeta loads the meta page from disk (or cache) and returns it.
 func (pm *PageManager) ReadMeta() (*MetaPage, error) {
-	if p, ok := pm.pages[1]; ok {
+	if p, ok := pm.Pages[1]; ok {
 		if m, ok2 := p.(*MetaPage); ok2 {
 			return m, nil
 		}
@@ -110,23 +110,23 @@ func (pm *PageManager) ReadMeta() (*MetaPage, error) {
 	if !ok {
 		return nil, fmt.Errorf("page 1 is not a MetaPage")
 	}
-	pm.pages[1] = m
+	pm.Pages[1] = m
 	return m, nil
 }
 
 // allocateID returns the next page id and increments the counter.
 func (pm *PageManager) allocateID() uint64 {
-	id := pm.next
-	pm.next++
+	id := pm.Next
+	pm.Next++
 	return id
 }
 
 // NewLeaf allocates, registers, and persists a new leaf page.
 func (pm *PageManager) NewLeaf() *LeafPage {
 	id := pm.allocateID()
-	p := newLeafPage(id)
-	pm.pages[id] = p
-	if err := pm.writePageToFile(id, p); err != nil {
+	p := NewLeafPage(id)
+	pm.Pages[id] = p
+	if err := pm.WritePageToFile(id, p); err != nil {
 		panic(err)
 	}
 	return p
@@ -135,9 +135,9 @@ func (pm *PageManager) NewLeaf() *LeafPage {
 // NewInternal allocates, registers, and persists a new internal page.
 func (pm *PageManager) NewInternal() *InternalPage {
 	id := pm.allocateID()
-	p := newInternalPage(id)
-	pm.pages[id] = p
-	if err := pm.writePageToFile(id, p); err != nil {
+	p := NewInternalPage(id)
+	pm.Pages[id] = p
+	if err := pm.WritePageToFile(id, p); err != nil {
 		panic(err)
 	}
 	return p
@@ -150,7 +150,7 @@ func (pm *PageManager) Get(pageID uint64) interface{} {
 		return nil
 	}
 
-	if page, ok := pm.pages[pageID]; ok {
+	if page, ok := pm.Pages[pageID]; ok {
 		return page
 	}
 
@@ -162,14 +162,15 @@ func (pm *PageManager) Get(pageID uint64) interface{} {
 		}
 		panic(err)
 	}
-	pm.pages[pageID] = page
+	pm.Pages[pageID] = page
 	return page
 }
 
 // writePageToFile serializes the given page and writes it into the
 // file slot corresponding to pageID. The serialized page must not
 // exceed pageSize.
-func (pm *PageManager) writePageToFile(pageID uint64, page interface{}) error {
+// WritePageToFile writes a page to disk (exported for transaction/WAL)
+func (pm *PageManager) WritePageToFile(pageID uint64, page interface{}) error {
 	buf := &bytes.Buffer{}
 	switch p := page.(type) {
 	case *MetaPage:
@@ -267,8 +268,8 @@ func (pm *PageManager) Close() error {
 
 // FlushAll writes all cached pages back to disk
 func (pm *PageManager) FlushAll() error {
-	for pageID, page := range pm.pages {
-		if err := pm.writePageToFile(pageID, page); err != nil {
+	for pageID, page := range pm.Pages {
+		if err := pm.WritePageToFile(pageID, page); err != nil {
 			return fmt.Errorf("failed to flush page %d: %w", pageID, err)
 		}
 	}

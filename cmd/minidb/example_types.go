@@ -1,30 +1,34 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+
+	"bplustree/internal/storage"
+)
 
 // Example: Using composite keys and structured rows
 func ExampleCompositeKeyAndRecord() {
 	// Create a composite key with (userID, timestamp)
-	key1 := NewCompositeKey(
-		NewInt(1001),      // userID
-		NewInt(1704067200), // timestamp
+	key1 := storage.NewCompositeKey(
+		storage.NewInt(1001),      // userID
+		storage.NewInt(1704067200), // timestamp
 	)
 
 	// Create a row with user data
-	row1 := NewRecord(
-		NewString("John Doe"),
-		NewInt(30),
-		NewString("john@example.com"),
-		NewBool(true), // is_active
+	row1 := storage.NewRecord(
+		storage.NewString("John Doe"),
+		storage.NewInt(30),
+		storage.NewString("john@example.com"),
+		storage.NewBool(true), // is_active
 	)
 
 	fmt.Println("Key:", key1)
 	fmt.Println("Record:", row1)
 
 	// Create another composite key
-	key2 := NewCompositeKey(
-		NewInt(1001),
-		NewInt(1704070800),
+	key2 := storage.NewCompositeKey(
+		storage.NewInt(1001),
+		storage.NewInt(1704070800),
 	)
 
 	// Compare keys (lexicographic order)
@@ -46,10 +50,10 @@ func ExampleCompositeKeyAndRecord() {
 // Example: Simple single-column usage (backward compatible pattern)
 func ExampleSimpleKeyValue() {
 	// Single column key (integer)
-	key := NewCompositeKey(NewInt(42))
+	key := storage.NewCompositeKey(storage.NewInt(42))
 
 	// Single column value (string)
-	value := NewRecord(NewString("Hello, World!"))
+	value := storage.NewRecord(storage.NewString("Hello, World!"))
 
 	fmt.Println("Simple Key:", key)
 	fmt.Println("Simple Value:", value)
@@ -62,17 +66,17 @@ func ExampleSimpleKeyValue() {
 // Example: Using different column types
 func ExampleMixedTypes() {
 	// Key with mixed types (not recommended but supported)
-	key := NewCompositeKey(
-		NewInt(100),
-		NewString("A"),
+	key := storage.NewCompositeKey(
+		storage.NewInt(100),
+		storage.NewString("A"),
 	)
 
 	// Record with different types
-	row := NewRecord(
-		NewString("Product Name"),
-		NewFloat(99.99),
-		NewInt(50), // quantity
-		NewBool(false), // discontinued
+	row := storage.NewRecord(
+		storage.NewString("Product Name"),
+		storage.NewFloat(99.99),
+		storage.NewInt(50), // quantity
+		storage.NewBool(false), // discontinued
 	)
 
 	fmt.Printf("Key size: %d bytes\n", key.Size())

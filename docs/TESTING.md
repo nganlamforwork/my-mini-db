@@ -408,20 +408,24 @@ The test infrastructure is designed to support future HTML/CSS-based UI:
 
 ### Basic Test Execution
 
+After refactoring, all tests are located in the `internal/btree` package. Use the following commands:
+
 ```bash
 # Run all tests
-go test -v
+go test -v ./internal/btree/...
 
 # Run specific test
-go test -v -run TestInsertWithSplit
+go test -v ./internal/btree/... -run TestInsertWithSplit
 
 # Run with coverage
-go test -cover
+go test -cover ./internal/btree/...
 
 # Generate coverage report
-go test -coverprofile=coverage.out
+go test -coverprofile=coverage.out ./internal/btree/...
 go tool cover -html=coverage.out
 ```
+
+**Note:** The test suite has been refactored into a proper package structure. Tests are now located in `internal/btree/tree_test.go` and use the refactored package imports (`internal/page`, `internal/storage`, `internal/transaction`).
 
 ### Test Output
 

@@ -807,7 +807,7 @@ tree.Checkpoint()
 **Tests:**
 
 - `tree_test.go` - 18 comprehensive tests with visualization (1,650+ lines)
-- `TESTING.md` - Complete testing documentation
+- `docs/TESTING.md` - Complete testing documentation
 - Helper functions: K(), V(), KI(), VS() for test readability
 - TestContext system for automatic documentation generation
 

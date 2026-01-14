@@ -1,32 +1,49 @@
-package main
+package btree
 
 import (
 	"fmt"
+
+	"bplustree/internal/page"
+	"bplustree/internal/storage"
+	"bplustree/internal/transaction"
 )
 
+// Type aliases for convenience
+type KeyType = storage.CompositeKey
+type ValueType = storage.Record
+
+// Type aliases for page types
+type LeafPage = page.LeafPage
+type InternalPage = page.InternalPage
+
 type BPlusTree struct {
-	meta      *MetaPage
-	pager     *PageManager
-	txManager *TransactionManager
-	wal       *WALManager
+	meta      *page.MetaPage
+	pager     *page.PageManager
+	txManager *transaction.TransactionManager
+	wal       *transaction.WALManager
 }
 
-const MAX_KEYS = ORDER - 1
+const MAX_KEYS = page.ORDER - 1
+
+// GetPager returns the page manager (implements transaction.TreeInterface)
+func (tree *BPlusTree) GetPager() *page.PageManager {
+	return tree.pager
+}
 
 // NewBPlusTree creates a new B+Tree with WAL and transaction support
-func NewBPlusTree(pager *PageManager) (*BPlusTree, error) {
+func NewBPlusTree(pager *page.PageManager) (*BPlusTree, error) {
 	// Initialize WAL
 	dbFilename := pager.GetFileName()
 	if dbFilename == "" {
 		dbFilename = "minidb.db"
 	}
-	wal, err := NewWALManager(dbFilename)
+	wal, err := transaction.NewWALManager(dbFilename)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create WAL: %w", err)
 	}
 
 	// Initialize transaction manager
-	txManager := NewTransactionManager(wal)
+	txManager := transaction.NewTransactionManager(wal)
 
 	tree := &BPlusTree{
 		pager:     pager,
@@ -126,11 +143,11 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 			path = append(path, currentID)
 
 			// binary search: last key <= key
-			left, right := 0, len(p.keys)-1
+			left, right := 0, len(p.Keys)-1
 			pos := -1
 			for left <= right {
 				mid := (left + right) / 2
-				if p.keys[mid].Compare(key) <= 0 {
+				if p.Keys[mid].Compare(key) <= 0 {
 					pos = mid
 					left = mid + 1
 				} else {
@@ -147,7 +164,7 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 				childIndex = pos + 1
 			}
 
-			currentID = p.children[childIndex]
+			currentID = p.Children[childIndex]
 
 		default:
 			return nil, nil, fmt.Errorf("unknown page type for page ID: %d", currentID)
@@ -175,15 +192,15 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		if m, err := tree.pager.ReadMeta(); err == nil {
 			tree.meta = m
 		} else {
-			// fallback: create a new meta page in-memory
-			tree.meta = &MetaPage{RootPage: 0, PageSize: uint32(DefaultPageSize), Order: uint16(ORDER), Version: 1}
+		// fallback: create a new meta page in-memory
+		tree.meta = &page.MetaPage{RootPage: 0, PageSize: uint32(page.DefaultPageSize), Order: uint16(page.ORDER), Version: 1}
 		}
 	}
 
 	if tree.meta.RootPage == 0 {
 		leaf := tree.pager.NewLeaf()
-		leaf.keys = append(leaf.keys, key)
-		leaf.values = append(leaf.values, value)
+		leaf.Keys = append(leaf.Keys, key)
+		leaf.Values = append(leaf.Values, value)
 		leaf.Header.KeyCount = 1
 		tree.meta.RootPage = leaf.Header.PageID
 		
@@ -207,14 +224,14 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	}
 
 	// Check for duplicate keys
-	for _, existingKey := range leaf.keys {
+	for _, existingKey := range leaf.Keys {
 		if existingKey.Compare(key) == 0 {
 			return fmt.Errorf("duplicate key insertion: %v", key)
 		}
 	}
 
 	// Insert into the leaf in sorted order
-	if err := insertIntoLeaf(leaf, key, value); err != nil {
+	if err := page.InsertIntoLeaf(leaf, key, value); err != nil {
 		return err
 	}
 
@@ -224,9 +241,9 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	}
 
 	// If the leaf does not overflow (by key count or payload), we're done
-	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-	if len(leaf.keys) <= MAX_KEYS {
-		if computeLeafPayloadSize(leaf) <= payloadCapacity {
+	payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
+	if len(leaf.Keys) <= MAX_KEYS {
+		if page.ComputeLeafPayloadSize(leaf) <= payloadCapacity {
 			return nil
 		}
 	}
@@ -234,7 +251,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	// 3. Split leaf
 	var pushKey KeyType
 	newLeaf := tree.pager.NewLeaf()
-	pushKey = splitLeaf(leaf, newLeaf)
+	pushKey = page.SplitLeaf(leaf, newLeaf)
 
 	// Track page modifications for transaction
 	if tree.txManager != nil {
@@ -252,10 +269,10 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		parentID := path[len(path)-1]
 		path = path[:len(path)-1]
 
-		parent := tree.pager.Get(parentID).(*InternalPage)
+		parent := tree.pager.Get(parentID).(*page.InternalPage)
 
 		// Insert the separator key and pointer into parent
-		insertIntoInternal(parent, pushKey, childPageID)
+		page.InsertIntoInternal(parent, pushKey, childPageID)
 
 		// Track parent modification
 		if tree.txManager != nil {
@@ -263,13 +280,13 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		}
 
 		// If parent didn't overflow, split propagation stops
-		if len(parent.keys) < ORDER {
+		if len(parent.Keys) < page.ORDER {
 			return nil
 		}
 
 		// split internal
 		newInternal := tree.pager.NewInternal()
-		pushKey = splitInternal(parent, newInternal, tree.pager)
+		pushKey = page.SplitInternal(parent, newInternal, tree.pager)
 		
 		// Track new internal page
 		if tree.txManager != nil {
@@ -281,23 +298,23 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 	// 5. Root split → create new root
 	newRoot := tree.pager.NewInternal()
-	newRoot.keys = append(newRoot.keys, pushKey)
-	newRoot.children = append(
-		newRoot.children,
+	newRoot.Keys = append(newRoot.Keys, pushKey)
+	newRoot.Children = append(
+		newRoot.Children,
 		tree.meta.RootPage,
 		childPageID,
 	)
 
 	// Ensure correct type assertions for left and right children
-	if left, ok := tree.pager.Get(tree.meta.RootPage).(*InternalPage); ok {
+		if left, ok := tree.pager.Get(tree.meta.RootPage).(*page.InternalPage); ok {
 		left.Header.ParentPage = newRoot.Header.PageID
-	} else if leftLeaf, ok := tree.pager.Get(tree.meta.RootPage).(*LeafPage); ok {
+	} else if leftLeaf, ok := tree.pager.Get(tree.meta.RootPage).(*page.LeafPage); ok {
 		leftLeaf.Header.ParentPage = newRoot.Header.PageID
 	}
 
-	if right, ok := tree.pager.Get(childPageID).(*InternalPage); ok {
+	if right, ok := tree.pager.Get(childPageID).(*page.InternalPage); ok {
 		right.Header.ParentPage = newRoot.Header.PageID
-	} else if rightLeaf, ok := tree.pager.Get(childPageID).(*LeafPage); ok {
+	} else if rightLeaf, ok := tree.pager.Get(childPageID).(*page.LeafPage); ok {
 		rightLeaf.Header.ParentPage = newRoot.Header.PageID
 	}
 
@@ -355,7 +372,7 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 
 	// If it's an internal node, recursively load all children
 	if internal, ok := page.(*InternalPage); ok {
-		for _, childID := range internal.children {
+		for _, childID := range internal.Children {
 			if err := tree.loadPage(childID); err != nil {
 				return err
 			}
@@ -374,23 +391,23 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 	// Empty tree
 	if tree.meta == nil || tree.meta.RootPage == 0 {
-		return Record{}, fmt.Errorf("key not found: %v (empty tree)", key)
+		return storage.Record{}, fmt.Errorf("key not found: %v (empty tree)", key)
 	}
 
 	// Find the leaf that should contain the key
 	leaf, _, err := tree.findLeaf(key)
 	if err != nil {
-		return Record{}, err
+		return storage.Record{}, err
 	}
 
 	// Search for the key in the leaf
-	for i, k := range leaf.keys {
+	for i, k := range leaf.Keys {
 		if k.Compare(key) == 0 {
-			return leaf.values[i], nil
+			return leaf.Values[i], nil
 		}
 	}
 
-	return Record{}, fmt.Errorf("key not found: %v", key)
+	return storage.Record{}, fmt.Errorf("key not found: %v", key)
 }
 
 // -----------------------------
@@ -425,10 +442,10 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 	// Traverse leaves using the linked list
 	for leaf != nil {
 		// Scan keys in current leaf
-		for i, k := range leaf.keys {
+		for i, k := range leaf.Keys {
 			if k.Compare(startKey) >= 0 && k.Compare(endKey) <= 0 {
 				keys = append(keys, k)
-				values = append(values, leaf.values[i])
+				values = append(values, leaf.Values[i])
 			}
 			// Early exit if we've passed endKey
 			if k.Compare(endKey) > 0 {
@@ -437,7 +454,7 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 		}
 
 		// If last key in this leaf is still < endKey, continue to next leaf
-		if len(leaf.keys) > 0 && leaf.keys[len(leaf.keys)-1].Compare(endKey) < 0 {
+		if len(leaf.Keys) > 0 && leaf.Keys[len(leaf.Keys)-1].Compare(endKey) < 0 {
 			if leaf.Header.NextPage == 0 {
 				break
 			}
@@ -445,7 +462,7 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 			if nextPage == nil {
 				break
 			}
-			leaf = nextPage.(*LeafPage)
+			leaf = nextPage.(*page.LeafPage)
 		} else {
 			break
 		}
@@ -480,7 +497,7 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 
 	// Find the key in the leaf
 	keyIndex := -1
-	for i, k := range leaf.keys {
+	for i, k := range leaf.Keys {
 		if k.Compare(key) == 0 {
 			keyIndex = i
 			break
@@ -491,7 +508,7 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 		return fmt.Errorf("key not found: %v", key)
 	}
 
-	oldValue := leaf.values[keyIndex]
+	oldValue := leaf.Values[keyIndex]
 	
 	// Calculate size change
 	oldSize := oldValue.Size()
@@ -499,15 +516,15 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 	sizeDelta := newSize - oldSize
 
 	// Check if new value fits in current page
-	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-	currentUsed := computeLeafPayloadSize(leaf)
+	payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
+	currentUsed := page.ComputeLeafPayloadSize(leaf)
 	
 	// If the new value fits, do in-place update
 	if currentUsed + sizeDelta <= payloadCapacity {
-		leaf.values[keyIndex] = newValue
+		leaf.Values[keyIndex] = newValue
 		
 		// Update free space
-		used := computeLeafPayloadSize(leaf)
+		used := page.ComputeLeafPayloadSize(leaf)
 		if used > payloadCapacity {
 			leaf.Header.FreeSpace = 0
 		} else {
@@ -563,7 +580,7 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 
 	// Find and remove the key from the leaf
 	keyIndex := -1
-	for i, k := range leaf.keys {
+	for i, k := range leaf.Keys {
 		if k.Compare(key) == 0 {
 			keyIndex = i
 			break
@@ -575,13 +592,13 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	}
 
 	// Remove the key and value
-	leaf.keys = append(leaf.keys[:keyIndex], leaf.keys[keyIndex+1:]...)
-	leaf.values = append(leaf.values[:keyIndex], leaf.values[keyIndex+1:]...)
-	leaf.Header.KeyCount = uint16(len(leaf.keys))
+	leaf.Keys = append(leaf.Keys[:keyIndex], leaf.Keys[keyIndex+1:]...)
+	leaf.Values = append(leaf.Values[:keyIndex], leaf.Values[keyIndex+1:]...)
+	leaf.Header.KeyCount = uint16(len(leaf.Keys))
 
 	// Recompute free space
-	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-	used := computeLeafPayloadSize(leaf)
+	payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
+	used := page.ComputeLeafPayloadSize(leaf)
 	leaf.Header.FreeSpace = uint16(payloadCapacity - used)
 
 	// Track page modification for transaction
@@ -592,7 +609,7 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	// If this is the root and it's a leaf, we're done
 	if len(path) == 0 {
 		// If root is now empty, reset tree
-		if len(leaf.keys) == 0 {
+		if len(leaf.Keys) == 0 {
 			tree.meta.RootPage = 0
 			if tree.txManager != nil {
 				tree.txManager.TrackPageModification(1, tree.meta)
@@ -603,8 +620,8 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	}
 
 	// Check if leaf needs rebalancing (minimum keys = ceil(ORDER/2) - 1 for leaf)
-	minKeys := (ORDER + 1) / 2 - 1 // For ORDER=4: minKeys = 1
-	if len(leaf.keys) >= minKeys {
+	minKeys := (page.ORDER + 1) / 2 - 1 // For ORDER=4: minKeys = 1
+	if len(leaf.Keys) >= minKeys {
 		return nil // No underflow, we're done
 	}
 
@@ -613,8 +630,8 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 }
 
 // rebalanceAfterDelete handles underflow by borrowing from siblings or merging
-func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error {
-	minKeys := (ORDER + 1) / 2 - 1
+func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) error {
+	minKeys := (page.ORDER + 1) / 2 - 1
 
 	// Get parent
 	parentID := path[len(path)-1]
@@ -622,7 +639,7 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 
 	// Find the index of this leaf in parent's children
 	childIndex := -1
-	for i, childID := range parent.children {
+	for i, childID := range parent.Children {
 		if childID == leaf.Header.PageID {
 			childIndex = i
 			break
@@ -634,28 +651,28 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 	}
 
 	// Try to borrow from right sibling first
-	if childIndex < len(parent.children)-1 {
-		rightSiblingID := parent.children[childIndex+1]
-		rightSibling := tree.pager.Get(rightSiblingID).(*LeafPage)
+	if childIndex < len(parent.Children)-1 {
+		rightSiblingID := parent.Children[childIndex+1]
+		rightSibling := tree.pager.Get(rightSiblingID).(*page.LeafPage)
 
-		if len(rightSibling.keys) > minKeys {
+		if len(rightSibling.Keys) > minKeys {
 			// Borrow from right sibling
-			leaf.keys = append(leaf.keys, rightSibling.keys[0])
-			leaf.values = append(leaf.values, rightSibling.values[0])
-			leaf.Header.KeyCount = uint16(len(leaf.keys))
+			leaf.Keys = append(leaf.Keys, rightSibling.Keys[0])
+			leaf.Values = append(leaf.Values, rightSibling.Values[0])
+			leaf.Header.KeyCount = uint16(len(leaf.Keys))
 
-			rightSibling.keys = rightSibling.keys[1:]
-			rightSibling.values = rightSibling.values[1:]
-			rightSibling.Header.KeyCount = uint16(len(rightSibling.keys))
+			rightSibling.Keys = rightSibling.Keys[1:]
+			rightSibling.Values = rightSibling.Values[1:]
+			rightSibling.Header.KeyCount = uint16(len(rightSibling.Keys))
 
 			// Update separator key in parent
-			parent.keys[childIndex] = rightSibling.keys[0]
+			parent.Keys[childIndex] = rightSibling.Keys[0]
 
 			// Recompute free space
-			payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-			used := computeLeafPayloadSize(leaf)
+			payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
+			used := page.ComputeLeafPayloadSize(leaf)
 			leaf.Header.FreeSpace = uint16(payloadCapacity - used)
-			usedRight := computeLeafPayloadSize(rightSibling)
+			usedRight := page.ComputeLeafPayloadSize(rightSibling)
 			rightSibling.Header.FreeSpace = uint16(payloadCapacity - usedRight)
 
 			// Track page modifications for transaction
@@ -671,30 +688,30 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 
 	// Try to borrow from left sibling
 	if childIndex > 0 {
-		leftSiblingID := parent.children[childIndex-1]
-		leftSibling := tree.pager.Get(leftSiblingID).(*LeafPage)
+		leftSiblingID := parent.Children[childIndex-1]
+		leftSibling := tree.pager.Get(leftSiblingID).(*page.LeafPage)
 
-		if len(leftSibling.keys) > minKeys {
+		if len(leftSibling.Keys) > minKeys {
 			// Borrow from left sibling
-			lastIdx := len(leftSibling.keys) - 1
+			lastIdx := len(leftSibling.Keys) - 1
 			
 			// Insert at beginning of current leaf
-			leaf.keys = append([]KeyType{leftSibling.keys[lastIdx]}, leaf.keys...)
-			leaf.values = append([]ValueType{leftSibling.values[lastIdx]}, leaf.values...)
-			leaf.Header.KeyCount = uint16(len(leaf.keys))
+			leaf.Keys = append([]KeyType{leftSibling.Keys[lastIdx]}, leaf.Keys...)
+			leaf.Values = append([]ValueType{leftSibling.Values[lastIdx]}, leaf.Values...)
+			leaf.Header.KeyCount = uint16(len(leaf.Keys))
 
-			leftSibling.keys = leftSibling.keys[:lastIdx]
-			leftSibling.values = leftSibling.values[:lastIdx]
-			leftSibling.Header.KeyCount = uint16(len(leftSibling.keys))
+			leftSibling.Keys = leftSibling.Keys[:lastIdx]
+			leftSibling.Values = leftSibling.Values[:lastIdx]
+			leftSibling.Header.KeyCount = uint16(len(leftSibling.Keys))
 
 			// Update separator key in parent
-			parent.keys[childIndex-1] = leaf.keys[0]
+			parent.Keys[childIndex-1] = leaf.Keys[0]
 
 			// Recompute free space
-			payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-			used := computeLeafPayloadSize(leaf)
+			payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
+			used := page.ComputeLeafPayloadSize(leaf)
 			leaf.Header.FreeSpace = uint16(payloadCapacity - used)
-			usedLeft := computeLeafPayloadSize(leftSibling)
+			usedLeft := page.ComputeLeafPayloadSize(leftSibling)
 			leftSibling.Header.FreeSpace = uint16(payloadCapacity - usedLeft)
 
 			// Track page modifications for transaction
@@ -710,32 +727,32 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 
 	// Cannot borrow, must merge
 	// Merge with right sibling if possible, otherwise with left
-	if childIndex < len(parent.children)-1 {
+	if childIndex < len(parent.Children)-1 {
 		// Merge with right sibling
-		rightSiblingID := parent.children[childIndex+1]
-		rightSibling := tree.pager.Get(rightSiblingID).(*LeafPage)
+		rightSiblingID := parent.Children[childIndex+1]
+		rightSibling := tree.pager.Get(rightSiblingID).(*page.LeafPage)
 
 		// Merge right into current
-		leaf.keys = append(leaf.keys, rightSibling.keys...)
-		leaf.values = append(leaf.values, rightSibling.values...)
-		leaf.Header.KeyCount = uint16(len(leaf.keys))
+		leaf.Keys = append(leaf.Keys, rightSibling.Keys...)
+		leaf.Values = append(leaf.Values, rightSibling.Values...)
+		leaf.Header.KeyCount = uint16(len(leaf.Keys))
 		leaf.Header.NextPage = rightSibling.Header.NextPage
 
 		// Update next sibling's prev pointer if it exists
 		if leaf.Header.NextPage != 0 {
-			nextPage := tree.pager.Get(leaf.Header.NextPage).(*LeafPage)
+			nextPage := tree.pager.Get(leaf.Header.NextPage).(*page.LeafPage)
 			nextPage.Header.PrevPage = leaf.Header.PageID
 		}
 
 		// Recompute free space
-		payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-		used := computeLeafPayloadSize(leaf)
+		payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
+		used := page.ComputeLeafPayloadSize(leaf)
 		leaf.Header.FreeSpace = uint16(payloadCapacity - used)
 
 		// Remove separator key and right child from parent
-		parent.keys = append(parent.keys[:childIndex], parent.keys[childIndex+1:]...)
-		parent.children = append(parent.children[:childIndex+1], parent.children[childIndex+2:]...)
-		parent.Header.KeyCount = uint16(len(parent.keys))
+		parent.Keys = append(parent.Keys[:childIndex], parent.Keys[childIndex+1:]...)
+		parent.Children = append(parent.Children[:childIndex+1], parent.Children[childIndex+2:]...)
+		parent.Header.KeyCount = uint16(len(parent.Keys))
 
 		// Track page modifications for transaction
 		if tree.txManager != nil {
@@ -751,30 +768,30 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 
 	} else {
 		// Merge with left sibling
-		leftSiblingID := parent.children[childIndex-1]
-		leftSibling := tree.pager.Get(leftSiblingID).(*LeafPage)
+		leftSiblingID := parent.Children[childIndex-1]
+		leftSibling := tree.pager.Get(leftSiblingID).(*page.LeafPage)
 
 		// Merge current into left
-		leftSibling.keys = append(leftSibling.keys, leaf.keys...)
-		leftSibling.values = append(leftSibling.values, leaf.values...)
-		leftSibling.Header.KeyCount = uint16(len(leftSibling.keys))
+		leftSibling.Keys = append(leftSibling.Keys, leaf.Keys...)
+		leftSibling.Values = append(leftSibling.Values, leaf.Values...)
+		leftSibling.Header.KeyCount = uint16(len(leftSibling.Keys))
 		leftSibling.Header.NextPage = leaf.Header.NextPage
 
 		// Update next sibling's prev pointer if it exists
 		if leftSibling.Header.NextPage != 0 {
-			nextPage := tree.pager.Get(leftSibling.Header.NextPage).(*LeafPage)
+			nextPage := tree.pager.Get(leftSibling.Header.NextPage).(*page.LeafPage)
 			nextPage.Header.PrevPage = leftSibling.Header.PageID
 		}
 
 		// Recompute free space
-		payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-		used := computeLeafPayloadSize(leftSibling)
+		payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
+		used := page.ComputeLeafPayloadSize(leftSibling)
 		leftSibling.Header.FreeSpace = uint16(payloadCapacity - used)
 
 		// Remove separator key and current child from parent
-		parent.keys = append(parent.keys[:childIndex-1], parent.keys[childIndex:]...)
-		parent.children = append(parent.children[:childIndex], parent.children[childIndex+1:]...)
-		parent.Header.KeyCount = uint16(len(parent.keys))
+		parent.Keys = append(parent.Keys[:childIndex-1], parent.Keys[childIndex:]...)
+		parent.Children = append(parent.Children[:childIndex], parent.Children[childIndex+1:]...)
+		parent.Header.KeyCount = uint16(len(parent.Keys))
 
 		// Track page modifications for transaction
 		if tree.txManager != nil {
@@ -794,24 +811,24 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 }
 
 // rebalanceInternalAfterDelete handles underflow in internal nodes
-func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []uint64) error {
-	minKeys := (ORDER + 1) / 2 - 1
+func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, path []uint64) error {
+	minKeys := (page.ORDER + 1) / 2 - 1
 
 	// If this is the root
 	if len(path) == 0 {
 		// If root has no keys and one child, make that child the new root
-		if len(node.keys) == 0 && len(node.children) == 1 {
-			tree.meta.RootPage = node.children[0]
+		if len(node.Keys) == 0 && len(node.Children) == 1 {
+			tree.meta.RootPage = node.Children[0]
 			
 			// Update parent pointer of new root
 			newRoot := tree.pager.Get(tree.meta.RootPage)
 			switch r := newRoot.(type) {
-			case *InternalPage:
+			case *page.InternalPage:
 				r.Header.ParentPage = 0
 				if tree.txManager != nil {
 					tree.txManager.TrackPageModification(r.Header.PageID, r)
 				}
-			case *LeafPage:
+			case *page.LeafPage:
 				r.Header.ParentPage = 0
 				if tree.txManager != nil {
 					tree.txManager.TrackPageModification(r.Header.PageID, r)
@@ -828,17 +845,17 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 	}
 
 	// Check if node has enough keys
-	if len(node.keys) >= minKeys {
+	if len(node.Keys) >= minKeys {
 		return nil
 	}
 
 	// Get parent
 	parentID := path[len(path)-1]
-	parent := tree.pager.Get(parentID).(*InternalPage)
+	parent := tree.pager.Get(parentID).(*page.InternalPage)
 
 	// Find the index of this node in parent's children
 	childIndex := -1
-	for i, childID := range parent.children {
+	for i, childID := range parent.Children {
 		if childID == node.Header.PageID {
 			childIndex = i
 			break
@@ -850,34 +867,34 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 	}
 
 	// Try to borrow from right sibling
-	if childIndex < len(parent.children)-1 {
-		rightSiblingID := parent.children[childIndex+1]
-		rightSibling := tree.pager.Get(rightSiblingID).(*InternalPage)
+	if childIndex < len(parent.Children)-1 {
+		rightSiblingID := parent.Children[childIndex+1]
+		rightSibling := tree.pager.Get(rightSiblingID).(*page.InternalPage)
 
-		if len(rightSibling.keys) > minKeys {
+		if len(rightSibling.Keys) > minKeys {
 			// Borrow from right sibling
 			// Pull separator from parent
-			separatorKey := parent.keys[childIndex]
-			node.keys = append(node.keys, separatorKey)
-			node.children = append(node.children, rightSibling.children[0])
-			node.Header.KeyCount = uint16(len(node.keys))
+			separatorKey := parent.Keys[childIndex]
+			node.Keys = append(node.Keys, separatorKey)
+			node.Children = append(node.Children, rightSibling.Children[0])
+			node.Header.KeyCount = uint16(len(node.Keys))
 
 			// Update parent pointer of moved child
-			movedChild := tree.pager.Get(rightSibling.children[0])
+			movedChild := tree.pager.Get(rightSibling.Children[0])
 			switch c := movedChild.(type) {
-			case *InternalPage:
+			case *page.InternalPage:
 				c.Header.ParentPage = node.Header.PageID
-			case *LeafPage:
+			case *page.LeafPage:
 				c.Header.ParentPage = node.Header.PageID
 			}
 
 			// Push first key of right sibling to parent
-			parent.keys[childIndex] = rightSibling.keys[0]
+			parent.Keys[childIndex] = rightSibling.Keys[0]
 
 			// Remove first key and child from right sibling
-			rightSibling.keys = rightSibling.keys[1:]
-			rightSibling.children = rightSibling.children[1:]
-			rightSibling.Header.KeyCount = uint16(len(rightSibling.keys))
+			rightSibling.Keys = rightSibling.Keys[1:]
+			rightSibling.Children = rightSibling.Children[1:]
+			rightSibling.Header.KeyCount = uint16(len(rightSibling.Keys))
 
 			// Track page modifications for transaction
 			if tree.txManager != nil {
@@ -886,9 +903,9 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 				tree.txManager.TrackPageModification(parentID, parent)
 				if movedChild != nil {
 					switch c := movedChild.(type) {
-					case *InternalPage:
+					case *page.InternalPage:
 						tree.txManager.TrackPageModification(c.Header.PageID, c)
-					case *LeafPage:
+					case *page.LeafPage:
 						tree.txManager.TrackPageModification(c.Header.PageID, c)
 					}
 				}
@@ -900,37 +917,37 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 
 	// Try to borrow from left sibling
 	if childIndex > 0 {
-		leftSiblingID := parent.children[childIndex-1]
-		leftSibling := tree.pager.Get(leftSiblingID).(*InternalPage)
+		leftSiblingID := parent.Children[childIndex-1]
+		leftSibling := tree.pager.Get(leftSiblingID).(*page.InternalPage)
 
-		if len(leftSibling.keys) > minKeys {
+		if len(leftSibling.Keys) > minKeys {
 			// Borrow from left sibling
 			// Pull separator from parent
-			separatorKey := parent.keys[childIndex-1]
+			separatorKey := parent.Keys[childIndex-1]
 			
 			// Insert at beginning of current node
-			node.keys = append([]KeyType{separatorKey}, node.keys...)
-			lastChildIdx := len(leftSibling.children) - 1
-			node.children = append([]uint64{leftSibling.children[lastChildIdx]}, node.children...)
-			node.Header.KeyCount = uint16(len(node.keys))
+			node.Keys = append([]KeyType{separatorKey}, node.Keys...)
+			lastChildIdx := len(leftSibling.Children) - 1
+			node.Children = append([]uint64{leftSibling.Children[lastChildIdx]}, node.Children...)
+			node.Header.KeyCount = uint16(len(node.Keys))
 
 			// Update parent pointer of moved child
-			movedChild := tree.pager.Get(leftSibling.children[lastChildIdx])
+			movedChild := tree.pager.Get(leftSibling.Children[lastChildIdx])
 			switch c := movedChild.(type) {
-			case *InternalPage:
+			case *page.InternalPage:
 				c.Header.ParentPage = node.Header.PageID
-			case *LeafPage:
+			case *page.LeafPage:
 				c.Header.ParentPage = node.Header.PageID
 			}
 
 			// Push last key of left sibling to parent
-			lastKeyIdx := len(leftSibling.keys) - 1
-			parent.keys[childIndex-1] = leftSibling.keys[lastKeyIdx]
+			lastKeyIdx := len(leftSibling.Keys) - 1
+			parent.Keys[childIndex-1] = leftSibling.Keys[lastKeyIdx]
 
 			// Remove last key and child from left sibling
-			leftSibling.keys = leftSibling.keys[:lastKeyIdx]
-			leftSibling.children = leftSibling.children[:lastChildIdx]
-			leftSibling.Header.KeyCount = uint16(len(leftSibling.keys))
+			leftSibling.Keys = leftSibling.Keys[:lastKeyIdx]
+			leftSibling.Children = leftSibling.Children[:lastChildIdx]
+			leftSibling.Header.KeyCount = uint16(len(leftSibling.Keys))
 
 			// Track page modifications for transaction
 			if tree.txManager != nil {
@@ -939,9 +956,9 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 				tree.txManager.TrackPageModification(parentID, parent)
 				if movedChild != nil {
 					switch c := movedChild.(type) {
-					case *InternalPage:
+					case *page.InternalPage:
 						tree.txManager.TrackPageModification(c.Header.PageID, c)
-					case *LeafPage:
+					case *page.LeafPage:
 						tree.txManager.TrackPageModification(c.Header.PageID, c)
 					}
 				}
@@ -952,68 +969,68 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 	}
 
 	// Cannot borrow, must merge
-	if childIndex < len(parent.children)-1 {
+	if childIndex < len(parent.Children)-1 {
 		// Merge with right sibling
-		rightSiblingID := parent.children[childIndex+1]
-		rightSibling := tree.pager.Get(rightSiblingID).(*InternalPage)
+		rightSiblingID := parent.Children[childIndex+1]
+		rightSibling := tree.pager.Get(rightSiblingID).(*page.InternalPage)
 
 		// Pull separator from parent
-		separatorKey := parent.keys[childIndex]
-		node.keys = append(node.keys, separatorKey)
-		node.keys = append(node.keys, rightSibling.keys...)
-		node.children = append(node.children, rightSibling.children...)
-		node.Header.KeyCount = uint16(len(node.keys))
+		separatorKey := parent.Keys[childIndex]
+		node.Keys = append(node.Keys, separatorKey)
+		node.Keys = append(node.Keys, rightSibling.Keys...)
+		node.Children = append(node.Children, rightSibling.Children...)
+		node.Header.KeyCount = uint16(len(node.Keys))
 
 		// Update parent pointers of all moved children
-		for _, childID := range rightSibling.children {
+		for _, childID := range rightSibling.Children {
 			child := tree.pager.Get(childID)
 			switch c := child.(type) {
-			case *InternalPage:
+			case *page.InternalPage:
 				c.Header.ParentPage = node.Header.PageID
-			case *LeafPage:
+			case *page.LeafPage:
 				c.Header.ParentPage = node.Header.PageID
 			}
 		}
 
 		// Remove separator key and right child from parent
-		parent.keys = append(parent.keys[:childIndex], parent.keys[childIndex+1:]...)
-		parent.children = append(parent.children[:childIndex+1], parent.children[childIndex+2:]...)
-		parent.Header.KeyCount = uint16(len(parent.keys))
+		parent.Keys = append(parent.Keys[:childIndex], parent.Keys[childIndex+1:]...)
+		parent.Children = append(parent.Children[:childIndex+1], parent.Children[childIndex+2:]...)
+		parent.Header.KeyCount = uint16(len(parent.Keys))
 
 	} else {
 		// Merge with left sibling
-		leftSiblingID := parent.children[childIndex-1]
-		leftSibling := tree.pager.Get(leftSiblingID).(*InternalPage)
+		leftSiblingID := parent.Children[childIndex-1]
+		leftSibling := tree.pager.Get(leftSiblingID).(*page.InternalPage)
 
 		// Pull separator from parent
-		separatorKey := parent.keys[childIndex-1]
-		leftSibling.keys = append(leftSibling.keys, separatorKey)
-		leftSibling.keys = append(leftSibling.keys, node.keys...)
-		leftSibling.children = append(leftSibling.children, node.children...)
-		leftSibling.Header.KeyCount = uint16(len(leftSibling.keys))
+		separatorKey := parent.Keys[childIndex-1]
+		leftSibling.Keys = append(leftSibling.Keys, separatorKey)
+		leftSibling.Keys = append(leftSibling.Keys, node.Keys...)
+		leftSibling.Children = append(leftSibling.Children, node.Children...)
+		leftSibling.Header.KeyCount = uint16(len(leftSibling.Keys))
 
 		// Update parent pointers of all moved children
-		for _, childID := range node.children {
+		for _, childID := range node.Children {
 			child := tree.pager.Get(childID)
 			switch c := child.(type) {
-			case *InternalPage:
+			case *page.InternalPage:
 				c.Header.ParentPage = leftSibling.Header.PageID
-			case *LeafPage:
+			case *page.LeafPage:
 				c.Header.ParentPage = leftSibling.Header.PageID
 			}
 		}
 
 		// Remove separator key and current child from parent
-		parent.keys = append(parent.keys[:childIndex-1], parent.keys[childIndex:]...)
-		parent.children = append(parent.children[:childIndex], parent.children[childIndex+1:]...)
-		parent.Header.KeyCount = uint16(len(parent.keys))
+		parent.Keys = append(parent.Keys[:childIndex-1], parent.Keys[childIndex:]...)
+		parent.Children = append(parent.Children[:childIndex], parent.Children[childIndex+1:]...)
+		parent.Header.KeyCount = uint16(len(parent.Keys))
 
 		// Track page modifications for transaction
 		if tree.txManager != nil {
 			tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling)
 			tree.txManager.TrackPageModification(parentID, parent)
 			// Track all moved children
-			for _, childID := range node.children {
+			for _, childID := range node.Children {
 				child := tree.pager.Get(childID)
 				if child != nil {
 					tree.txManager.TrackPageModification(childID, child)

@@ -1,8 +1,10 @@
-package main
+package page
 
-// Type aliases for composite keys and structured rows
-type KeyType = CompositeKey
-type ValueType = Record
+import "bplustree/internal/storage"
+
+// Type aliases for composite keys and structured rows (exported for convenience)
+type KeyType = storage.CompositeKey
+type ValueType = storage.Record
 
 const (
 	PageTypeMeta     PageType = 0
@@ -18,50 +20,50 @@ type InternalPage struct {
 	Header PageHeader
 
 	// payload (in-memory view)
-	keys     []KeyType
-	children []uint64 // PageID
+	Keys     []KeyType // Exported for tests
+	Children []uint64 // PageID - Exported for tests
 }
 
 type LeafPage struct {
 	Header PageHeader
 
 	// payload (in-memory view)
-	keys   []KeyType
-	values []ValueType
+	Keys   []KeyType   // Exported for tests
+	Values []ValueType // Exported for tests
 }
 
 // -----------------------------
 // Node creation helpers
 // -----------------------------
 
-// newLeafPage constructs an in-memory leaf page with initialized
+// NewLeafPage constructs an in-memory leaf page with initialized
 // internal slices and header metadata. It does not register the
 // page with any pager — callers should use PageManager to allocate
 // and track pages when persistence or shared lookup is required.
-func newLeafPage(pageID uint64) *LeafPage {
+func NewLeafPage(pageID uint64) *LeafPage {
 	return &LeafPage{
 		Header: PageHeader{
 			PageID:   pageID,
 			PageType: PageTypeLeaf,
 			FreeSpace: uint16(DefaultPageSize - PageHeaderSize),
 		},
-		keys:   make([]KeyType, 0, ORDER-1),
-		values: make([]ValueType, 0, ORDER-1),
+		Keys:   make([]KeyType, 0, ORDER-1),
+		Values: make([]ValueType, 0, ORDER-1),
 	}
 }
 
-// newInternalPage constructs an in-memory internal node with
+// NewInternalPage constructs an in-memory internal node with
 // pre-sized slices for keys and child pointers. The child slice
 // capacity is ORDER because an internal node with m children has
 // up to m-1 keys.
-func newInternalPage(pageID uint64) *InternalPage {
+func NewInternalPage(pageID uint64) *InternalPage {
 	return &InternalPage{
 		Header: PageHeader{
 			PageID:   pageID,
 			PageType: PageTypeInternal,
 			FreeSpace: uint16(DefaultPageSize - PageHeaderSize),
 		},
-		keys:     make([]KeyType, 0, ORDER-1),
-		children: make([]uint64, 0, ORDER),
+		Keys:     make([]KeyType, 0, ORDER-1),
+		Children: make([]uint64, 0, ORDER),
 	}
 }

@@ -1,4 +1,4 @@
-package main
+package transaction
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"bplustree/internal/page"
 )
 
 // WALEntryType represents the type of operation in a WAL entry
@@ -46,7 +48,7 @@ func NewWALManager(dbFilename string) (*WALManager, error) {
 	wal := &WALManager{
 		file:     file,
 		nextLSN:  1,
-		pageSize: DefaultPageSize,
+		pageSize: page.DefaultPageSize,
 	}
 
 	// Recover LSN from existing WAL if present
@@ -130,28 +132,28 @@ func (w *WALManager) recoverLSN() error {
 }
 
 // LogPageWrite logs a page write operation to the WAL
-func (w *WALManager) LogPageWrite(pageID uint64, page interface{}, entryType WALEntryType) (uint64, error) {
+func (w *WALManager) LogPageWrite(pageID uint64, pageObj interface{}, entryType WALEntryType) (uint64, error) {
 	lsn := w.nextLSN
 	w.nextLSN++
 
-	// Serialize page
-	buf := &bytes.Buffer{}
-	switch p := page.(type) {
-	case *MetaPage:
-		if err := p.WriteToBuffer(buf); err != nil {
-			return 0, err
+		// Serialize page
+		buf := &bytes.Buffer{}
+		switch p := pageObj.(type) {
+		case *page.MetaPage:
+			if err := p.WriteToBuffer(buf); err != nil {
+				return 0, err
+			}
+		case *page.InternalPage:
+			if err := p.WriteToBuffer(buf); err != nil {
+				return 0, err
+			}
+		case *page.LeafPage:
+			if err := p.WriteToBuffer(buf); err != nil {
+				return 0, err
+			}
+		default:
+			return 0, fmt.Errorf("unsupported page type for WAL: %T", pageObj)
 		}
-	case *InternalPage:
-		if err := p.WriteToBuffer(buf); err != nil {
-			return 0, err
-		}
-	case *LeafPage:
-		if err := p.WriteToBuffer(buf); err != nil {
-			return 0, err
-		}
-	default:
-		return 0, fmt.Errorf("unsupported page type for WAL: %T", page)
-	}
 
 	// Pad to page size
 	padding := make([]byte, w.pageSize-buf.Len())
@@ -243,7 +245,7 @@ func (w *WALManager) Checkpoint() error {
 }
 
 // Recover replays WAL entries to restore database state
-func (w *WALManager) Recover(pm *PageManager) error {
+func (w *WALManager) Recover(pm *page.PageManager) error {
 	_, err := w.file.Seek(0, io.SeekStart)
 	if err != nil {
 		return err
@@ -295,39 +297,39 @@ func (w *WALManager) Recover(pm *PageManager) error {
 
 		// Deserialize and restore page
 		r := bytes.NewReader(pageData)
-		var hdr PageHeader
+		var hdr page.PageHeader
 		if err := hdr.ReadFromBuffer(r); err != nil {
 			return err
 		}
 
-		var page interface{}
+		var pageObj interface{}
 		switch hdr.PageType {
-		case PageTypeMeta:
-			m := &MetaPage{Header: hdr}
+		case page.PageTypeMeta:
+			m := &page.MetaPage{Header: hdr}
 			if err := m.ReadFromBuffer(r); err != nil {
 				return err
 			}
-			page = m
-		case PageTypeInternal:
-			ip := &InternalPage{Header: hdr}
+			pageObj = m
+		case page.PageTypeInternal:
+			ip := &page.InternalPage{Header: hdr}
 			if err := ip.ReadFromBuffer(r); err != nil {
 				return err
 			}
-			page = ip
-		case PageTypeLeaf:
-			lp := &LeafPage{Header: hdr}
+			pageObj = ip
+		case page.PageTypeLeaf:
+			lp := &page.LeafPage{Header: hdr}
 			if err := lp.ReadFromBuffer(r); err != nil {
 				return err
 			}
-			page = lp
+			pageObj = lp
 		default:
 			return fmt.Errorf("unknown page type %d during recovery", hdr.PageType)
 		}
 
 		// Restore page to page manager
-		pm.pages[pageID] = page
+		pm.Pages[pageID] = pageObj
 		// Write to main database file
-		if err := pm.writePageToFile(pageID, page); err != nil {
+		if err := pm.WritePageToFile(pageID, pageObj); err != nil {
 			return fmt.Errorf("failed to restore page %d: %w", pageID, err)
 		}
 	}

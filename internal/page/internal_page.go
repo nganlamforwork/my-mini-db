@@ -1,15 +1,17 @@
-package main
+package page
 
 import (
 	"bytes"
 	"encoding/binary"
+
+	"bplustree/internal/storage"
 )
 
 // -----------------------------
 // Insert into internal node
 // -----------------------------
 
-// insertIntoInternal inserts `key` and the associated right-side child
+// InsertIntoInternal inserts `key` and the associated right-side child
 // pointer into an internal node `page` at the correct position.
 //
 // Routing semantics (precise): for an internal node with keys K[0..n-1]
@@ -18,29 +20,29 @@ import (
 // a child for `searchKey` we find the last key <= searchKey (pos) and
 // follow child C[pos+1]; if no key <= searchKey, follow C[0]. This
 // matches the binary search used in `findLeaf`.
-func insertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
+func InsertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
 	i := 0
 	// find the position for the new key (first key >= new key)
-	for i < len(page.keys) && key.Compare(page.keys[i]) > 0 {
+	for i < len(page.Keys) && key.Compare(page.Keys[i]) > 0 {
 		i++
 	}
 
 	// insert key into keys slice and shift elements to the right
-	page.keys = append(page.keys, CompositeKey{})
-	copy(page.keys[i+1:], page.keys[i:])
-	page.keys[i] = key
+	page.Keys = append(page.Keys, storage.CompositeKey{})
+	copy(page.Keys[i+1:], page.Keys[i:])
+	page.Keys[i] = key
 
 	// insert the child pointer after the key (right-side child)
-	page.children = append(page.children, 0)
-	copy(page.children[i+2:], page.children[i+1:])
-	page.children[i+1] = childPageID
+	page.Children = append(page.Children, 0)
+	copy(page.Children[i+2:], page.Children[i+1:])
+	page.Children[i+1] = childPageID
 
 	// update metadata
-	page.Header.KeyCount = uint16(len(page.keys))
+	page.Header.KeyCount = uint16(len(page.Keys))
 }
 
-// splitInternal splits a full internal node and returns new node and the middle key
-// splitInternal splits a full internal node `page` into two nodes:
+// SplitInternal splits a full internal node and returns new node and the middle key
+// SplitInternal splits a full internal node `page` into two nodes:
 // the original `page` becomes the left node and `newPage` becomes the
 // right node. The middle key is returned to be promoted to the parent.
 //
@@ -48,25 +50,25 @@ func insertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
 // - The middle key (mid) is removed from the node and propagated upward.
 // - Keys to the right of mid and corresponding child pointers move to `newPage`.
 // - Parent pointers for moved children should be updated by caller if tracked.
-func splitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) KeyType {
-	mid := len(page.keys) / 2 // middle index
-	midKey := page.keys[mid]  // key to push up
+func SplitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) KeyType {
+	mid := len(page.Keys) / 2 // middle index
+	midKey := page.Keys[mid]  // key to push up
 
 	// move half of keys and children to new node
-	newPage.keys = append(newPage.keys, page.keys[mid+1:]...)
-	newPage.children = append(newPage.children, page.children[mid+1:]...)
+	newPage.Keys = append(newPage.Keys, page.Keys[mid+1:]...)
+	newPage.Children = append(newPage.Children, page.Children[mid+1:]...)
 
 	// truncate original node to keep left half
-	page.keys = page.keys[:mid]
-	page.children = page.children[:mid+1]
+	page.Keys = page.Keys[:mid]
+	page.Children = page.Children[:mid+1]
 
 	// update metadata: ensure KeyCount reflects actual slice lengths
-	page.Header.KeyCount = uint16(len(page.keys))
-	newPage.Header.KeyCount = uint16(len(newPage.keys))
+	page.Header.KeyCount = uint16(len(page.Keys))
+	newPage.Header.KeyCount = uint16(len(newPage.Keys))
 
 	// update parent pointer of children moved to newPage
 	// for each child page id now owned by newPage, set its ParentPage
-	for _, childID := range newPage.children {
+	for _, childID := range newPage.Children {
 		if pm == nil {
 			continue
 		}
@@ -84,8 +86,8 @@ func splitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) K
 
 	// recompute FreeSpace for internal pages (sum of key sizes + children*8 payload)
 	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-	usedLeft := len(page.children) * 8
-	for _, k := range page.keys {
+	usedLeft := len(page.Children) * 8
+	for _, k := range page.Keys {
 		usedLeft += k.Size()
 	}
 	if usedLeft > payloadCapacity {
@@ -93,8 +95,8 @@ func splitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) K
 	} else {
 		page.Header.FreeSpace = uint16(payloadCapacity - usedLeft)
 	}
-	usedRight := len(newPage.children) * 8
-	for _, k := range newPage.keys {
+	usedRight := len(newPage.Children) * 8
+	for _, k := range newPage.Keys {
 		usedRight += k.Size()
 	}
 	if usedRight > payloadCapacity {
@@ -116,14 +118,14 @@ func (p *InternalPage) WriteToBuffer(buf *bytes.Buffer) error {
 	}
 
 	// write keys
-	for _, k := range p.keys {
+	for _, k := range p.Keys {
 		if err := k.WriteTo(buf); err != nil {
 			return err
 		}
 	}
 
 	// write child page ids
-	for _, c := range p.children {
+	for _, c := range p.Children {
 		if err := binary.Write(buf, binary.BigEndian, c); err != nil {
 			return err
 		}
@@ -139,24 +141,24 @@ func (p *InternalPage) ReadFromBuffer(buf *bytes.Reader) error {
 
 	// prepare slices
 	keyCount := int(p.Header.KeyCount)
-	p.keys = make([]KeyType, 0, keyCount)
+	p.Keys = make([]KeyType, 0, keyCount)
 	for i := 0; i < keyCount; i++ {
-		k, err := ReadCompositeKeyFrom(buf)
+		k, err := storage.ReadCompositeKeyFrom(buf)
 		if err != nil {
 			return err
 		}
-		p.keys = append(p.keys, k)
+		p.Keys = append(p.Keys, k)
 	}
 
 	// children: keyCount+1 entries
 	childCount := keyCount + 1
-	p.children = make([]uint64, 0, childCount)
+	p.Children = make([]uint64, 0, childCount)
 	for i := 0; i < childCount; i++ {
 		var c uint64
 		if err := binary.Read(buf, binary.BigEndian, &c); err != nil {
 			return err
 		}
-		p.children = append(p.children, c)
+		p.Children = append(p.Children, c)
 	}
 
 	return nil

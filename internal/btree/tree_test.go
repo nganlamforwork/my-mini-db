@@ -1,4 +1,4 @@
-package main
+package btree
 
 import (
 	"fmt"
@@ -8,32 +8,35 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"bplustree/internal/page"
+	"bplustree/internal/storage"
 )
 
 // Helper functions for tests
 
 // K creates a simple single-column integer composite key
-func K(val int64) KeyType {
-	return NewCompositeKey(NewInt(val))
+func K(val int64) storage.CompositeKey {
+	return storage.NewCompositeKey(storage.NewInt(val))
 }
 
 // V creates a simple single-column string row value
-func V(val string) ValueType {
-	return NewRecord(NewString(val))
+func V(val string) storage.Record {
+	return storage.NewRecord(storage.NewString(val))
 }
 
 // KI extracts the int64 value from a single-column composite key
-func KI(key KeyType) int64 {
+func KI(key storage.CompositeKey) int64 {
 	return key.Values[0].Value.(int64)
 }
 
 // VS extracts the string value from a single-column row value
-func VS(val ValueType) string {
+func VS(val storage.Record) string {
 	return val.Columns[0].Value.(string)
 }
 
 // formatKeys formats a slice of keys for display
-func formatKeys(keys []KeyType) string {
+func formatKeys(keys []storage.CompositeKey) string {
 	if len(keys) == 0 {
 		return "[]"
 	}
@@ -89,7 +92,7 @@ func (ctx *TestContext) AddExpected(desc string) {
 }
 
 // InsertKey is a helper that inserts a key and automatically adds to description
-func (ctx *TestContext) InsertKey(tree *BPlusTree, key KeyType, value ValueType) error {
+func (ctx *TestContext) InsertKey(tree *BPlusTree, key storage.CompositeKey, value storage.Record) error {
 	err := tree.Insert(key, value)
 	if err != nil {
 		ctx.AddOperation(fmt.Sprintf("Failed to insert key %d with value \"%s\": %v", KI(key), VS(value), err))
@@ -100,7 +103,7 @@ func (ctx *TestContext) InsertKey(tree *BPlusTree, key KeyType, value ValueType)
 }
 
 // InsertKeys is a helper that inserts multiple keys and adds summary to description
-func (ctx *TestContext) InsertKeys(tree *BPlusTree, keys []KeyType, values []ValueType) error {
+func (ctx *TestContext) InsertKeys(tree *BPlusTree, keys []storage.CompositeKey, values []storage.Record) error {
 	if len(keys) != len(values) {
 		return fmt.Errorf("keys and values length mismatch")
 	}
@@ -122,7 +125,7 @@ func (ctx *TestContext) InsertKeys(tree *BPlusTree, keys []KeyType, values []Val
 }
 
 // DeleteKey is a helper that deletes a key and automatically adds to description
-func (ctx *TestContext) DeleteKey(tree *BPlusTree, key KeyType) error {
+func (ctx *TestContext) DeleteKey(tree *BPlusTree, key storage.CompositeKey) error {
 	err := tree.Delete(key)
 	if err != nil {
 		ctx.AddOperation(fmt.Sprintf("Failed to delete key %d: %v", KI(key), err))
@@ -133,7 +136,7 @@ func (ctx *TestContext) DeleteKey(tree *BPlusTree, key KeyType) error {
 }
 
 // SearchKey is a helper that searches for a key and adds result to description
-func (ctx *TestContext) SearchKey(tree *BPlusTree, key KeyType, expectedValue ValueType) error {
+func (ctx *TestContext) SearchKey(tree *BPlusTree, key storage.CompositeKey, expectedValue storage.Record) error {
 	val, err := tree.Search(key)
 	if err != nil {
 		ctx.AddOperation(fmt.Sprintf("Search for key %d failed: %v", KI(key), err))
@@ -207,15 +210,19 @@ func TestInsertWithoutSplit(t *testing.T) {
 	ctx.SetSummary("Tests basic insertion without triggering a page split. All keys should fit in a single leaf page.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 	out := ctx.GetImageFile()
 	defer func() {
@@ -225,8 +232,8 @@ func TestInsertWithoutSplit(t *testing.T) {
 	}()
 
 	// Insert keys without causing a split
-	keys := []KeyType{K(10), K(20), K(30)}
-	values := []ValueType{V("A"), V("B"), V("C")}
+	keys := []storage.CompositeKey{K(10), K(20), K(30)}
+	values := []storage.Record{V("A"), V("B"), V("C")}
 
 	ctx.InsertKeys(tree, keys, values)
 	ctx.AddOperation("All keys fit in a single leaf page (no split occurred)")
@@ -240,18 +247,18 @@ func TestInsertWithoutSplit(t *testing.T) {
 
 	// Verify the root is a leaf and contains the inserted key/value pairs
 	root := tree.pager.Get(tree.meta.RootPage)
-	lp, ok := root.(*LeafPage)
+	lp, ok := root.(*page.LeafPage)
 	if !ok {
 		t.Fatalf("expected root to be a leaf page, got %T", root)
 	}
 
-	if int(lp.Header.KeyCount) != len(lp.keys) {
-		t.Fatalf("header KeyCount mismatch: header=%d, actual=%d", lp.Header.KeyCount, len(lp.keys))
+	if int(lp.Header.KeyCount) != len(lp.Keys) {
+		t.Fatalf("header KeyCount mismatch: header=%d, actual=%d", lp.Header.KeyCount, len(lp.Keys))
 	}
 
 	for i, key := range keys {
-		if lp.keys[i].Compare(key) != 0 || VS(lp.values[i]) != VS(values[i]) {
-			t.Fatalf("Expected key-value pair (%v, %v), got (%v, %v)", key, values[i], lp.keys[i], lp.values[i])
+		if lp.Keys[i].Compare(key) != 0 || VS(lp.Values[i]) != VS(values[i]) {
+			t.Fatalf("Expected key-value pair (%v, %v), got (%v, %v)", key, values[i], lp.Keys[i], lp.Values[i])
 		}
 	}
 
@@ -268,15 +275,19 @@ func TestInsertWithSplit(t *testing.T) {
 	ctx.SetSummary("Tests insertion that triggers a leaf page split. The tree should grow from height 1 to height 2.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 	out := ctx.GetImageFile()
 	defer func() {
@@ -286,8 +297,8 @@ func TestInsertWithSplit(t *testing.T) {
 	}()
 
 	// Insert keys to cause a split
-	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
-	values := []ValueType{V("A"), V("B"), V("C"), V("D"), V("E")}
+	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
+	values := []storage.Record{V("A"), V("B"), V("C"), V("D"), V("E")}
 
 	ctx.InsertKeys(tree, keys, values)
 	ctx.AddOperation("After inserting 5 keys, the leaf page overflowed and split into two leaf pages")
@@ -308,17 +319,17 @@ func TestInsertWithSplit(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected root to be internal page, got %T", tree.pager.Get(tree.meta.RootPage))
 	}
-	if len(rootP.keys) != 1 {
-		t.Fatalf("Expected root to have 1 key, got %d", len(rootP.keys))
+	if len(rootP.Keys) != 1 {
+		t.Fatalf("Expected root to have 1 key, got %d", len(rootP.Keys))
 	}
 
 	// children should exist and reference leaves
-	if len(rootP.children) != 2 {
-		t.Fatalf("expected root to have 2 children, got %d", len(rootP.children))
+	if len(rootP.Children) != 2 {
+		t.Fatalf("expected root to have 2 children, got %d", len(rootP.Children))
 	}
 
-	leftChild := tree.pager.Get(rootP.children[0]).(*LeafPage)
-	rightChild := tree.pager.Get(rootP.children[1]).(*LeafPage)
+	leftChild := tree.pager.Get(rootP.Children[0]).(*page.LeafPage)
+	rightChild := tree.pager.Get(rootP.Children[1]).(*page.LeafPage)
 
 	// Parent pointers must point back to root
 	if leftChild.Header.ParentPage != rootP.Header.PageID {
@@ -328,31 +339,31 @@ func TestInsertWithSplit(t *testing.T) {
 		t.Fatalf("right child parent mismatch: expected %d, got %d", rootP.Header.PageID, rightChild.Header.ParentPage)
 	}
 
-	if int(leftChild.Header.KeyCount) != len(leftChild.keys) || int(rightChild.Header.KeyCount) != len(rightChild.keys) {
+	if int(leftChild.Header.KeyCount) != len(leftChild.Keys) || int(rightChild.Header.KeyCount) != len(rightChild.Keys) {
 		t.Fatalf("header KeyCount inconsistent with actual keys: left header=%d actual=%d; right header=%d actual=%d",
-			leftChild.Header.KeyCount, len(leftChild.keys), rightChild.Header.KeyCount, len(rightChild.keys))
+			leftChild.Header.KeyCount, len(leftChild.Keys), rightChild.Header.KeyCount, len(rightChild.Keys))
 	}
 
 	// Verify expected key distribution
-	if len(leftChild.keys) != 2 || len(rightChild.keys) != 3 {
-		t.Fatalf("Leaf nodes not split correctly: left has %d keys, right has %d keys", len(leftChild.keys), len(rightChild.keys))
+	if len(leftChild.Keys) != 2 || len(rightChild.Keys) != 3 {
+		t.Fatalf("Leaf nodes not split correctly: left has %d keys, right has %d keys", len(leftChild.Keys), len(rightChild.Keys))
 	}
 
 	// Check content order
-	for i, key := range []KeyType{K(10), K(20)} {
-		if KI(leftChild.keys[i]) != KI(key) {
-			t.Fatalf("Expected key %v in left child, got %v", key, leftChild.keys[i])
+	for i, key := range []storage.CompositeKey{K(10), K(20)} {
+		if KI(leftChild.Keys[i]) != KI(key) {
+			t.Fatalf("Expected key %v in left child, got %v", key, leftChild.Keys[i])
 		}
 	}
-	for i, key := range []KeyType{K(30), K(40), K(50)} {
-		if KI(rightChild.keys[i]) != KI(key) {
-			t.Fatalf("Expected key %v in right child, got %v", key, rightChild.keys[i])
+	for i, key := range []storage.CompositeKey{K(30), K(40), K(50)} {
+		if KI(rightChild.Keys[i]) != KI(key) {
+			t.Fatalf("Expected key %v in right child, got %v", key, rightChild.Keys[i])
 		}
 	}
 
 	// FreeSpace should be non-negative and consistent with payload computation
-	payloadCap := int(DefaultPageSize - PageHeaderSize)
-	if computeLeafPayloadSize(leftChild) > payloadCap || computeLeafPayloadSize(rightChild) > payloadCap {
+	payloadCap := int(page.DefaultPageSize - page.PageHeaderSize)
+	if page.ComputeLeafPayloadSize(leftChild) > payloadCap || page.ComputeLeafPayloadSize(rightChild) > payloadCap {
 		t.Fatalf("one of the children exceeds payload capacity after split")
 	}
 }
@@ -371,15 +382,19 @@ func TestInsertManyComplex(t *testing.T) {
 	ctx.SetSummary("Tests insertion of 20 keys in shuffled order, triggering multiple splits at both leaf and internal node levels.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 	out := ctx.GetImageFile()
 	defer func() {
@@ -390,7 +405,7 @@ func TestInsertManyComplex(t *testing.T) {
 
 	// 20 keys (more than 15) inserted in a shuffled order to
 	// provoke splits at multiple levels.
-	keys := []KeyType{K(5), K(1), K(3), K(2), K(8), K(7), K(9), K(10), K(15), K(12), K(11), K(14), K(13), K(6), K(4), K(16), K(17), K(18), K(19), K(20)}
+	keys := []storage.CompositeKey{K(5), K(1), K(3), K(2), K(8), K(7), K(9), K(10), K(15), K(12), K(11), K(14), K(13), K(6), K(4), K(16), K(17), K(18), K(19), K(20)}
 	ctx.AddOperation(fmt.Sprintf("Inserting 20 keys in shuffled order: %s", formatKeys(keys)))
 
 	for _, k := range keys {
@@ -422,10 +437,10 @@ func TestInsertManyComplex(t *testing.T) {
 			goto Traversal
 		case *InternalPage:
 			// follow the left-most child
-			if len(v.children) == 0 {
+			if len(v.Children) == 0 {
 				t.Fatalf("internal node %d has no children", v.Header.PageID)
 			}
-			curID = v.children[0]
+			curID = v.Children[0]
 		default:
 			t.Fatalf("unknown page type for page %d", curID)
 		}
@@ -433,15 +448,15 @@ func TestInsertManyComplex(t *testing.T) {
 
 Traversal:
 	// Traverse leaf linked list and collect keys
-	collected := make([]KeyType, 0, len(keys))
+	collected := make([]storage.CompositeKey, 0, len(keys))
 	leaf := leftmost
 	for leaf != nil {
 		// validate header keycount matches slice length
-		if int(leaf.Header.KeyCount) != len(leaf.keys) {
-			t.Fatalf("leaf header KeyCount mismatch for page %d: header=%d actual=%d", leaf.Header.PageID, leaf.Header.KeyCount, len(leaf.keys))
+		if int(leaf.Header.KeyCount) != len(leaf.Keys) {
+			t.Fatalf("leaf header KeyCount mismatch for page %d: header=%d actual=%d", leaf.Header.PageID, leaf.Header.KeyCount, len(leaf.Keys))
 		}
 
-		collected = append(collected, leaf.keys...)
+		collected = append(collected, leaf.Keys...)
 		if leaf.Header.NextPage == 0 {
 			break
 		}
@@ -449,7 +464,7 @@ Traversal:
 		if np == nil {
 			break
 		}
-		leaf = np.(*LeafPage)
+		leaf = np.(*page.LeafPage)
 	}
 
 	if len(collected) != len(keys) {
@@ -457,7 +472,7 @@ Traversal:
 	}
 
 	// Keys should be in ascending order in leaf scan
-	expected := make([]KeyType, len(keys))
+	expected := make([]storage.CompositeKey, len(keys))
 	copy(expected, keys)
 	sort.Slice(expected, func(i, j int) bool { return expected[i].Compare(expected[j]) < 0 })
 
@@ -470,7 +485,7 @@ Traversal:
 
 // collectLeafValues returns all values stored in the leaf-level pages
 // by scanning from the left-most leaf using `NextPage` links.
-func collectLeafValues(tree *BPlusTree) []ValueType {
+func collectLeafValues(tree *BPlusTree) []storage.Record {
 	// find left-most leaf
 	curID := tree.meta.RootPage
 	var leftmost *LeafPage
@@ -480,24 +495,24 @@ func collectLeafValues(tree *BPlusTree) []ValueType {
 			return nil
 		}
 		switch v := p.(type) {
-		case *LeafPage:
+		case *page.LeafPage:
 			leftmost = v
 			goto Start
-		case *InternalPage:
-			if len(v.children) == 0 {
+		case *page.InternalPage:
+			if len(v.Children) == 0 {
 				return nil
 			}
-			curID = v.children[0]
+			curID = v.Children[0]
 		default:
 			return nil
 		}
 	}
 
 Start:
-	res := make([]ValueType, 0)
+	res := make([]storage.Record, 0)
 	leaf := leftmost
 	for leaf != nil {
-		res = append(res, leaf.values...)
+		res = append(res, leaf.Values...)
 		if leaf.Header.NextPage == 0 {
 			break
 		}
@@ -505,7 +520,7 @@ Start:
 		if np == nil {
 			break
 		}
-		leaf = np.(*LeafPage)
+		leaf = np.(*page.LeafPage)
 	}
 	return res
 }
@@ -525,8 +540,8 @@ func dumpTreeStructure(tree *BPlusTree, path string) error {
 		return fmt.Errorf("cannot determine database file path")
 	}
 
-	// Find the Python script (should be in the same directory as the test)
-	scriptPath := filepath.Join(filepath.Dir(dbFile), "..", "visualize_tree.py")
+	// Find the Python script (should be in scripts directory)
+	scriptPath := filepath.Join(filepath.Dir(dbFile), "..", "..", "scripts", "visualize_tree.py")
 	scriptPath, err := filepath.Abs(scriptPath)
 	if err != nil {
 		return fmt.Errorf("failed to resolve script path: %w", err)
@@ -534,8 +549,8 @@ func dumpTreeStructure(tree *BPlusTree, path string) error {
 
 	// Check if Python script exists
 	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		// Fallback: try current directory
-		scriptPath = "visualize_tree.py"
+		// Fallback: try scripts directory
+		scriptPath = filepath.Join("scripts", "visualize_tree.py")
 		if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 			// If script doesn't exist, fall back to simple text dump
 			return dumpTreeStructureSimple(tree, path)
@@ -564,7 +579,7 @@ func dumpTreeStructureSimple(tree *BPlusTree, path string) error {
 	defer f.Close()
 
 	// ensure pages are loaded into the pager cache
-	max := tree.pager.next - 1
+	max := tree.pager.Next - 1
 	ids := make([]uint64, 0, max)
 	for i := uint64(1); i <= max; i++ {
 		p := tree.pager.Get(i)
@@ -579,15 +594,15 @@ func dumpTreeStructureSimple(tree *BPlusTree, path string) error {
 	for _, id := range ids {
 		p := tree.pager.Get(id)
 		switch v := p.(type) {
-		case *MetaPage:
+		case *page.MetaPage:
 			fmt.Fprintf(f, "Page %d META root=%d pageSize=%d order=%d version=%d\n",
 				id, v.RootPage, v.PageSize, v.Order, v.Version)
-		case *InternalPage:
+		case *page.InternalPage:
 			fmt.Fprintf(f, "Page %d INTERNAL parent=%d keyCount=%d free=%d keys=%v children=%v\n",
-				id, v.Header.ParentPage, v.Header.KeyCount, v.Header.FreeSpace, v.keys, v.children)
-		case *LeafPage:
+				id, v.Header.ParentPage, v.Header.KeyCount, v.Header.FreeSpace, v.Keys, v.Children)
+		case *page.LeafPage:
 			fmt.Fprintf(f, "Page %d LEAF parent=%d prev=%d next=%d keyCount=%d free=%d keys=%v values=%v\n",
-				id, v.Header.ParentPage, v.Header.PrevPage, v.Header.NextPage, v.Header.KeyCount, v.Header.FreeSpace, v.keys, v.values)
+				id, v.Header.ParentPage, v.Header.PrevPage, v.Header.NextPage, v.Header.KeyCount, v.Header.FreeSpace, v.Keys, v.Values)
 		default:
 			fmt.Fprintf(f, "Page %d UNKNOWN type=%T\n", id, p)
 		}
@@ -609,7 +624,7 @@ func TestLoadFromDisk(t *testing.T) {
 	
 	// Phase 1: Create and populate tree
 	ctx.AddOperation("Phase 1: Creating a new database and inserting data")
-	pm1 := NewPageManagerWithFile(dbfile, true)
+	pm1 := page.NewPageManagerWithFile(dbfile, true)
 	m1, err := pm1.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
@@ -620,14 +635,14 @@ func TestLoadFromDisk(t *testing.T) {
 	}
 
 	// Insert test data
-	keys := []KeyType{K(10), K(20), K(30), K(40), K(50), K(60), K(70), K(80)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50), K(60), K(70), K(80)}
 	ctx.InsertKeys(tree1, keys, []ValueType{V("v10"), V("v20"), V("v30"), V("v40"), V("v50"), V("v60"), V("v70"), V("v80")})
 	ctx.AddOperation("Closed the database file (all data persisted to disk)")
 	pm1.Close()
 
 	// Phase 2: Load tree from disk
 	ctx.AddOperation("Phase 2: Reopening the database file and loading tree structure from disk")
-	pm2 := NewPageManagerWithFile(dbfile, false) // Open existing file
+	pm2 := page.NewPageManagerWithFile(dbfile, false) // Open existing file
 	defer pm2.Close()
 	
 	tree2 := &BPlusTree{
@@ -676,16 +691,20 @@ func TestSearch(t *testing.T) {
 	dbDir := "testdata"
 	_ = os.MkdirAll(dbDir, 0755)
 	dbfile := filepath.Join(dbDir, t.Name()+".db")
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert test data
@@ -741,20 +760,24 @@ func TestDeleteSimple(t *testing.T) {
 	ctx.SetSummary("Tests basic deletion: removes one key from a small tree and verifies it's gone while other keys remain.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert keys
-	keys := []KeyType{K(10), K(20), K(30)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v10"), V("v20"), V("v30")})
 
 	// Delete one key
@@ -772,7 +795,7 @@ func TestDeleteSimple(t *testing.T) {
 
 	// Verify other keys still exist
 	ctx.AddOperation("Verified remaining keys (10, 30) are still present")
-	for _, k := range []KeyType{K(10), K(30)} {
+	for _, k := range []storage.CompositeKey{K(10), K(30)} {
 		if _, err := tree.Search(k); err != nil {
 			t.Errorf("key %d not found after delete: %v", KI(k), err)
 		} else {
@@ -799,20 +822,24 @@ func TestDeleteWithBorrowFromRight(t *testing.T) {
 	ctx.SetSummary("Tests deletion that triggers borrowing from right sibling when a leaf page becomes underflowed.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert keys to create structure: [10,20] | [30,40,50]
-	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v10"), V("v20"), V("v30"), V("v40"), V("v50")})
 	ctx.AddOperation("Tree structure: left leaf [10,20], right leaf [30,40,50]")
 
@@ -822,7 +849,7 @@ func TestDeleteWithBorrowFromRight(t *testing.T) {
 
 	// Verify structure: should have borrowed 30 from right
 	ctx.AddOperation("Verifying borrow operation: key 30 should move from right to left leaf")
-	remaining := []KeyType{K(20), K(30), K(40), K(50)}
+	remaining := []storage.CompositeKey{K(20), K(30), K(40), K(50)}
 	for _, k := range remaining {
 		if _, err := tree.Search(k); err != nil {
 			t.Errorf("key %d not found: %v", KI(k), err)
@@ -858,20 +885,24 @@ func TestDeleteWithBorrowFromLeft(t *testing.T) {
 	ctx.SetSummary("Tests deletion that triggers borrowing from left sibling when a leaf page becomes underflowed.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert keys to create structure: [10,20,30] | [40,50]
-	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v10"), V("v20"), V("v30"), V("v40"), V("v50")})
 	ctx.AddOperation("Tree structure: left leaf [10,20,30], right leaf [40,50]")
 
@@ -881,7 +912,7 @@ func TestDeleteWithBorrowFromLeft(t *testing.T) {
 
 	// Verify remaining keys
 	ctx.AddOperation("Verifying borrow operation: key 30 should move from left to right leaf")
-	remaining := []KeyType{K(10), K(20), K(30), K(40)}
+	remaining := []storage.CompositeKey{K(10), K(20), K(30), K(40)}
 	for _, k := range remaining {
 		if _, err := tree.Search(k); err != nil {
 			t.Errorf("key %d not found: %v", KI(k), err)
@@ -917,25 +948,29 @@ func TestDeleteWithMerge(t *testing.T) {
 	ctx.SetSummary("Tests deletion that triggers node merging when both siblings are at minimum capacity and cannot borrow.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert keys to create structure that will require merge
-	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v10"), V("v20"), V("v30"), V("v40"), V("v50")})
 	ctx.AddOperation("Initial structure: left leaf [10,20], right leaf [30,40,50]")
 
 	// Delete keys to trigger merge
-	toDelete := []KeyType{K(50), K(40)}
+	toDelete := []storage.CompositeKey{K(50), K(40)}
 	ctx.AddOperation("Deleting keys 50 and 40 from right leaf (will cause underflow and merge)")
 	for _, k := range toDelete {
 		ctx.DeleteKey(tree, k)
@@ -943,7 +978,7 @@ func TestDeleteWithMerge(t *testing.T) {
 
 	// Verify remaining keys
 	ctx.AddOperation("Verifying merge: right leaf should merge into left leaf")
-	remaining := []KeyType{K(10), K(20), K(30)}
+	remaining := []storage.CompositeKey{K(10), K(20), K(30)}
 	for _, k := range remaining {
 		if _, err := tree.Search(k); err != nil {
 			t.Errorf("key %d not found: %v", KI(k), err)
@@ -982,25 +1017,29 @@ func TestDeleteComplex(t *testing.T) {
 	ctx.SetSummary("Tests complex deletion scenario: deletes 6 keys from a 16-key tree in random order, triggering multiple rebalancing operations.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert many keys
-	keys := []KeyType{K(5), K(10), K(15), K(20), K(25), K(30), K(35), K(40), K(45), K(50), K(55), K(60), K(65), K(70), K(75), K(80)}
+	keys := []storage.CompositeKey{K(5), K(10), K(15), K(20), K(25), K(30), K(35), K(40), K(45), K(50), K(55), K(60), K(65), K(70), K(75), K(80)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v5"), V("v10"), V("v15"), V("v20"), V("v25"), V("v30"), V("v35"), V("v40"), V("v45"), V("v50"), V("v55"), V("v60"), V("v65"), V("v70"), V("v75"), V("v80")})
 	ctx.AddOperation("Tree now contains 16 keys, likely spanning multiple pages")
 
 	// Delete several keys in various patterns
-	toDelete := []KeyType{K(15), K(45), K(65), K(25), K(75), K(5)}
+	toDelete := []storage.CompositeKey{K(15), K(45), K(65), K(25), K(75), K(5)}
 	ctx.AddOperation(fmt.Sprintf("Deleting 6 keys in order: %s", formatKeys(toDelete)))
 	for _, k := range toDelete {
 		ctx.DeleteKey(tree, k)
@@ -1036,7 +1075,7 @@ func TestDeleteComplex(t *testing.T) {
 	}
 
 	// Verify keys are still in order
-	collected := make([]KeyType, 0)
+	collected := make([]storage.CompositeKey, 0)
 	curID := tree.meta.RootPage
 	var leftmost *LeafPage
 	for {
@@ -1049,17 +1088,17 @@ func TestDeleteComplex(t *testing.T) {
 			leftmost = v
 			goto Traverse
 		case *InternalPage:
-			if len(v.children) == 0 {
+			if len(v.Children) == 0 {
 				break
 			}
-			curID = v.children[0]
+			curID = v.Children[0]
 		}
 	}
 
 Traverse:
 	leaf := leftmost
 	for leaf != nil {
-		collected = append(collected, leaf.keys...)
+		collected = append(collected, leaf.Keys...)
 		if leaf.Header.NextPage == 0 {
 			break
 		}
@@ -1095,20 +1134,24 @@ func TestDeleteAll(t *testing.T) {
 	ctx.SetSummary("Tests edge case: deletes all keys from the tree, verifying the tree becomes empty and handles this correctly.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert keys
-	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v10"), V("v20"), V("v30"), V("v40"), V("v50")})
 
 	// Delete all keys
@@ -1123,9 +1166,9 @@ func TestDeleteAll(t *testing.T) {
 		// If root still exists, check it's actually empty
 		root := tree.pager.Get(tree.meta.RootPage)
 		if leaf, ok := root.(*LeafPage); ok {
-			if len(leaf.keys) != 0 {
-				t.Errorf("root leaf should be empty, has %d keys", len(leaf.keys))
-				ctx.AddOperation(fmt.Sprintf("  - ERROR: Root still has %d keys", len(leaf.keys)))
+			if len(leaf.Keys) != 0 {
+				t.Errorf("root leaf should be empty, has %d keys", len(leaf.Keys))
+				ctx.AddOperation(fmt.Sprintf("  - ERROR: Root still has %d keys", len(leaf.Keys)))
 			} else {
 				ctx.AddOperation("  - Root page exists but is empty (correct)")
 			}
@@ -1157,20 +1200,24 @@ func TestRangeQuerySimple(t *testing.T) {
 	ctx.SetSummary("Tests range query: retrieves all keys and values within a specified range [30, 60].")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert test data
-	keys := []KeyType{K(10), K(20), K(30), K(40), K(50), K(60), K(70), K(80), K(90)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50), K(60), K(70), K(80), K(90)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v10"), V("v20"), V("v30"), V("v40"), V("v50"), V("v60"), V("v70"), V("v80"), V("v90")})
 
 	// Test range query [30, 60]
@@ -1181,7 +1228,7 @@ func TestRangeQuerySimple(t *testing.T) {
 	}
 	ctx.AddOperation(fmt.Sprintf("Range query returned %d results", len(resultKeys)))
 
-	expectedKeys := []KeyType{K(30), K(40), K(50), K(60)}
+	expectedKeys := []storage.CompositeKey{K(30), K(40), K(50), K(60)}
 	if len(resultKeys) != len(expectedKeys) {
 		t.Fatalf("expected %d keys, got %d", len(expectedKeys), len(resultKeys))
 	}
@@ -1217,20 +1264,24 @@ func TestRangeQueryEdgeCases(t *testing.T) {
 	ctx.SetSummary("Tests edge cases for range queries: empty ranges, single key ranges, full ranges, out-of-bounds ranges, and invalid ranges.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert test data
-	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v10"), V("v20"), V("v30"), V("v40"), V("v50")})
 
 	// Test empty range (no keys in range)
@@ -1324,16 +1375,20 @@ func TestRangeQueryAcrossPages(t *testing.T) {
 	ctx.SetSummary("Tests range query that spans multiple leaf pages, verifying the leaf chain traversal works correctly.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert enough data to span multiple leaf pages
@@ -1397,20 +1452,24 @@ func TestUpdateSimple(t *testing.T) {
 	ctx.SetSummary("Tests basic update operation: modifies the value of an existing key and verifies the change.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert test data
-	keys := []KeyType{K(10), K(20), K(30), K(40), K(50)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v10"), V("v20"), V("v30"), V("v40"), V("v50")})
 
 	// Update a value
@@ -1435,7 +1494,7 @@ func TestUpdateSimple(t *testing.T) {
 
 	// Verify other keys unchanged
 	ctx.AddOperation("Verifying other keys remain unchanged")
-	for _, k := range []KeyType{K(10), K(20), K(40), K(50)} {
+	for _, k := range []storage.CompositeKey{K(10), K(20), K(40), K(50)} {
 		val, err := tree.Search(k)
 		if err != nil {
 			t.Errorf("key %d not found: %v", KI(k), err)
@@ -1467,16 +1526,20 @@ func TestUpdateNonExistentKey(t *testing.T) {
 	ctx.SetSummary("Tests error handling: attempting to update a non-existent key should return an error.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert test data
@@ -1511,20 +1574,24 @@ func TestUpdateWithLargeValue(t *testing.T) {
 	ctx.SetSummary("Tests update with a value too large to fit in the current page, which should trigger delete+insert rebalancing.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert keys with small values
-	keys := []KeyType{K(10), K(20), K(30)}
+	keys := []storage.CompositeKey{K(10), K(20), K(30)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v10"), V("v20"), V("v30")})
 
 	// Update with a much larger value (should trigger delete + insert)
@@ -1579,20 +1646,24 @@ func TestUpdateMultiple(t *testing.T) {
 	ctx.SetSummary("Tests updating multiple keys in sequence, verifying each update succeeds and other keys remain unchanged.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := NewPageManagerWithFile(dbfile, true)
+	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	
 	m, err := pm.ReadMeta()
 	if err != nil {
 		t.Fatalf("failed to read meta: %v", err)
 	}
-	tree := &BPlusTree{
-		pager: pm,
-		meta:  m,
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	m, _ = pm.ReadMeta()
+	if m != nil {
+		tree.meta = m
 	}
 
 	// Insert test data
-	keys := []KeyType{K(5), K(10), K(15), K(20), K(25), K(30), K(35), K(40)}
+	keys := []storage.CompositeKey{K(5), K(10), K(15), K(20), K(25), K(30), K(35), K(40)}
 	ctx.InsertKeys(tree, keys, []ValueType{V("v5"), V("v10"), V("v15"), V("v20"), V("v25"), V("v30"), V("v35"), V("v40")})
 
 	// Update multiple keys
@@ -1627,7 +1698,7 @@ func TestUpdateMultiple(t *testing.T) {
 
 	// Verify non-updated keys unchanged
 	ctx.AddOperation("Verifying non-updated keys remain unchanged:")
-	for _, k := range []KeyType{K(5), K(15), K(20), K(30), K(35)} {
+	for _, k := range []storage.CompositeKey{K(5), K(15), K(20), K(30), K(35)} {
 		val, err := tree.Search(k)
 		if err != nil {
 			t.Errorf("key %d not found: %v", KI(k), err)

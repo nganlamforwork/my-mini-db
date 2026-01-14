@@ -37,11 +37,11 @@ A file-backed B+Tree database implementation in Go with full CRUD operations, tr
 
 ## Documentation
 
-- **[IMPLEMENTATION.md](IMPLEMENTATION.md)**: Complete implementation details, algorithms, and architecture
-- **[TESTING.md](TESTING.md)**: Comprehensive test suite documentation and test infrastructure
-- **[CHANGELOG.md](CHANGELOG.md)**: Development history and version evolution
+- **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**: Complete implementation details, algorithms, and architecture
+- **[docs/TESTING.md](docs/TESTING.md)**: Comprehensive test suite documentation and test infrastructure
+- **[docs/CHANGELOG.md](docs/CHANGELOG.md)**: Development history and version evolution
 
-For full technical details, see [IMPLEMENTATION.md](IMPLEMENTATION.md).
+For full technical details, see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
 
 ---
 
@@ -49,21 +49,35 @@ For full technical details, see [IMPLEMENTATION.md](IMPLEMENTATION.md).
 
 ```
 MiniDB/
-├── tree.go              # Core B+Tree implementation
-├── page_manager.go      # Page allocation and caching
-├── wal.go              # Write-Ahead Logging
-├── transaction.go      # Transaction management
-├── types.go            # CompositeKey and Record types
-├── node.go             # Node type definitions
-├── leaf_page.go        # Leaf page implementation
-├── internal_page.go    # Internal page implementation
-├── page_header.go      # Page header structure
-├── meta_page.go        # Metadata page
-├── tree_test.go        # Comprehensive test suite
-├── visualize_tree.py   # Tree visualization script
-├── IMPLEMENTATION.md   # Implementation documentation
-├── TESTING.md          # Testing documentation
-├── CHANGELOG.md        # Version history
+├── cmd/
+│   └── minidb/         # Main application entry point
+│       ├── main.go
+│       └── example_types.go
+├── internal/
+│   ├── btree/          # B+Tree implementation
+│   │   ├── tree.go
+│   │   └── tree_test.go
+│   ├── page/           # Page management
+│   │   ├── page_header.go
+│   │   ├── meta_page.go
+│   │   ├── leaf_page.go
+│   │   ├── internal_page.go
+│   │   ├── node.go
+│   │   └── page_manager.go
+│   ├── storage/        # Storage types
+│   │   └── types.go
+│   └── transaction/    # Transaction & WAL
+│       ├── transaction.go
+│       └── wal.go
+├── docs/               # Documentation
+│   ├── IMPLEMENTATION.md
+│   ├── TESTING.md
+│   └── CHANGELOG.md
+├── scripts/            # Utility scripts
+│   └── visualize_tree.py
+├── testdata/           # Test artifacts
+│   └── [test directories]
+├── go.mod
 └── README.md           # This file
 ```
 
@@ -71,7 +85,7 @@ MiniDB/
 
 ## Features
 
-> **Note:** For complete feature documentation, see [IMPLEMENTATION.md](IMPLEMENTATION.md)
+> **Note:** For complete feature documentation, see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
 
 ### Core Operations
 
@@ -114,15 +128,19 @@ package main
 
 import (
     "fmt"
+
+    "bplustree/internal/btree"
+    "bplustree/internal/page"
+    "bplustree/internal/storage"
 )
 
 func main() {
     // Create page manager
-    pager := NewPageManagerWithFile("mydb.db", true)
+    pager := page.NewPageManagerWithFile("mydb.db", true)
     defer pager.Close()
 
     // Create B+Tree with transaction support
-    tree, err := NewBPlusTree(pager)
+    tree, err := btree.NewBPlusTree(pager)
     if err != nil {
         panic(err)
     }
@@ -132,8 +150,8 @@ func main() {
     tree.Begin()
 
     // Insert data
-    key := NewCompositeKey(NewInt(10))
-    value := NewRecord(NewString("Hello"), NewInt(42))
+    key := storage.NewCompositeKey(storage.NewInt(10))
+    value := storage.NewRecord(storage.NewString("Hello"), storage.NewInt(42))
     tree.Insert(key, value)
 
     // Commit transaction
@@ -154,7 +172,7 @@ func main() {
 Run the comprehensive test suite:
 
 ```bash
-go test -v
+go test -v ./internal/btree/...
 ```
 
 Tests generate:
@@ -163,7 +181,7 @@ Tests generate:
 - Visual tree diagrams (`.png`)
 - Test documentation (`description.txt`)
 
-See [TESTING.md](TESTING.md) for detailed test documentation.
+See [docs/TESTING.md](docs/TESTING.md) for detailed test documentation.
 
 ---
 
