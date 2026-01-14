@@ -1,13 +1,87 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type BPlusTree struct {
-	meta  *MetaPage
-	pager *PageManager
+	meta      *MetaPage
+	pager     *PageManager
+	txManager *TransactionManager
+	wal       *WALManager
 }
 
 const MAX_KEYS = ORDER - 1
+
+// NewBPlusTree creates a new B+Tree with WAL and transaction support
+func NewBPlusTree(pager *PageManager) (*BPlusTree, error) {
+	// Initialize WAL
+	dbFilename := pager.GetFileName()
+	if dbFilename == "" {
+		dbFilename = "minidb.db"
+	}
+	wal, err := NewWALManager(dbFilename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create WAL: %w", err)
+	}
+
+	// Initialize transaction manager
+	txManager := NewTransactionManager(wal)
+
+	tree := &BPlusTree{
+		pager:     pager,
+		txManager: txManager,
+		wal:       wal,
+	}
+
+	// Try to recover from WAL if needed
+	if err := wal.Recover(pager); err != nil {
+		// If recovery fails, continue anyway (might be first run)
+		// In production, you'd want better error handling
+	}
+
+	// Load meta page
+	meta, err := pager.ReadMeta()
+	if err == nil {
+		tree.meta = meta
+	}
+
+	return tree, nil
+}
+
+// Begin starts a new transaction
+func (tree *BPlusTree) Begin() error {
+	_, err := tree.txManager.Begin(tree)
+	return err
+}
+
+// Commit commits the current transaction
+func (tree *BPlusTree) Commit() error {
+	return tree.txManager.Commit()
+}
+
+// Rollback rolls back the current transaction
+func (tree *BPlusTree) Rollback() error {
+	return tree.txManager.Rollback()
+}
+
+// Checkpoint creates a checkpoint in the WAL
+func (tree *BPlusTree) Checkpoint() error {
+	return tree.txManager.Checkpoint()
+}
+
+// Close closes the WAL and page manager
+func (tree *BPlusTree) Close() error {
+	if tree.wal != nil {
+		if err := tree.wal.Close(); err != nil {
+			return err
+		}
+	}
+	if tree.pager != nil {
+		return tree.pager.Close()
+	}
+	return nil
+}
 
 // -----------------------------
 // Finding the correct leaf
@@ -112,6 +186,13 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		leaf.values = append(leaf.values, value)
 		leaf.Header.KeyCount = 1
 		tree.meta.RootPage = leaf.Header.PageID
+		
+		// Track page modifications for transaction
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+			tree.txManager.TrackPageModification(1, tree.meta)
+		}
+		
 		// persist meta
 		if err := tree.pager.WriteMeta(tree.meta); err != nil {
 			return err
@@ -137,6 +218,11 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		return err
 	}
 
+	// Track page modification for transaction
+	if tree.txManager != nil {
+		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+	}
+
 	// If the leaf does not overflow (by key count or payload), we're done
 	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
 	if len(leaf.keys) <= MAX_KEYS {
@@ -149,6 +235,12 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	var pushKey KeyType
 	newLeaf := tree.pager.NewLeaf()
 	pushKey = splitLeaf(leaf, newLeaf)
+
+	// Track page modifications for transaction
+	if tree.txManager != nil {
+		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+		tree.txManager.TrackPageModification(newLeaf.Header.PageID, newLeaf)
+	}
 
 	var childPageID uint64 = newLeaf.Header.PageID
 
@@ -165,6 +257,11 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		// Insert the separator key and pointer into parent
 		insertIntoInternal(parent, pushKey, childPageID)
 
+		// Track parent modification
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(parentID, parent)
+		}
+
 		// If parent didn't overflow, split propagation stops
 		if len(parent.keys) < ORDER {
 			return nil
@@ -173,6 +270,12 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		// split internal
 		newInternal := tree.pager.NewInternal()
 		pushKey = splitInternal(parent, newInternal, tree.pager)
+		
+		// Track new internal page
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(newInternal.Header.PageID, newInternal)
+		}
+		
 		childPageID = newInternal.Header.PageID
 	}
 
@@ -199,6 +302,13 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	}
 
 	newRoot.Header.KeyCount = 1
+	
+	// Track new root and meta modifications
+	if tree.txManager != nil {
+		tree.txManager.TrackPageModification(newRoot.Header.PageID, newRoot)
+		tree.txManager.TrackPageModification(1, tree.meta)
+	}
+	
 	// update meta root and persist
 	tree.meta.RootPage = newRoot.Header.PageID
 	if err := tree.pager.WriteMeta(tree.meta); err != nil {
@@ -404,6 +514,11 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 			leaf.Header.FreeSpace = uint16(payloadCapacity - used)
 		}
 		
+		// Track page modification for transaction
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+		}
+		
 		return nil
 	}
 
@@ -469,11 +584,19 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	used := computeLeafPayloadSize(leaf)
 	leaf.Header.FreeSpace = uint16(payloadCapacity - used)
 
+	// Track page modification for transaction
+	if tree.txManager != nil {
+		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+	}
+
 	// If this is the root and it's a leaf, we're done
 	if len(path) == 0 {
 		// If root is now empty, reset tree
 		if len(leaf.keys) == 0 {
 			tree.meta.RootPage = 0
+			if tree.txManager != nil {
+				tree.txManager.TrackPageModification(1, tree.meta)
+			}
 			return tree.pager.WriteMeta(tree.meta)
 		}
 		return nil
@@ -535,6 +658,13 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 			usedRight := computeLeafPayloadSize(rightSibling)
 			rightSibling.Header.FreeSpace = uint16(payloadCapacity - usedRight)
 
+			// Track page modifications for transaction
+			if tree.txManager != nil {
+				tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+				tree.txManager.TrackPageModification(rightSibling.Header.PageID, rightSibling)
+				tree.txManager.TrackPageModification(parentID, parent)
+			}
+
 			return nil
 		}
 	}
@@ -566,6 +696,13 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 			leaf.Header.FreeSpace = uint16(payloadCapacity - used)
 			usedLeft := computeLeafPayloadSize(leftSibling)
 			leftSibling.Header.FreeSpace = uint16(payloadCapacity - usedLeft)
+
+			// Track page modifications for transaction
+			if tree.txManager != nil {
+				tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+				tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling)
+				tree.txManager.TrackPageModification(parentID, parent)
+			}
 
 			return nil
 		}
@@ -600,6 +737,18 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 		parent.children = append(parent.children[:childIndex+1], parent.children[childIndex+2:]...)
 		parent.Header.KeyCount = uint16(len(parent.keys))
 
+		// Track page modifications for transaction
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+			if leaf.Header.NextPage != 0 {
+				nextPage := tree.pager.Get(leaf.Header.NextPage)
+				if nextPage != nil {
+					tree.txManager.TrackPageModification(leaf.Header.NextPage, nextPage)
+				}
+			}
+			tree.txManager.TrackPageModification(parentID, parent)
+		}
+
 	} else {
 		// Merge with left sibling
 		leftSiblingID := parent.children[childIndex-1]
@@ -626,6 +775,18 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *LeafPage, path []uint64) error
 		parent.keys = append(parent.keys[:childIndex-1], parent.keys[childIndex:]...)
 		parent.children = append(parent.children[:childIndex], parent.children[childIndex+1:]...)
 		parent.Header.KeyCount = uint16(len(parent.keys))
+
+		// Track page modifications for transaction
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling)
+			if leftSibling.Header.NextPage != 0 {
+				nextPage := tree.pager.Get(leftSibling.Header.NextPage)
+				if nextPage != nil {
+					tree.txManager.TrackPageModification(leftSibling.Header.NextPage, nextPage)
+				}
+			}
+			tree.txManager.TrackPageModification(parentID, parent)
+		}
 	}
 
 	// Propagate underflow to parent if necessary
@@ -647,8 +808,18 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 			switch r := newRoot.(type) {
 			case *InternalPage:
 				r.Header.ParentPage = 0
+				if tree.txManager != nil {
+					tree.txManager.TrackPageModification(r.Header.PageID, r)
+				}
 			case *LeafPage:
 				r.Header.ParentPage = 0
+				if tree.txManager != nil {
+					tree.txManager.TrackPageModification(r.Header.PageID, r)
+				}
+			}
+			
+			if tree.txManager != nil {
+				tree.txManager.TrackPageModification(1, tree.meta)
 			}
 			
 			return tree.pager.WriteMeta(tree.meta)
@@ -708,6 +879,21 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 			rightSibling.children = rightSibling.children[1:]
 			rightSibling.Header.KeyCount = uint16(len(rightSibling.keys))
 
+			// Track page modifications for transaction
+			if tree.txManager != nil {
+				tree.txManager.TrackPageModification(node.Header.PageID, node)
+				tree.txManager.TrackPageModification(rightSibling.Header.PageID, rightSibling)
+				tree.txManager.TrackPageModification(parentID, parent)
+				if movedChild != nil {
+					switch c := movedChild.(type) {
+					case *InternalPage:
+						tree.txManager.TrackPageModification(c.Header.PageID, c)
+					case *LeafPage:
+						tree.txManager.TrackPageModification(c.Header.PageID, c)
+					}
+				}
+			}
+
 			return nil
 		}
 	}
@@ -745,6 +931,21 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 			leftSibling.keys = leftSibling.keys[:lastKeyIdx]
 			leftSibling.children = leftSibling.children[:lastChildIdx]
 			leftSibling.Header.KeyCount = uint16(len(leftSibling.keys))
+
+			// Track page modifications for transaction
+			if tree.txManager != nil {
+				tree.txManager.TrackPageModification(node.Header.PageID, node)
+				tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling)
+				tree.txManager.TrackPageModification(parentID, parent)
+				if movedChild != nil {
+					switch c := movedChild.(type) {
+					case *InternalPage:
+						tree.txManager.TrackPageModification(c.Header.PageID, c)
+					case *LeafPage:
+						tree.txManager.TrackPageModification(c.Header.PageID, c)
+					}
+				}
+			}
 
 			return nil
 		}
@@ -806,6 +1007,19 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *InternalPage, path []u
 		parent.keys = append(parent.keys[:childIndex-1], parent.keys[childIndex:]...)
 		parent.children = append(parent.children[:childIndex], parent.children[childIndex+1:]...)
 		parent.Header.KeyCount = uint16(len(parent.keys))
+
+		// Track page modifications for transaction
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling)
+			tree.txManager.TrackPageModification(parentID, parent)
+			// Track all moved children
+			for _, childID := range node.children {
+				child := tree.pager.Get(childID)
+				if child != nil {
+					tree.txManager.TrackPageModification(childID, child)
+				}
+			}
+		}
 	}
 
 	// Propagate underflow to parent's parent if necessary

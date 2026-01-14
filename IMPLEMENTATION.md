@@ -1,7 +1,10 @@
 # MiniDB: B+Tree Database Implementation
 
 **Date:** January 13, 2026  
-**Author:** Lam Le Vu Ngan
+**Author:** Lam Le Vu Ngan  
+**Current Version:** 4.0 (Transaction Support)
+
+> 📝 **See [CHANGELOG.md](CHANGELOG.md) for complete development history and version evolution**
 
 ## Overview
 
@@ -10,7 +13,7 @@ This document presents the architecture and implementation of a file-backed B+Tr
 **Key Highlights:**
 
 - Complete B+Tree with disk persistence and in-memory caching
-- **Composite keys and structured row values** - Support for multi-column primary keys and full database rows
+- Composite keys and structured row values - Support for multi-column primary keys and full database rows
 - Proper delete implementation with borrow and merge operations
 - Range query support leveraging leaf-level linked list
 - Page-based storage architecture with 4KB pages
@@ -232,10 +235,10 @@ Offset 8192:  Page 3 (Internal/Leaf)  - 4096 bytes
 
 ### Data Model Features
 
-✅ **Composite Keys** - Multi-column primary keys with lexicographic ordering  
-✅ **Structured Records** - Full database rows with typed columns (Int, String, Float, Bool)  
-✅ **Variable-Length Serialization** - Efficient binary encoding for keys and values  
-✅ **Type-Safe Comparisons** - Compare method for proper key ordering
+- **Composite Keys** - Multi-column primary keys with lexicographic ordering
+- **Structured Records** - Full database rows with typed columns (Int, String, Float, Bool)
+- **Variable-Length Serialization** - Efficient binary encoding for keys and values
+- **Type-Safe Comparisons** - Compare method for proper key ordering
 
 ### 1. **Load from Disk Functionality**
 
@@ -494,65 +497,236 @@ function FlushAll():
 
 ---
 
-### 7. **Comprehensive Test Suite**
+### 7. **Comprehensive Test Suite with Visualization**
+
+**Test Infrastructure:**
+
+The test suite includes a sophisticated test context system that automatically generates:
+
+- **Binary database files** (`.db`) - Persistent storage for verification
+- **Visual tree diagrams** (`.db.png`) - Graphical representation using Python matplotlib
+- **Human-readable descriptions** (`description.txt`) - Test steps, operations, and expected results
+
+**Visualization Features:**
+
+- Automatic tree structure visualization using `visualize_tree.py`
+- Visual representation of internal nodes, leaf nodes, and their relationships
+- Fallback to text-based dumps if Python/matplotlib unavailable
+- Each test generates a PNG image showing the B+Tree structure after operations
 
 **Tests Implemented:**
 
-| Test                            | Purpose                   | Scenario                                                        |
-| ------------------------------- | ------------------------- | --------------------------------------------------------------- |
-| `TestLoadFromDisk`              | Verify persistence        | Insert data, close DB, reopen, verify all data loads correctly  |
-| `TestSearch`                    | Verify retrieval          | Insert multiple keys, search for existing and non-existing keys |
-| **Range Query Tests**           |                           |                                                                 |
-| `TestRangeQuerySimple`          | Basic range scan          | Query subset [30, 60] from larger dataset                       |
-| `TestRangeQueryEdgeCases`       | Boundary conditions       | Empty range, single key, full range, out-of-bounds              |
-| `TestRangeQueryAcrossPages`     | Multi-page traversal      | Range spanning multiple leaf nodes via linked list              |
-| **Update Tests**                |                           |                                                                 |
-| `TestUpdateSimple`              | In-place update           | Modify value without triggering rebalancing                     |
-| `TestUpdateNonExistentKey`      | Error handling            | Verify error when updating non-existent key                     |
-| `TestUpdateWithLargeValue`      | Fallback to delete+insert | Update with value exceeding page capacity                       |
-| `TestUpdateMultiple`            | Batch modifications       | Multiple updates maintaining tree consistency                   |
-| **Delete Tests**                |                           |                                                                 |
-| `TestDeleteSimple`              | Basic delete              | Delete from leaf without triggering rebalancing                 |
-| `TestSearch`                    | Verify retrieval          | Insert multiple keys, search for existing and non-existing keys |
-| `TestDeleteSimple`              | Basic delete              | Delete from leaf without triggering rebalancing                 |
-| `TestDeleteWithBorrowFromRight` | Borrow operation          | Create underflow, verify borrow from right sibling              |
-| `TestDeleteWithBorrowFromLeft`  | Borrow operation          | Create underflow, verify borrow from left sibling               |
-| `TestDeleteWithMerge`           | Merge operation           | Delete enough keys to require node merge                        |
-| `TestDeleteComplex`             | Multiple deletes          | Delete 6 keys from 16-key tree in random order                  |
-| `TestDeleteAll`                 | Edge case                 | Delete all keys, verify tree becomes empty                      |
+| Test Category    | Test Name                       | Purpose                   | Scenario                                                 |
+| ---------------- | ------------------------------- | ------------------------- | -------------------------------------------------------- |
+| **Insert Tests** | `TestInsertWithoutSplit`        | Basic insertion           | Insert 3 keys without triggering page split              |
+|                  | `TestInsertWithSplit`           | Leaf split                | Insert 5 keys triggering leaf split and root creation    |
+|                  | `TestInsertManyComplex`         | Complex splits            | Insert many keys causing multiple splits and tree growth |
+| **Persistence**  | `TestLoadFromDisk`              | Disk persistence          | Insert data, close DB, reopen, verify data intact        |
+| **Search Tests** | `TestSearch`                    | Point queries             | Search for existing and non-existing keys                |
+| **Range Query**  | `TestRangeQuerySimple`          | Basic range scan          | Query subset [30, 60] from larger dataset                |
+|                  | `TestRangeQueryEdgeCases`       | Boundary conditions       | Empty range, single key, full range, out-of-bounds       |
+|                  | `TestRangeQueryAcrossPages`     | Multi-page traversal      | Range spanning multiple leaf nodes via linked list       |
+| **Update Tests** | `TestUpdateSimple`              | In-place update           | Modify value without triggering rebalancing              |
+|                  | `TestUpdateNonExistentKey`      | Error handling            | Verify error when updating non-existent key              |
+|                  | `TestUpdateWithLargeValue`      | Fallback to delete+insert | Update with value exceeding page capacity                |
+|                  | `TestUpdateMultiple`            | Batch modifications       | Multiple updates maintaining tree consistency            |
+| **Delete Tests** | `TestDeleteSimple`              | Basic delete              | Delete from leaf without triggering rebalancing          |
+|                  | `TestDeleteWithBorrowFromRight` | Borrow from right         | Create underflow, borrow key from right sibling          |
+|                  | `TestDeleteWithBorrowFromLeft`  | Borrow from left          | Create underflow, borrow key from left sibling           |
+|                  | `TestDeleteWithMerge`           | Merge operation           | Delete keys requiring node merge with sibling            |
+|                  | `TestDeleteComplex`             | Multiple deletes          | Delete 6 keys from 16-key tree in specific order         |
+|                  | `TestDeleteAll`                 | Edge case                 | Delete all keys, verify tree becomes empty (root = 0)    |
 
-**Test Output:** Both binary `.db` files (for real storage) and `.txt` files (human-readable dumps) are generated for verification.
+**Test Context System:**
 
-**Test Coverage:** 18 tests covering all major operations and edge cases across 1,200+ lines of test code.
+Each test uses a `TestContext` helper that:
+
+- Creates isolated test directory under `testdata/<TestName>/`
+- Tracks all operations with natural language descriptions
+- Records expected results for documentation
+- Automatically generates description files
+- Invokes visualization script for PNG generation
+
+**Test Output Structure:**
+
+```
+testdata/
+  TestInsertWithSplit/
+    TestInsertWithSplit.db         # Binary database file
+    TestInsertWithSplit.db.png     # Visual tree diagram
+    description.txt                # Test documentation
+  TestDeleteWithMerge/
+    TestDeleteWithMerge.db
+    TestDeleteWithMerge.db.png
+    description.txt
+  ...
+```
+
+**Test Coverage:**
+
+- **18 comprehensive tests** covering all major operations
+- **1,650+ lines** of test code with helper functions
+- **Automatic documentation** generation for each test
+- **Visual verification** through tree structure diagrams
 
 ---
 
-## Checklist: Completed Features ✓
+### 8. **Transaction Support with Write-Ahead Logging (WAL)**
+
+**Overview:** Full ACID transaction support with Write-Ahead Logging for durability and crash recovery. This feature enables multi-operation atomicity, consistency, and durability guarantees—critical for production database systems.
+
+**Real-World Context:**
+
+Transaction support with WAL is a fundamental feature in production databases. This implementation follows the same principles used by:
+
+- **PostgreSQL**: Uses WAL (called "pg_xlog" or "pg_wal") for durability. All changes are logged before being written to data pages, enabling point-in-time recovery and crash recovery.
+- **SQLite**: Implements WAL mode where changes are written to a separate WAL file before being checkpointed to the main database file.
+- **MySQL InnoDB**: Uses a redo log (similar to WAL) to ensure durability and enable crash recovery.
+- **Foundation**: Based on the **ARIES (Algorithms for Recovery and Isolation Exploiting Semantics)** recovery algorithm principles, which is the industry standard for database recovery.
+
+**Key Concepts:**
+
+1. **Write-Ahead Logging (WAL)**: All modifications are logged to a separate WAL file before being written to the main database file. This ensures that if a crash occurs, all committed transactions can be recovered by replaying the WAL.
+2. **Transaction Atomicity**: Operations within a transaction either all succeed (commit) or all fail (rollback), maintaining database consistency.
+3. **Durability**: Once a transaction is committed, its changes are guaranteed to persist even if the system crashes immediately after.
+
+**Algorithm Steps:**
+
+1. **Begin Transaction**: Start tracking all page modifications
+2. **Track Changes**: During transaction, all modified pages are tracked with their original state
+3. **Commit**:
+   - Write all modified pages to WAL first (Write-Ahead Logging)
+   - Update page LSNs (Log Sequence Numbers)
+   - Flush modified pages to main database file
+   - Clear transaction state
+4. **Rollback**:
+   - Restore original page states from tracked copies
+   - Remove newly created pages
+   - Clear transaction state
+5. **Recovery**: On database open, replay WAL entries to restore committed changes
+
+**Pseudo Code:**
+
+```
+function Begin():
+    tx = new Transaction()
+    tx.modifiedPages = {}
+    tx.originalPages = {}
+    activeTx = tx
+
+function Commit():
+    // Write-Ahead: Log all changes to WAL first
+    for each (pageID, page) in modifiedPages:
+        lsn = wal.LogPageWrite(pageID, page)
+        page.Header.LSN = lsn
+
+    // Then write to main database
+    for each (pageID, page) in modifiedPages:
+        writePageToFile(pageID, page)
+
+    activeTx = null
+
+function Rollback():
+    // Restore original pages
+    for each (pageID, originalPage) in originalPages:
+        pages[pageID] = originalPage
+
+    // Remove new pages
+    for each pageID in modifiedPages:
+        if pageID not in originalPages:
+            delete pages[pageID]
+
+    activeTx = null
+
+function Recover():
+    // Replay WAL entries
+    for each entry in WAL:
+        restorePage(entry.PageID, entry.PageData)
+        writePageToFile(entry.PageID, page)
+```
+
+**Implementation Details:**
+
+- **WAL File Format**: Each entry contains LSN, entry type, page ID, and serialized page data
+- **LSN (Log Sequence Number)**: Monotonically increasing sequence number for ordering log entries
+- **Checkpointing**: Periodically truncate WAL after ensuring all changes are flushed to main database
+- **Page Tracking**: Original page states are saved for rollback capability
+- **Transaction States**: Active, Committed, RolledBack
+
+**Usage Example:**
+
+```go
+tree, _ := NewBPlusTree(pager)
+
+// Start transaction
+tree.Begin()
+
+// Perform multiple operations
+tree.Insert(key1, value1)
+tree.Update(key2, newValue2)
+tree.Delete(key3)
+
+// Either commit or rollback
+if success {
+    tree.Commit()  // All changes persist
+} else {
+    tree.Rollback()  // All changes discarded
+}
+
+// Create checkpoint to truncate WAL
+tree.Checkpoint()
+```
+
+**Benefits:**
+
+- **Atomicity**: Multi-operation transactions either fully succeed or fully fail
+- **Durability**: Committed changes survive crashes via WAL replay
+- **Consistency**: Database remains in valid state even after rollback
+- **Recovery**: Automatic recovery from crashes by replaying WAL
+
+**Limitations:**
+
+- Single transaction at a time (no nested transactions)
+- No concurrent transaction support (requires locking for multi-threaded use)
+- WAL file grows until checkpoint (in production, would use WAL rotation)
+
+---
+
+## Checklist: Completed Features
 
 ### Core Operations
 
-- [x] **Insert** - O(log n) insertion with automatic node splitting
-- [x] **Search** - O(log n) point query with error handling
-- [x] **Delete** - Full B+Tree deletion with rebalancing (borrow/merge)
-- [x] **Range Query** - O(log n + k) range scan using leaf chain
-- [x] **Update** - Atomic value modification with smart in-place optimization
+- **Insert** - O(log n) insertion with automatic node splitting
+- **Search** - O(log n) point query with error handling
+- **Delete** - Full B+Tree deletion with rebalancing (borrow/merge)
+- **Range Query** - O(log n + k) range scan using leaf chain
+- **Update** - Atomic value modification with smart in-place optimization
+
+### Transaction & Durability
+
+- **Transaction Support** - Begin/Commit/Rollback for multi-operation atomicity
+- **Write-Ahead Logging (WAL)** - All changes logged before database writes
+- **Crash Recovery** - Automatic recovery by replaying WAL entries
+- **LSN Tracking** - Log Sequence Numbers for ordering and recovery
+- **Checkpointing** - WAL truncation after ensuring durability
 
 ### Tree Maintenance
 
-- [x] **Load from Disk** - Full tree reconstruction from persistent storage
-- [x] **Node Splitting** - Leaf and internal node split propagation
-- [x] **Borrow from Siblings** - Redistribution to avoid merges (left & right)
-- [x] **Merge Nodes** - Combine underflowed nodes (leaf & internal)
-- [x] **Root Special Cases** - Handle empty root and height reduction
-- [x] **Page Persistence** - FlushAll() ensures all changes written to disk
-- [x] **Parent Pointer Updates** - Maintain correct parent-child relationships
-- [x] **Sibling Link Maintenance** - Update prev/next pointers during operations
+- **Load from Disk** - Full tree reconstruction from persistent storage
+- **Node Splitting** - Leaf and internal node split propagation
+- **Borrow from Siblings** - Redistribution to avoid merges (left & right)
+- **Merge Nodes** - Combine underflowed nodes (leaf & internal)
+- **Root Special Cases** - Handle empty root and height reduction
+- **Page Persistence** - FlushAll() ensures all changes written to disk
+- **Parent Pointer Updates** - Maintain correct parent-child relationships
+- **Sibling Link Maintenance** - Update prev/next pointers during operations
 
 ### Test Coverage
 
-- [x] **18 Comprehensive Tests** - All operations tested with edge cases
-- [x] **Human-Readable Dumps** - `.txt` files for manual verification
-- [x] **Binary Storage Validation** - Proper serialization/deserialization
+- **18 Comprehensive Tests** - All operations tested with edge cases
+- **Visual Tree Diagrams** - PNG images showing B+Tree structure
+- **Automatic Documentation** - Generated description files for each test
+- **Binary Storage Validation** - Proper serialization/deserialization
 
 ---
 
@@ -560,13 +734,7 @@ function FlushAll():
 
 ### High Priority
 
-1. **Transaction Support**
-
-   - Add begin/commit/rollback for multi-operation consistency
-   - Implement write-ahead logging (WAL)
-   - Critical for production use
-
-2. **Concurrent Access**
+1. **Concurrent Access**
    - Add page-level locking or latching
    - Support multiple readers, single writer
    - Consider B-link tree variant for better concurrency
@@ -619,8 +787,8 @@ function FlushAll():
 - **Error Handling:** Some panics could be graceful errors
 - **Memory Usage:** All pages loaded into memory; consider LRU cache eviction
 - **File Format Version:** Add version handling for schema migration
-- **Crash Recovery:** Need WAL for durability guarantees
 - **Defragmentation:** Deleted pages not reused; implement free page list
+- **WAL Rotation:** Currently truncates WAL on checkpoint; production systems use WAL segment rotation
 
 ---
 
@@ -640,8 +808,9 @@ function FlushAll():
 - ORDER = 4 (max 3 keys per node, 4 children)
 - Page size = 4KB
 - No buffer pool (all pages in memory)
-- Single-threaded access only
+- Single-threaded access only (transaction support added, but no concurrent transactions)
 - Variable-length keys/values based on data content
+- WAL enabled for durability and crash recovery
 
 ---
 
@@ -651,25 +820,37 @@ function FlushAll():
 
 - `types.go` - **NEW** CompositeKey and Record types with serialization (400+ lines)
 - `node.go` - Updated type aliases to use CompositeKey and Record
-- `tree.go` - Updated all operations to use Compare method (800+ lines total)
+- `tree.go` - Updated all operations to use Compare method, added transaction support (900+ lines total)
 - `leaf_page.go` - Updated serialization for CompositeKey/Record
 - `internal_page.go` - Updated serialization for CompositeKey
 - `page_manager.go` - Added FlushAll() for persistence
+- `wal.go` - **NEW** Write-Ahead Logging implementation (300+ lines)
+- `transaction.go` - **NEW** Transaction management with begin/commit/rollback (200+ lines)
 
 **Tests:**
 
-- `tree_test.go` - Updated all 18 tests for new type system (1,200+ lines)
+- `tree_test.go` - 18 comprehensive tests with visualization (1,650+ lines)
 - Helper functions: K(), V(), KI(), VS() for test readability
+- TestContext system for automatic documentation generation
+
+**Visualization:**
+
+- `visualize_tree.py` - Python script for tree visualization (500+ lines)
+- Uses matplotlib to generate PNG diagrams of B+Tree structure
+- Parses binary database format directly
 
 **Test Output:**
 
-- `testdata/*.db` - Binary database files
-- `testdata/*.db.txt` - Human-readable structure dumps
+- `testdata/<TestName>/*.db` - Binary database files
+- `testdata/<TestName>/*.db.png` - Visual tree structure diagrams
+- `testdata/<TestName>/description.txt` - Test documentation
 
-**Total Code:** ~1,500 lines (implementation + tests)
+**Total Code:** ~2,700+ lines (implementation + tests + visualization)
 
 **Test Statistics:**
 
-- 18 total tests
+- 18 total tests with full visualization
 - 100% pass rate
 - Coverage: Insert, Search, Delete, Update, Range Query, Load, Edge Cases, Multi-column data
+- Automatic generation of test documentation and tree diagrams
+- Each test produces 3 artifacts: .db file, .png diagram, description.txt
