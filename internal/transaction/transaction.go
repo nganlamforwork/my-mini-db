@@ -34,6 +34,7 @@ type TransactionManager struct {
 	wal        *WALManager
 	activeTx   *Transaction
 	nextTxID   uint64
+	autoCommit bool // True if current transaction is auto-commit (single operation)
 }
 
 // NewTransactionManager creates a new transaction manager
@@ -45,7 +46,7 @@ func NewTransactionManager(wal *WALManager) *TransactionManager {
 	}
 }
 
-// Begin starts a new transaction
+// Begin starts a new explicit transaction (for multi-operation queries)
 func (tm *TransactionManager) Begin(tree TreeInterface) (*Transaction, error) {
 	if tm.activeTx != nil {
 		return nil, fmt.Errorf("transaction already active (nested transactions not supported)")
@@ -61,8 +62,37 @@ func (tm *TransactionManager) Begin(tree TreeInterface) (*Transaction, error) {
 
 	tm.nextTxID++
 	tm.activeTx = tx
+	tm.autoCommit = false // Explicit transaction
 
 	return tx, nil
+}
+
+// BeginAutoCommit starts an auto-commit transaction (for single operations)
+// This ensures crash recovery even for simple operations
+func (tm *TransactionManager) BeginAutoCommit(tree TreeInterface) (*Transaction, error) {
+	if tm.activeTx != nil {
+		// Already in a transaction, reuse it
+		return tm.activeTx, nil
+	}
+
+	tx := &Transaction{
+		txID:          tm.nextTxID,
+		state:         TxStateActive,
+		tree:          tree,
+		modifiedPages: make(map[uint64]interface{}),
+		originalPages: make(map[uint64]interface{}),
+	}
+
+	tm.nextTxID++
+	tm.activeTx = tx
+	tm.autoCommit = true // Auto-commit transaction
+
+	return tx, nil
+}
+
+// IsAutoCommit returns true if the current transaction is auto-commit
+func (tm *TransactionManager) IsAutoCommit() bool {
+	return tm.autoCommit
 }
 
 // Commit commits the current transaction
@@ -110,6 +140,7 @@ func (tm *TransactionManager) Commit() error {
 	// Mark transaction as committed
 	tm.activeTx.state = TxStateCommitted
 	tm.activeTx = nil
+	tm.autoCommit = false
 
 	return nil
 }
@@ -141,6 +172,7 @@ func (tm *TransactionManager) Rollback() error {
 	// Mark transaction as rolled back
 	tm.activeTx.state = TxStateRolledBack
 	tm.activeTx = nil
+	tm.autoCommit = false
 
 	return nil
 }
@@ -151,9 +183,11 @@ func (tm *TransactionManager) GetActiveTransaction() *Transaction {
 }
 
 // TrackPageModification tracks a page modification for the current transaction
-func (tm *TransactionManager) TrackPageModification(pageID uint64, page interface{}) {
+// If no transaction exists, it will be created automatically (auto-commit)
+func (tm *TransactionManager) TrackPageModification(pageID uint64, page interface{}, tree TreeInterface) {
+	// Auto-create transaction if none exists (for crash recovery)
 	if tm.activeTx == nil {
-		return // No active transaction, no tracking needed
+		_, _ = tm.BeginAutoCommit(tree)
 	}
 
 	// Save original state if not already saved
@@ -170,6 +204,37 @@ func (tm *TransactionManager) TrackPageModification(pageID uint64, page interfac
 
 	// Track modified page
 	tm.activeTx.modifiedPages[pageID] = page
+}
+
+// TrackPageAllocation tracks a newly allocated page
+func (tm *TransactionManager) TrackPageAllocation(pageID uint64, page interface{}, tree TreeInterface) {
+	// Auto-create transaction if none exists
+	if tm.activeTx == nil {
+		_, _ = tm.BeginAutoCommit(tree)
+	}
+	
+	// New pages don't have original state
+	tm.activeTx.modifiedPages[pageID] = page
+}
+
+// TrackPageDeletion tracks a page deletion
+func (tm *TransactionManager) TrackPageDeletion(pageID uint64, tree TreeInterface) {
+	// Auto-create transaction if none exists
+	if tm.activeTx == nil {
+		_, _ = tm.BeginAutoCommit(tree)
+	}
+	
+	// Save original state if not already saved
+	if _, exists := tm.activeTx.originalPages[pageID]; !exists {
+		pager := tm.activeTx.tree.GetPager()
+		originalPage := pager.Get(pageID)
+		if originalPage != nil {
+			tm.activeTx.originalPages[pageID] = originalPage
+		}
+	}
+	
+	// Mark as deleted (remove from modified pages, keep in original for rollback)
+	delete(tm.activeTx.modifiedPages, pageID)
 }
 
 // Checkpoint creates a checkpoint in the WAL

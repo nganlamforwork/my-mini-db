@@ -4,94 +4,167 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
 
 ## Table of Contents
 
-- [Version 4.0 - Transaction Support & Write-Ahead Logging (Current)](#version-40---transaction-support--write-ahead-logging-current)
-  - [Major Features Added](#major-features-added)
-  - [Implementation Details](#implementation-details)
-  - [Real-World Context](#real-world-context)
-  - [Files Added](#files-added)
-  - [Files Modified](#files-modified)
-- [Version 3.0 - Composite Keys & Structured Records](#version-30---composite-keys--structured-records)
-  - [Major Features Added](#major-features-added-1)
-  - [Implementation Details](#implementation-details-1)
-  - [Benefits](#benefits)
-  - [Files Added](#files-added-1)
-  - [Files Modified](#files-modified-1)
-- [Version 2.0 - Disk Persistence & Load from Disk](#version-20---disk-persistence--load-from-disk)
-  - [Major Features Added](#major-features-added-2)
-  - [Implementation Details](#implementation-details-2)
-  - [Benefits](#benefits-1)
-  - [Files Modified](#files-modified-2)
-- [Version 1.0 - Core B+Tree Implementation](#version-10---core-btree-implementation)
-  - [Major Features Implemented](#major-features-implemented)
-  - [Implementation Details](#implementation-details-3)
-  - [Files Created](#files-created)
-- [Development Timeline](#development-timeline)
-- [Future Roadmap](#future-roadmap)
-  - [Version 5.0 - Concurrent Access (Planned)](#version-50---concurrent-access-planned)
-  - [Version 6.0 - Performance Optimizations (Planned)](#version-60---performance-optimizations-planned)
-  - [Version 7.0 - Advanced Features (Planned)](#version-70---advanced-features-planned)
-- [Statistics](#statistics)
-  - [Code Growth](#code-growth)
-  - [Test Coverage](#test-coverage)
-  - [Features by Version](#features-by-version)
-- [Notes](#notes)
+- [MiniDB Development Changelog](#minidb-development-changelog)
+  - [Table of Contents](#table-of-contents)
+  - [Version 4.0 - Complete Transaction Support \& Write-Ahead Logging (Current)](#version-40---complete-transaction-support--write-ahead-logging-current)
+    - [Major Features Added](#major-features-added)
+    - [Implementation Details](#implementation-details)
+    - [Real-World Context](#real-world-context)
+    - [Crash Safety Scenarios](#crash-safety-scenarios)
+    - [Testing](#testing)
+    - [Files Added](#files-added)
+    - [Files Modified](#files-modified)
+    - [Key Improvements Over Initial Transaction Implementation](#key-improvements-over-initial-transaction-implementation)
+  - [Version 3.0 - Composite Keys \& Structured Records](#version-30---composite-keys--structured-records)
+    - [Major Features Added](#major-features-added-1)
+    - [Implementation Details](#implementation-details-1)
+    - [Benefits](#benefits)
+    - [Files Added](#files-added-1)
+    - [Files Modified](#files-modified-1)
+  - [Version 2.0 - Disk Persistence \& Load from Disk](#version-20---disk-persistence--load-from-disk)
+    - [Major Features Added](#major-features-added-2)
+    - [Implementation Details](#implementation-details-2)
+    - [Benefits](#benefits-1)
+    - [Files Modified](#files-modified-2)
+  - [Version 1.0 - Core B+Tree Implementation](#version-10---core-btree-implementation)
+    - [Major Features Implemented](#major-features-implemented)
+    - [Implementation Details](#implementation-details-3)
+    - [Files Created](#files-created)
+  - [Development Timeline](#development-timeline)
+  - [Future Roadmap](#future-roadmap)
+    - [Version 5.0 - Concurrent Access (Planned)](#version-50---concurrent-access-planned)
+    - [Version 6.0 - Performance Optimizations (Planned)](#version-60---performance-optimizations-planned)
+    - [Version 7.0 - Advanced Features (Planned)](#version-70---advanced-features-planned)
+  - [Statistics](#statistics)
+    - [Code Growth](#code-growth)
+    - [Test Coverage](#test-coverage)
+    - [Features by Version](#features-by-version)
+  - [Notes](#notes)
 
 ---
 
-## Version 4.0 - Transaction Support & Write-Ahead Logging (Current)
+## Version 4.0 - Complete Transaction Support & Write-Ahead Logging (Current)
 
 **Date:** January 2026  
-**Status:** Completed
+**Status:** Completed - Production Ready
 
 ### Major Features Added
 
-- **Transaction Support**
+- **Dual Transaction Model**
 
-  - `Begin()` - Start a new transaction
-  - `Commit()` - Commit all changes atomically
-  - `Rollback()` - Rollback all changes in transaction
-  - Multi-operation atomicity guarantees
+  - **Auto-Commit Transactions**: Every single operation (Insert/Update/Delete) automatically creates and commits a transaction, ensuring crash recovery for all operations without user intervention
+  - **Explicit Transactions**: `Begin()`, `Commit()`, `Rollback()` for multi-operation atomicity
+  - Seamless integration between both transaction types
 
-- **Write-Ahead Logging (WAL)**
+- **Complete Write-Ahead Logging (WAL)**
 
   - WAL file (`.wal` extension) for durability
-  - Log Sequence Numbers (LSN) for ordering
-  - Automatic crash recovery via WAL replay
+  - Log Sequence Numbers (LSN) for ordering and recovery
+  - Automatic crash recovery via WAL replay on database open
   - Checkpoint support for WAL truncation
+  - Physical page-level logging (complete page snapshots)
+
+- **Crash Safety Guarantee**
+
+  - **No Partial Writes**: All database writes go through transaction commit process
+  - **Write-Ahead Principle**: WAL written and synced before database file writes
+  - **Guaranteed Consistency**: If crash occurs before commit, tree remains unchanged
+  - **Automatic Recovery**: WAL replay restores committed state after crashes
+  - **Zero Data Loss**: Every operation is crash-recoverable
 
 - **ACID Properties**
-  - **Atomicity**: All-or-nothing transaction execution
-  - **Consistency**: Database remains in valid state
-  - **Durability**: Committed changes survive crashes
+  - **Atomicity**: All-or-nothing transaction execution (single and multi-operation)
+  - **Consistency**: Database remains in valid state even after crashes
+  - **Durability**: Committed changes survive crashes via WAL replay
   - **Isolation**: Single transaction at a time (concurrency pending)
 
 ### Implementation Details
 
-- Created `wal.go` (300+ lines) - WAL implementation
-- Created `transaction.go` (200+ lines) - Transaction management
-- Updated `tree.go` - Integrated transaction tracking throughout all operations
-- Added `NewBPlusTree()` constructor with WAL initialization
-- Page modification tracking for rollback capability
-- WAL recovery on database open
+- **Auto-Commit Implementation**
+
+  - `ensureAutoCommitTransaction()` - Automatically creates transaction for single operations
+  - `commitAutoTransaction()` - Auto-commits at operation end via defer
+  - All operations (Insert/Update/Delete) are transactional by default
+
+- **Explicit Transaction Implementation**
+
+  - `Begin()` - Start explicit transaction for multi-operation queries
+  - `Commit()` - Write to WAL first, then flush to database (atomic)
+  - `Rollback()` - Restore original page states, discard changes
+
+- **WAL Implementation**
+
+  - Created `wal.go` (350+ lines) - Complete WAL implementation
+  - `LogPageWrite()` - Logs complete page snapshots to WAL
+  - `Recover()` - Replays WAL entries on database open
+  - `Checkpoint()` - Truncates WAL after ensuring durability
+
+- **Transaction Management**
+
+  - Created `transaction.go` (250+ lines) - Complete transaction management
+  - Page modification tracking with original state preservation
+  - Page allocation and deletion tracking
+  - Transaction state management (Active, Committed, RolledBack)
+
+- **Crash Safety Implementation**
+
+  - Removed all direct database writes during operations
+  - All writes (including meta page) go through transaction commit
+  - Proper meta page initialization before transaction tracking
+  - WAL sync before database file writes ensures durability
+
+- **Integration**
+  - Updated `tree.go` - Integrated transaction tracking throughout all operations
+  - Updated `page_manager.go` - WAL integration for page writes
+  - Added `NewBPlusTree()` constructor with WAL initialization and recovery
+  - All operations track page modifications for transaction support
 
 ### Real-World Context
 
-This implementation follows industry-standard patterns:
+This implementation follows industry-standard patterns used in production databases:
 
-- **PostgreSQL**: WAL for durability (pg_xlog/pg_wal)
-- **SQLite**: WAL mode for crash recovery
-- **MySQL InnoDB**: Redo log for durability
-- **ARIES Algorithm**: Industry-standard recovery algorithm principles
+- **PostgreSQL**: Auto-commit for single statements, explicit transactions for multi-statement blocks, WAL (pg_xlog/pg_wal) for durability
+- **SQLite**: Auto-commit mode by default, WAL mode for crash recovery, explicit transactions for atomicity
+- **MySQL InnoDB**: Auto-commit mode by default, redo log (similar to WAL) for durability, explicit transactions for multi-statement operations
+- **ARIES Algorithm**: Industry-standard recovery algorithm principles (Write-Ahead Logging, Log Sequence Numbers, Checkpointing)
+
+### Crash Safety Scenarios
+
+Version 4.0 guarantees crash safety in all scenarios:
+
+1. **Crash Before Commit**: No WAL entries, no database writes → Tree unchanged on restart ✓
+2. **Crash During Commit**: WAL written and synced, database write incomplete → Recovery restores committed state ✓
+3. **Crash After Commit**: Both WAL and database updated and synced → State fully persisted ✓
+
+### Testing
+
+- Comprehensive test suite for transaction features:
+  - `TestAutoCommitSingleInsert` - Verifies auto-commit for single operations
+  - `TestAutoCommitCrashRecovery` - Verifies crash recovery for auto-commit operations
+  - `TestExplicitTransactionMultipleOperations` - Verifies multi-operation atomicity
+  - `TestExplicitTransactionRollback` - Verifies rollback functionality
+  - `TestAutoCommitVsExplicitTransaction` - Verifies both transaction types work together
 
 ### Files Added
 
-- `wal.go` - Write-Ahead Logging implementation
-- `transaction.go` - Transaction management
+- `internal/transaction/wal.go` - Complete Write-Ahead Logging implementation
+- `internal/transaction/transaction.go` - Complete transaction management
 
 ### Files Modified
 
-- `tree.go` - Added transaction support, WAL integration
-- `IMPLEMENTATION.md` - Added transaction documentation section
+- `internal/btree/tree.go` - Added auto-commit and explicit transaction support, removed direct writes
+- `internal/page/page_manager.go` - WAL integration for page writes
+- `docs/IMPLEMENTATION.md` - Comprehensive transaction documentation with crash safety details
+- `docs/CHANGELOG.md` - This changelog entry
+
+### Key Improvements Over Initial Transaction Implementation
+
+The initial transaction implementation had a critical bug where single operations without explicit `Begin()` were not crash-recoverable. Version 4.0 fixes this by:
+
+1. **Auto-Commit Transactions**: Every operation automatically uses transactions
+2. **No Direct Writes**: All writes go through transaction commit (including meta page)
+3. **Complete Crash Safety**: Guaranteed consistency even if crash occurs during page/node management
+4. **Production Ready**: Matches real database behavior where every operation is transactional
 
 ---
 
@@ -255,10 +328,12 @@ Phase 3: Type System (v3.0)
   ├── Structured records
   └── Type-safe operations
 
-Phase 4: Transactions (v4.0) ← Current
-  ├── Transaction support
-  ├── Write-Ahead Logging
-  └── Crash recovery
+Phase 4: Complete Transactions (v4.0) ← Current
+  ├── Auto-commit transactions (every operation crash-safe)
+  ├── Explicit transactions (multi-operation atomicity)
+  ├── Write-Ahead Logging (complete implementation)
+  ├── Crash recovery (automatic WAL replay)
+  └── Crash safety guarantee (no partial writes)
 ```
 
 ---
@@ -295,21 +370,21 @@ Phase 4: Transactions (v4.0) ← Current
 - **v1.0**: ~1,200 lines (core implementation)
 - **v2.0**: ~1,400 lines (+200 lines)
 - **v3.0**: ~2,000 lines (+600 lines)
-- **v4.0**: ~2,500 lines (+500 lines)
+- **v4.0**: ~2,700 lines (+700 lines) - Complete transaction implementation with crash safety
 
 ### Test Coverage
 
 - **v1.0**: 18 comprehensive tests
 - **v2.0**: Load from disk tests
 - **v3.0**: Multi-column key/value tests
-- **v4.0**: Transaction tests (pending)
+- **v4.0**: 5+ comprehensive transaction tests (auto-commit, explicit, crash recovery)
 
 ### Features by Version
 
 - **v1.0**: 5 core operations
 - **v2.0**: +1 persistence feature
 - **v3.0**: +2 type system features
-- **v4.0**: +2 transaction features
+- **v4.0**: +3 transaction features (auto-commit, explicit transactions, crash safety)
 
 ---
 

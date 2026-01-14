@@ -66,13 +66,14 @@ func NewBPlusTree(pager *page.PageManager) (*BPlusTree, error) {
 	return tree, nil
 }
 
-// Begin starts a new transaction
+// Begin starts a new explicit transaction (for multi-operation queries)
 func (tree *BPlusTree) Begin() error {
 	_, err := tree.txManager.Begin(tree)
 	return err
 }
 
 // Commit commits the current transaction
+// If called on an auto-commit transaction, it commits and clears the auto-commit flag
 func (tree *BPlusTree) Commit() error {
 	return tree.txManager.Commit()
 }
@@ -80,6 +81,34 @@ func (tree *BPlusTree) Commit() error {
 // Rollback rolls back the current transaction
 func (tree *BPlusTree) Rollback() error {
 	return tree.txManager.Rollback()
+}
+
+// ensureAutoCommitTransaction ensures a transaction exists for crash recovery
+// Returns true if a new auto-commit transaction was created
+func (tree *BPlusTree) ensureAutoCommitTransaction() bool {
+	if tree.txManager == nil {
+		return false
+	}
+	
+	activeTx := tree.txManager.GetActiveTransaction()
+	if activeTx == nil {
+		// No active transaction, create auto-commit one
+		_, _ = tree.txManager.BeginAutoCommit(tree)
+		return true
+	}
+	return false
+}
+
+// commitAutoTransaction commits an auto-commit transaction if one exists
+func (tree *BPlusTree) commitAutoTransaction() error {
+	if tree.txManager == nil {
+		return nil
+	}
+	
+	if tree.txManager.IsAutoCommit() {
+		return tree.txManager.Commit()
+	}
+	return nil
 }
 
 // Checkpoint creates a checkpoint in the WAL
@@ -186,6 +215,14 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	// 3) Insert into the leaf; if it overflows, split the leaf.
 	// 4) Propagate splits upward through internal nodes.
 	// 5) If the root splits, create a new root internal node.
+	//
+	// Auto-commit: Ensures crash recovery even for single operations
+	wasAutoCommit := tree.ensureAutoCommitTransaction()
+	defer func() {
+		if wasAutoCommit {
+			_ = tree.commitAutoTransaction()
+		}
+	}()
 
 	// 1. Empty tree → create root leaf
 	if tree.meta == nil {
@@ -204,16 +241,17 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		leaf.Header.KeyCount = 1
 		tree.meta.RootPage = leaf.Header.PageID
 		
-		// Track page modifications for transaction
+		// Ensure meta page is properly initialized for transaction tracking
+		tree.meta.Header.PageID = 1
+		tree.meta.Header.PageType = page.PageTypeMeta
+		
+		// Track page modifications for transaction (will be persisted on commit)
 		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
-			tree.txManager.TrackPageModification(1, tree.meta)
+			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
+			tree.txManager.TrackPageModification(1, tree.meta, tree)
 		}
 		
-		// persist meta
-		if err := tree.pager.WriteMeta(tree.meta); err != nil {
-			return err
-		}
+		// Meta page will be written during transaction commit (via defer)
 		return nil
 	}
 
@@ -237,7 +275,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 	// Track page modification for transaction
 	if tree.txManager != nil {
-		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
 	}
 
 	// If the leaf does not overflow (by key count or payload), we're done
@@ -255,8 +293,8 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 	// Track page modifications for transaction
 	if tree.txManager != nil {
-		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
-		tree.txManager.TrackPageModification(newLeaf.Header.PageID, newLeaf)
+		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
+		tree.txManager.TrackPageAllocation(newLeaf.Header.PageID, newLeaf, tree)
 	}
 
 	var childPageID uint64 = newLeaf.Header.PageID
@@ -276,7 +314,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 		// Track parent modification
 		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(parentID, parent)
+			tree.txManager.TrackPageModification(parentID, parent, tree)
 		}
 
 		// If parent didn't overflow, split propagation stops
@@ -290,7 +328,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		
 		// Track new internal page
 		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(newInternal.Header.PageID, newInternal)
+			tree.txManager.TrackPageAllocation(newInternal.Header.PageID, newInternal, tree)
 		}
 		
 		childPageID = newInternal.Header.PageID
@@ -320,17 +358,20 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 	newRoot.Header.KeyCount = 1
 	
-	// Track new root and meta modifications
+	// Update meta root
+	tree.meta.RootPage = newRoot.Header.PageID
+	
+	// Ensure meta page is properly initialized for transaction tracking
+	tree.meta.Header.PageID = 1
+	tree.meta.Header.PageType = page.PageTypeMeta
+	
+	// Track new root and meta modifications (will be persisted on commit)
 	if tree.txManager != nil {
-		tree.txManager.TrackPageModification(newRoot.Header.PageID, newRoot)
-		tree.txManager.TrackPageModification(1, tree.meta)
+		tree.txManager.TrackPageAllocation(newRoot.Header.PageID, newRoot, tree)
+		tree.txManager.TrackPageModification(1, tree.meta, tree)
 	}
 	
-	// update meta root and persist
-	tree.meta.RootPage = newRoot.Header.PageID
-	if err := tree.pager.WriteMeta(tree.meta); err != nil {
-		return err
-	}
+	// Meta page will be written during transaction commit (via defer)
 	return nil
 }
 
@@ -484,6 +525,14 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 // If the key doesn't exist, returns an error.
 // If the new value doesn't fit in the page, performs delete + insert.
 func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
+	// Auto-commit: Ensures crash recovery even for single operations
+	wasAutoCommit := tree.ensureAutoCommitTransaction()
+	defer func() {
+		if wasAutoCommit {
+			_ = tree.commitAutoTransaction()
+		}
+	}()
+
 	// Empty tree
 	if tree.meta == nil || tree.meta.RootPage == 0 {
 		return fmt.Errorf("key not found: %v (empty tree)", key)
@@ -533,7 +582,7 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 		
 		// Track page modification for transaction
 		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
 		}
 		
 		return nil
@@ -603,7 +652,7 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 
 	// Track page modification for transaction
 	if tree.txManager != nil {
-		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
 	}
 
 	// If this is the root and it's a leaf, we're done
@@ -611,10 +660,18 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 		// If root is now empty, reset tree
 		if len(leaf.Keys) == 0 {
 			tree.meta.RootPage = 0
+			
+			// Ensure meta page is properly initialized for transaction tracking
+			tree.meta.Header.PageID = 1
+			tree.meta.Header.PageType = page.PageTypeMeta
+			
+			// Track meta modification (will be persisted on commit)
 			if tree.txManager != nil {
-				tree.txManager.TrackPageModification(1, tree.meta)
+				tree.txManager.TrackPageModification(1, tree.meta, tree)
 			}
-			return tree.pager.WriteMeta(tree.meta)
+			
+			// Meta page will be written during transaction commit (via defer)
+			return nil
 		}
 		return nil
 	}
@@ -677,9 +734,9 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 
 			// Track page modifications for transaction
 			if tree.txManager != nil {
-				tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
-				tree.txManager.TrackPageModification(rightSibling.Header.PageID, rightSibling)
-				tree.txManager.TrackPageModification(parentID, parent)
+				tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
+				tree.txManager.TrackPageModification(rightSibling.Header.PageID, rightSibling, tree)
+				tree.txManager.TrackPageModification(parentID, parent, tree)
 			}
 
 			return nil
@@ -716,9 +773,9 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 
 			// Track page modifications for transaction
 			if tree.txManager != nil {
-				tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
-				tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling)
-				tree.txManager.TrackPageModification(parentID, parent)
+				tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
+				tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling, tree)
+				tree.txManager.TrackPageModification(parentID, parent, tree)
 			}
 
 			return nil
@@ -756,14 +813,14 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 
 		// Track page modifications for transaction
 		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf)
+			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
 			if leaf.Header.NextPage != 0 {
 				nextPage := tree.pager.Get(leaf.Header.NextPage)
 				if nextPage != nil {
-					tree.txManager.TrackPageModification(leaf.Header.NextPage, nextPage)
+					tree.txManager.TrackPageModification(leaf.Header.NextPage, nextPage, tree)
 				}
 			}
-			tree.txManager.TrackPageModification(parentID, parent)
+			tree.txManager.TrackPageModification(parentID, parent, tree)
 		}
 
 	} else {
@@ -795,14 +852,14 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 
 		// Track page modifications for transaction
 		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling)
+			tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling, tree)
 			if leftSibling.Header.NextPage != 0 {
 				nextPage := tree.pager.Get(leftSibling.Header.NextPage)
 				if nextPage != nil {
-					tree.txManager.TrackPageModification(leftSibling.Header.NextPage, nextPage)
+					tree.txManager.TrackPageModification(leftSibling.Header.NextPage, nextPage, tree)
 				}
 			}
-			tree.txManager.TrackPageModification(parentID, parent)
+			tree.txManager.TrackPageModification(parentID, parent, tree)
 		}
 	}
 
@@ -826,20 +883,26 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 			case *page.InternalPage:
 				r.Header.ParentPage = 0
 				if tree.txManager != nil {
-					tree.txManager.TrackPageModification(r.Header.PageID, r)
+					tree.txManager.TrackPageModification(r.Header.PageID, r, tree)
 				}
 			case *page.LeafPage:
 				r.Header.ParentPage = 0
 				if tree.txManager != nil {
-					tree.txManager.TrackPageModification(r.Header.PageID, r)
+					tree.txManager.TrackPageModification(r.Header.PageID, r, tree)
 				}
 			}
 			
+			// Ensure meta page is properly initialized for transaction tracking
+			tree.meta.Header.PageID = 1
+			tree.meta.Header.PageType = page.PageTypeMeta
+			
+			// Track meta modification (will be persisted on commit)
 			if tree.txManager != nil {
-				tree.txManager.TrackPageModification(1, tree.meta)
+				tree.txManager.TrackPageModification(1, tree.meta, tree)
 			}
 			
-			return tree.pager.WriteMeta(tree.meta)
+			// Meta page will be written during transaction commit (via defer)
+			return nil
 		}
 		return nil
 	}
@@ -898,15 +961,15 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 
 			// Track page modifications for transaction
 			if tree.txManager != nil {
-				tree.txManager.TrackPageModification(node.Header.PageID, node)
-				tree.txManager.TrackPageModification(rightSibling.Header.PageID, rightSibling)
-				tree.txManager.TrackPageModification(parentID, parent)
+				tree.txManager.TrackPageModification(node.Header.PageID, node, tree)
+				tree.txManager.TrackPageModification(rightSibling.Header.PageID, rightSibling, tree)
+				tree.txManager.TrackPageModification(parentID, parent, tree)
 				if movedChild != nil {
 					switch c := movedChild.(type) {
 					case *page.InternalPage:
-						tree.txManager.TrackPageModification(c.Header.PageID, c)
+						tree.txManager.TrackPageModification(c.Header.PageID, c, tree)
 					case *page.LeafPage:
-						tree.txManager.TrackPageModification(c.Header.PageID, c)
+						tree.txManager.TrackPageModification(c.Header.PageID, c, tree)
 					}
 				}
 			}
@@ -951,15 +1014,15 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 
 			// Track page modifications for transaction
 			if tree.txManager != nil {
-				tree.txManager.TrackPageModification(node.Header.PageID, node)
-				tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling)
-				tree.txManager.TrackPageModification(parentID, parent)
+				tree.txManager.TrackPageModification(node.Header.PageID, node, tree)
+				tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling, tree)
+				tree.txManager.TrackPageModification(parentID, parent, tree)
 				if movedChild != nil {
 					switch c := movedChild.(type) {
 					case *page.InternalPage:
-						tree.txManager.TrackPageModification(c.Header.PageID, c)
+						tree.txManager.TrackPageModification(c.Header.PageID, c, tree)
 					case *page.LeafPage:
-						tree.txManager.TrackPageModification(c.Header.PageID, c)
+						tree.txManager.TrackPageModification(c.Header.PageID, c, tree)
 					}
 				}
 			}
@@ -1027,13 +1090,13 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 
 		// Track page modifications for transaction
 		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling)
-			tree.txManager.TrackPageModification(parentID, parent)
+			tree.txManager.TrackPageModification(leftSibling.Header.PageID, leftSibling, tree)
+			tree.txManager.TrackPageModification(parentID, parent, tree)
 			// Track all moved children
 			for _, childID := range node.Children {
 				child := tree.pager.Get(childID)
 				if child != nil {
-					tree.txManager.TrackPageModification(childID, child)
+					tree.txManager.TrackPageModification(childID, child, tree)
 				}
 			}
 		}

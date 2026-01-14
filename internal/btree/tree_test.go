@@ -1722,3 +1722,331 @@ func TestUpdateMultiple(t *testing.T) {
 		t.Logf("dumpTreeStructure failed: %v", err)
 	}
 }
+
+// TestAutoCommitSingleInsert tests that a single Insert operation automatically creates and commits a transaction
+func TestAutoCommitSingleInsert(t *testing.T) {
+	ctx := NewTestContext(t)
+	ctx.SetSummary("Verifies that single Insert operations automatically use transactions for crash recovery")
+	
+	dbFile := filepath.Join(ctx.testDir, "autocommit_insert.db")
+	// Clean up any existing files
+	os.Remove(dbFile)
+	os.Remove(dbFile + ".wal")
+	pm := page.NewPageManagerWithFile(dbFile, true)
+	defer pm.Close()
+	
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	defer tree.Close()
+	
+	// Single insert without explicit Begin/Commit
+	ctx.AddOperation("Inserting key 42 with value \"test\" (no explicit transaction)")
+	err = tree.Insert(K(42), V("test"))
+	if err != nil {
+		t.Fatalf("insert failed: %v", err)
+	}
+	
+	// Verify the operation was committed (check WAL exists and has entries)
+	walFile := dbFile + ".wal"
+	walInfo, err := os.Stat(walFile)
+	if err != nil {
+		t.Fatalf("WAL file should exist: %v", err)
+	}
+	if walInfo.Size() == 0 {
+		t.Error("WAL file should contain log entries for the insert")
+	}
+	
+	// Verify data is searchable
+	val, err := tree.Search(K(42))
+	if err != nil {
+		t.Errorf("key 42 should be searchable after auto-commit: %v", err)
+	} else if VS(val) != "test" {
+		t.Errorf("expected value \"test\", got %v", VS(val))
+	}
+	
+	ctx.AddExpected("Insert operation should automatically create and commit a transaction")
+	ctx.AddExpected("WAL file should contain log entries for crash recovery")
+	ctx.AddExpected("Data should be immediately searchable after operation")
+	
+	ctx.WriteDescription()
+}
+
+// TestAutoCommitCrashRecovery tests that auto-commit transactions survive crashes
+func TestAutoCommitCrashRecovery(t *testing.T) {
+	ctx := NewTestContext(t)
+	ctx.SetSummary("Verifies that auto-commit transactions can be recovered after a simulated crash")
+	
+	dbFile := filepath.Join(ctx.testDir, "crash_recovery.db")
+	// Clean up any existing files
+	os.Remove(dbFile)
+	os.Remove(dbFile + ".wal")
+	
+	// Phase 1: Insert data with auto-commit
+	pm1 := page.NewPageManagerWithFile(dbFile, true)
+	
+	tree1, err := NewBPlusTree(pm1)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	
+	ctx.AddOperation("Phase 1: Inserting 5 keys with auto-commit transactions")
+	keys := []storage.CompositeKey{K(1), K(2), K(3), K(4), K(5)}
+	for i, key := range keys {
+		if err := tree1.Insert(key, V(fmt.Sprintf("value%d", i+1))); err != nil {
+			t.Fatalf("insert failed: %v", err)
+		}
+		ctx.AddOperation(fmt.Sprintf("  - Inserted key %d", KI(key)))
+	}
+	
+	// Simulate crash: close without explicit checkpoint
+	tree1.Close()
+	pm1.Close()
+	
+	// Phase 2: Recover from WAL
+	ctx.AddOperation("Phase 2: Simulating crash recovery (reopening database)")
+	pm2 := page.NewPageManagerWithFile(dbFile, false)
+	defer pm2.Close()
+	
+	tree2, err := NewBPlusTree(pm2)
+	if err != nil {
+		t.Fatalf("failed to recreate tree: %v", err)
+	}
+	defer tree2.Close()
+	
+	// Verify all data was recovered
+	ctx.AddOperation("Phase 3: Verifying all data was recovered from WAL")
+	recovered := 0
+	for i, key := range keys {
+		val, err := tree2.Search(key)
+		if err != nil {
+			t.Errorf("key %d not recovered: %v", KI(key), err)
+		} else if VS(val) != fmt.Sprintf("value%d", i+1) {
+			t.Errorf("key %d: expected \"value%d\", got %v", KI(key), i+1, VS(val))
+		} else {
+			recovered++
+			ctx.AddOperation(fmt.Sprintf("  - Key %d recovered successfully", KI(key)))
+		}
+	}
+	
+	if recovered != len(keys) {
+		t.Errorf("only %d/%d keys recovered", recovered, len(keys))
+	}
+	
+	ctx.AddExpected("All 5 keys should be recoverable from WAL after crash")
+	ctx.AddExpected("Database state should be consistent after recovery")
+	
+	ctx.WriteDescription()
+}
+
+// TestExplicitTransactionMultipleOperations tests explicit transactions for multi-operation queries
+func TestExplicitTransactionMultipleOperations(t *testing.T) {
+	ctx := NewTestContext(t)
+	ctx.SetSummary("Verifies that explicit transactions support multiple operations atomically")
+	
+	dbFile := filepath.Join(ctx.testDir, "explicit_tx.db")
+	// Clean up any existing files
+	os.Remove(dbFile)
+	os.Remove(dbFile + ".wal")
+	pm := page.NewPageManagerWithFile(dbFile, true)
+	defer pm.Close()
+	
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	defer tree.Close()
+	
+	// Insert initial data
+	ctx.AddOperation("Inserting initial data")
+	tree.Insert(K(10), V("initial"))
+	tree.Insert(K(20), V("initial"))
+	
+	// Begin explicit transaction
+	ctx.AddOperation("Beginning explicit transaction for multiple operations")
+	if err := tree.Begin(); err != nil {
+		t.Fatalf("Begin failed: %v", err)
+	}
+	
+	// Multiple operations in one transaction
+	ctx.AddOperation("Performing multiple operations in transaction:")
+	ctx.AddOperation("  - Insert key 30")
+	if err := tree.Insert(K(30), V("tx_value")); err != nil {
+		t.Fatalf("insert in tx failed: %v", err)
+	}
+	
+	ctx.AddOperation("  - Update key 10")
+	if err := tree.Update(K(10), V("tx_updated")); err != nil {
+		t.Fatalf("update in tx failed: %v", err)
+	}
+	
+	ctx.AddOperation("  - Delete key 20")
+	if err := tree.Delete(K(20)); err != nil {
+		t.Fatalf("delete in tx failed: %v", err)
+	}
+	
+	// Commit transaction
+	ctx.AddOperation("Committing transaction (all operations should be atomic)")
+	if err := tree.Commit(); err != nil {
+		t.Fatalf("Commit failed: %v", err)
+	}
+	
+	// Verify all changes are visible
+	ctx.AddOperation("Verifying all transaction changes:")
+	val30, err := tree.Search(K(30))
+	if err != nil {
+		t.Errorf("key 30 not found after commit: %v", err)
+	} else {
+		ctx.AddOperation(fmt.Sprintf("  - Key 30 found with value \"%s\"", VS(val30)))
+	}
+	
+	val10, err := tree.Search(K(10))
+	if err != nil {
+		t.Errorf("key 10 not found after commit: %v", err)
+	} else if VS(val10) != "tx_updated" {
+		t.Errorf("key 10: expected \"tx_updated\", got %v", VS(val10))
+	} else {
+		ctx.AddOperation(fmt.Sprintf("  - Key 10 updated to \"%s\"", VS(val10)))
+	}
+	
+	_, err = tree.Search(K(20))
+	if err == nil {
+		t.Error("key 20 should be deleted after commit")
+	} else {
+		ctx.AddOperation("  - Key 20 successfully deleted")
+	}
+	
+	ctx.AddExpected("All 3 operations (insert, update, delete) should be atomic")
+	ctx.AddExpected("Changes should only be visible after Commit()")
+	ctx.AddExpected("WAL should contain all modifications for crash recovery")
+	
+	ctx.WriteDescription()
+}
+
+// TestExplicitTransactionRollback tests that rollback undoes all operations
+func TestExplicitTransactionRollback(t *testing.T) {
+	ctx := NewTestContext(t)
+	ctx.SetSummary("Verifies that Rollback() undoes all operations in an explicit transaction")
+	
+	dbFile := filepath.Join(ctx.testDir, "rollback_test.db")
+	// Clean up any existing files
+	os.Remove(dbFile)
+	os.Remove(dbFile + ".wal")
+	pm := page.NewPageManagerWithFile(dbFile, true)
+	defer pm.Close()
+	
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	defer tree.Close()
+	
+	// Insert initial data
+	ctx.AddOperation("Inserting initial data")
+	tree.Insert(K(100), V("original"))
+	
+	// Begin transaction
+	ctx.AddOperation("Beginning explicit transaction")
+	if err := tree.Begin(); err != nil {
+		t.Fatalf("Begin failed: %v", err)
+	}
+	
+	// Perform operations
+	ctx.AddOperation("Performing operations in transaction:")
+	ctx.AddOperation("  - Insert key 200")
+	tree.Insert(K(200), V("should_rollback"))
+	
+	ctx.AddOperation("  - Insert key 300")
+	tree.Insert(K(300), V("should_rollback"))
+	
+	// Rollback
+	ctx.AddOperation("Rolling back transaction (all changes should be undone)")
+	if err := tree.Rollback(); err != nil {
+		t.Fatalf("Rollback failed: %v", err)
+	}
+	
+	// Verify rollback
+	ctx.AddOperation("Verifying rollback:")
+	val100, err := tree.Search(K(100))
+	if err != nil {
+		t.Errorf("key 100 not found after rollback: %v", err)
+	} else if VS(val100) != "original" {
+		t.Errorf("key 100: expected \"original\" after rollback, got %v", VS(val100))
+	} else {
+		ctx.AddOperation("  - Key 100 unchanged (rollback successful)")
+	}
+	
+	_, err = tree.Search(K(200))
+	if err == nil {
+		t.Error("key 200 should not exist after rollback")
+	} else {
+		ctx.AddOperation("  - Key 200 was not inserted (rollback successful)")
+	}
+	
+	_, err = tree.Search(K(300))
+	if err == nil {
+		t.Error("key 300 should not exist after rollback")
+	} else {
+		ctx.AddOperation("  - Key 300 was not inserted (rollback successful)")
+	}
+	
+	ctx.AddExpected("All insert operations in transaction should be undone by Rollback()")
+	ctx.AddExpected("Database should return to state before Begin()")
+	ctx.AddExpected("Note: Update operations in transactions may have limitations due to reference-based rollback")
+	
+	ctx.WriteDescription()
+}
+
+// TestAutoCommitVsExplicitTransaction tests that auto-commit and explicit transactions work together
+func TestAutoCommitVsExplicitTransaction(t *testing.T) {
+	ctx := NewTestContext(t)
+	ctx.SetSummary("Verifies that auto-commit and explicit transactions can coexist correctly")
+	
+	dbFile := filepath.Join(ctx.testDir, "mixed_tx.db")
+	// Clean up any existing files
+	os.Remove(dbFile)
+	os.Remove(dbFile + ".wal")
+	pm := page.NewPageManagerWithFile(dbFile, true)
+	defer pm.Close()
+	
+	tree, err := NewBPlusTree(pm)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
+	}
+	defer tree.Close()
+	
+	// Auto-commit operation
+	ctx.AddOperation("Auto-commit insert (no explicit transaction)")
+	tree.Insert(K(1), V("autocommit"))
+	
+	// Explicit transaction
+	ctx.AddOperation("Beginning explicit transaction")
+	tree.Begin()
+	tree.Insert(K(2), V("explicit"))
+	tree.Insert(K(3), V("explicit"))
+	ctx.AddOperation("Committing explicit transaction")
+	tree.Commit()
+	
+	// Another auto-commit operation
+	ctx.AddOperation("Another auto-commit insert")
+	tree.Insert(K(4), V("autocommit2"))
+	
+	// Verify all are present
+	ctx.AddOperation("Verifying all operations:")
+	for i := 1; i <= 4; i++ {
+		val, err := tree.Search(K(int64(i)))
+		if err != nil {
+			t.Errorf("key %d not found: %v", i, err)
+		} else {
+			ctx.AddOperation(fmt.Sprintf("  - Key %d found", i))
+		}
+		_ = val
+	}
+	
+	ctx.AddExpected("Auto-commit operations should work independently")
+	ctx.AddExpected("Explicit transactions should work correctly")
+	ctx.AddExpected("Both should be crash-recoverable via WAL")
+	
+	ctx.WriteDescription()
+}

@@ -37,11 +37,11 @@ A file-backed B+Tree database implementation in Go with full CRUD operations, tr
 
 ## Documentation
 
-- **[docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**: Complete implementation details, algorithms, and architecture
-- **[docs/TESTING.md](docs/TESTING.md)**: Comprehensive test suite documentation and test infrastructure
-- **[docs/CHANGELOG.md](docs/CHANGELOG.md)**: Development history and version evolution
+- **[IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**: Complete implementation details, algorithms, and architecture
+- **[TESTING.md](docs/TESTING.md)**: Comprehensive test suite documentation and test infrastructure
+- **[CHANGELOG.md](docs/CHANGELOG.md)**: Development history and version evolution
 
-For full technical details, see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
+For full technical details, see [IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
 
 ---
 
@@ -85,7 +85,7 @@ MiniDB/
 
 ## Features
 
-> **Note:** For complete feature documentation, see [docs/IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
+> **Note:** For complete feature documentation, see [IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
 
 ### Core Operations
 
@@ -181,7 +181,7 @@ Tests generate:
 - Visual tree diagrams (`.png`)
 - Test documentation (`description.txt`)
 
-See [docs/TESTING.md](docs/TESTING.md) for detailed test documentation.
+See [TESTING.md](docs/TESTING.md) for detailed test documentation.
 
 ---
 

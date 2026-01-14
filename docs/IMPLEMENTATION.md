@@ -38,6 +38,10 @@
     - [5. **Delete Operation with Rebalancing**](#5-delete-operation-with-rebalancing)
     - [6. **Page Persistence Enhancement**](#6-page-persistence-enhancement)
     - [7. **Transaction Support with Write-Ahead Logging (WAL)**](#7-transaction-support-with-write-ahead-logging-wal)
+      - [7.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**](#71-auto-commit-transactions-crash-recovery-for-single-operations)
+      - [7.2. **Explicit Transactions (Multi-Operation Atomicity)**](#72-explicit-transactions-multi-operation-atomicity)
+      - [7.3. **Write-Ahead Logging (WAL) Implementation**](#73-write-ahead-logging-wal-implementation)
+      - [7.4. **Transaction States and Lifecycle**](#74-transaction-states-and-lifecycle)
   - [Checklist: Completed Features](#checklist-completed-features)
     - [Core Operations](#core-operations)
     - [Transaction \& Durability](#transaction--durability)
@@ -547,15 +551,15 @@ function FlushAll():
 
 ### 7. **Transaction Support with Write-Ahead Logging (WAL)**
 
-**Overview:** Full ACID transaction support with Write-Ahead Logging for durability and crash recovery. This feature enables multi-operation atomicity, consistency, and durability guarantees—critical for production database systems.
+**Overview:** Full ACID transaction support with Write-Ahead Logging for durability and crash recovery. MiniDB implements two types of transactions: **auto-commit transactions** (for single operations) and **explicit transactions** (for multi-operation queries). This dual approach ensures that every operation is crash-recoverable while also supporting atomic multi-operation transactions—critical for production database systems.
 
 **Real-World Context:**
 
 Transaction support with WAL is a fundamental feature in production databases. This implementation follows the same principles used by:
 
-- **PostgreSQL**: Uses WAL (called "pg_xlog" or "pg_wal") for durability. All changes are logged before being written to data pages, enabling point-in-time recovery and crash recovery.
-- **SQLite**: Implements WAL mode where changes are written to a separate WAL file before being checkpointed to the main database file.
-- **MySQL InnoDB**: Uses a redo log (similar to WAL) to ensure durability and enable crash recovery.
+- **PostgreSQL**: Uses WAL (called "pg_xlog" or "pg_wal") for durability. All changes are logged before being written to data pages, enabling point-in-time recovery and crash recovery. PostgreSQL uses auto-commit by default for single statements, with explicit transactions for multi-statement blocks.
+- **SQLite**: Implements WAL mode where changes are written to a separate WAL file before being checkpointed to the main database file. SQLite uses auto-commit for individual statements and explicit transactions (BEGIN/COMMIT) for multi-statement operations.
+- **MySQL InnoDB**: Uses a redo log (similar to WAL) to ensure durability and enable crash recovery. InnoDB uses auto-commit mode by default, with explicit transactions for multi-statement operations.
 - **Foundation**: Based on the **ARIES (Algorithms for Recovery and Isolation Exploiting Semantics)** recovery algorithm principles, which is the industry standard for database recovery.
 
 **Key Concepts:**
@@ -563,31 +567,162 @@ Transaction support with WAL is a fundamental feature in production databases. T
 1. **Write-Ahead Logging (WAL)**: All modifications are logged to a separate WAL file before being written to the main database file. This ensures that if a crash occurs, all committed transactions can be recovered by replaying the WAL.
 2. **Transaction Atomicity**: Operations within a transaction either all succeed (commit) or all fail (rollback), maintaining database consistency.
 3. **Durability**: Once a transaction is committed, its changes are guaranteed to persist even if the system crashes immediately after.
+4. **Auto-Commit Transactions**: Every single operation (Insert, Update, Delete) automatically creates and commits a transaction, ensuring crash recovery even for simple operations.
+5. **Explicit Transactions**: Multi-operation queries can be grouped into explicit transactions for atomicity across multiple operations.
 
-**Algorithm Steps:**
+---
 
-1. **Begin Transaction**: Start tracking all page modifications
-2. **Track Changes**: During transaction, all modified pages are tracked with their original state
-3. **Commit**:
-   - Write all modified pages to WAL first (Write-Ahead Logging)
-   - Update page LSNs (Log Sequence Numbers)
-   - Flush modified pages to main database file
-   - Clear transaction state
-4. **Rollback**:
-   - Restore original page states from tracked copies
-   - Remove newly created pages
-   - Clear transaction state
-5. **Recovery**: On database open, replay WAL entries to restore committed changes
+#### 7.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**
 
-**Pseudo Code:**
+**Purpose:** Ensure that every operation, even simple single-operation queries, is crash-recoverable. This matches the behavior of real production databases where every operation is transactional.
+
+**How It Works:**
+
+When a user calls `Insert()`, `Update()`, or `Delete()` without an explicit `Begin()`, the system automatically:
+
+1. Creates an auto-commit transaction
+2. Tracks all page modifications during the operation
+3. Commits the transaction automatically at the end
+4. Writes all changes to WAL for crash recovery
+
+**Real-World Comparison:**
+
+- **PostgreSQL**: Every SQL statement is automatically wrapped in a transaction. If you execute `INSERT INTO users VALUES (1, 'John')`, PostgreSQL automatically begins a transaction, executes the insert, and commits it—all transparently.
+- **SQLite**: In default mode, each statement is automatically committed. The statement `INSERT INTO users VALUES (1, 'John')` is automatically transactional.
+- **MySQL InnoDB**: With `autocommit=1` (the default), each statement is automatically committed as a separate transaction.
+
+**Implementation Details:**
+
+```go
+func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
+    // Automatically ensure transaction exists for crash recovery
+    wasAutoCommit := tree.ensureAutoCommitTransaction()
+    defer func() {
+        if wasAutoCommit {
+            _ = tree.commitAutoTransaction()  // Auto-commit at end
+        }
+    }()
+
+    // ... perform insert operation ...
+    // All page modifications are tracked and logged to WAL
+}
+```
+
+**Algorithm Flow:**
+
+1. **Operation Start**: Check if explicit transaction exists
+   - If no transaction: Create auto-commit transaction
+   - If transaction exists: Use existing transaction
+2. **Track Modifications**: All page changes are tracked during operation
+   - Pages are modified **in memory only** (not written to disk)
+   - Original page states are saved for potential rollback
+3. **Operation End**: If auto-commit transaction was created:
+   - **Step 1**: Write all modified pages to WAL first (with `Sync()` for durability)
+   - **Step 2**: Update page LSNs (Log Sequence Numbers)
+   - **Step 3**: Flush pages to main database file (with `Sync()` for durability)
+   - **Step 4**: Mark transaction as committed
+
+**Critical Safety Property:** All database writes happen **only during commit**, never during the operation itself. This ensures that if a crash occurs before commit, no changes are written to disk, and the tree remains unchanged.
+
+**Benefits:**
+
+- **Crash Recovery**: Every operation is recoverable, even simple inserts/updates/deletes
+- **No User Overhead**: Users don't need to explicitly manage transactions for single operations
+- **Consistency**: Matches real database behavior where every operation is transactional
+- **Durability**: All operations survive crashes via WAL replay
+
+**Usage Example:**
+
+```go
+tree, _ := NewBPlusTree(pager)
+
+// Single insert - automatically transactional and crash-recoverable
+tree.Insert(key1, value1)  // Auto-commits internally
+
+// Single update - automatically transactional
+tree.Update(key2, newValue2)  // Auto-commits internally
+
+// Single delete - automatically transactional
+tree.Delete(key3)  // Auto-commits internally
+
+// All operations are immediately durable and crash-recoverable
+```
+
+**Crash Recovery:**
+
+If the database crashes after any single operation, the WAL contains all necessary information to recover that operation:
+
+```go
+// Phase 1: Insert data (crashes before checkpoint)
+tree.Insert(K(1), V("value1"))
+tree.Insert(K(2), V("value2"))
+// ... crash occurs ...
+
+// Phase 2: Recovery (reopen database)
+tree2, _ := NewBPlusTree(pager)  // Automatically recovers from WAL
+val, _ := tree2.Search(K(1))     // Data recovered successfully
+```
+
+---
+
+#### 7.2. **Explicit Transactions (Multi-Operation Atomicity)**
+
+**Purpose:** Group multiple operations into a single atomic transaction. All operations either succeed together or fail together, maintaining database consistency.
+
+**How It Works:**
+
+Users explicitly begin a transaction, perform multiple operations, and then commit or rollback:
+
+1. **Begin**: Start tracking all page modifications
+2. **Operations**: Perform multiple Insert/Update/Delete operations
+3. **Commit**: Write all changes to WAL and flush to database (all succeed)
+4. **Rollback**: Restore original page states (all fail)
+
+**Real-World Comparison:**
+
+- **PostgreSQL**: `BEGIN; INSERT ...; UPDATE ...; DELETE ...; COMMIT;` - All operations are atomic
+- **SQLite**: `BEGIN TRANSACTION; INSERT ...; UPDATE ...; COMMIT;` - All operations succeed or fail together
+- **MySQL InnoDB**: `START TRANSACTION; INSERT ...; UPDATE ...; COMMIT;` - Multi-statement atomicity
+
+**Implementation Details:**
+
+```go
+func (tree *BPlusTree) Begin() error {
+    // Start explicit transaction (not auto-commit)
+    _, err := tree.txManager.Begin(tree)
+    return err
+}
+
+func (tree *BPlusTree) Commit() error {
+    // Write all tracked pages to WAL, then flush to database
+    return tree.txManager.Commit()
+}
+
+func (tree *BPlusTree) Rollback() error {
+    // Restore original page states, discard all changes
+    return tree.txManager.Rollback()
+}
+```
+
+**Algorithm Flow:**
+
+**Begin:**
 
 ```
 function Begin():
+    if activeTx != null:
+        error("transaction already active")
+
     tx = new Transaction()
     tx.modifiedPages = {}
     tx.originalPages = {}
+    tx.autoCommit = false  // Explicit transaction
     activeTx = tx
+```
 
+**Commit:**
+
+```
 function Commit():
     // Write-Ahead: Log all changes to WAL first
     for each (pageID, page) in modifiedPages:
@@ -599,7 +734,12 @@ function Commit():
         writePageToFile(pageID, page)
 
     activeTx = null
+    autoCommit = false
+```
 
+**Rollback:**
+
+```
 function Rollback():
     // Restore original pages
     for each (pageID, originalPage) in originalPages:
@@ -611,58 +751,213 @@ function Rollback():
             delete pages[pageID]
 
     activeTx = null
-
-function Recover():
-    // Replay WAL entries
-    for each entry in WAL:
-        restorePage(entry.PageID, entry.PageData)
-        writePageToFile(entry.PageID, page)
+    autoCommit = false
 ```
 
-**Implementation Details:**
+**Benefits:**
 
-- **WAL File Format**: Each entry contains LSN, entry type, page ID, and serialized page data
-- **LSN (Log Sequence Number)**: Monotonically increasing sequence number for ordering log entries
-- **Checkpointing**: Periodically truncate WAL after ensuring all changes are flushed to main database
-- **Page Tracking**: Original page states are saved for rollback capability
-- **Transaction States**: Active, Committed, RolledBack
+- **Atomicity**: Multiple operations succeed or fail together
+- **Consistency**: Database remains in valid state even if some operations fail
+- **Error Handling**: Can rollback entire transaction if any operation fails
+- **Multi-Operation Queries**: Support complex operations that require multiple steps
 
 **Usage Example:**
 
 ```go
 tree, _ := NewBPlusTree(pager)
 
-// Start transaction
+// Begin explicit transaction
 tree.Begin()
 
-// Perform multiple operations
+// Perform multiple operations atomically
 tree.Insert(key1, value1)
 tree.Update(key2, newValue2)
 tree.Delete(key3)
+tree.Insert(key4, value4)
 
 // Either commit or rollback
-if success {
-    tree.Commit()  // All changes persist
+if allOperationsSuccessful {
+    tree.Commit()  // All 4 operations persist together
 } else {
-    tree.Rollback()  // All changes discarded
+    tree.Rollback()  // All 4 operations are discarded
 }
+```
 
-// Create checkpoint to truncate WAL
-tree.Checkpoint()
+**Interaction with Auto-Commit:**
+
+When operations are called within an explicit transaction, they use the existing transaction instead of creating auto-commit ones:
+
+```go
+tree.Begin()              // Explicit transaction started
+tree.Insert(key1, value1) // Uses explicit transaction (not auto-commit)
+tree.Update(key2, value2) // Uses explicit transaction (not auto-commit)
+tree.Commit()             // Commits both operations atomically
+```
+
+---
+
+#### 7.3. **Write-Ahead Logging (WAL) Implementation**
+
+**WAL File Format:**
+
+Each WAL entry contains:
+
+- **LSN (Log Sequence Number)**: 8 bytes - Monotonically increasing sequence number
+- **Entry Type**: 1 byte - Insert, Update, Delete, or Checkpoint
+- **Page ID**: 8 bytes - Identifier of the modified page
+- **Data Length**: 4 bytes - Size of page data
+- **Page Data**: Variable (padded to page size) - Complete serialized page
+
+**What Gets Logged:**
+
+The WAL stores **complete page snapshots** (physical logging), not individual operations. For example, a single `Insert()` operation that causes a split will log:
+
+- Modified leaf page (left half after split)
+- New leaf page (right half after split)
+- Modified parent internal page (with new separator key)
+- Possibly new internal pages (if parent also split)
+- Meta page (if root changed)
+
+This approach matches how real databases log changes at the page level for efficient recovery.
+
+**Recovery Process:**
+
+```go
+function Recover():
+    // On database open, replay WAL entries
+    for each entry in WAL:
+        if entry.Type == Checkpoint:
+            break  // Checkpoint marks end of recoverable entries
+
+        // Restore page from WAL entry
+        page = deserialize(entry.PageData)
+        pages[entry.PageID] = page
+
+        // Write to main database file
+        writePageToFile(entry.PageID, page)
+```
+
+**Checkpointing:**
+
+Periodically, create a checkpoint to truncate the WAL:
+
+```go
+tree.Checkpoint()  // Writes checkpoint entry, truncates WAL
+```
+
+This ensures the WAL doesn't grow indefinitely. In production systems, checkpoints are typically created:
+
+- After a certain number of transactions
+- After a certain time period
+- When WAL reaches a certain size
+
+---
+
+#### 7.4. **Transaction States and Lifecycle**
+
+**Transaction States:**
+
+1. **Active**: Transaction is in progress, modifications are being tracked
+2. **Committed**: Transaction completed successfully, changes persisted
+3. **RolledBack**: Transaction was aborted, changes discarded
+
+**Transaction Lifecycle:**
+
+```
+[No Transaction]
+    |
+    | Insert/Update/Delete (no Begin)
+    |
+    v
+[Auto-Commit Transaction Created]
+    |
+    | Track page modifications
+    |
+    v
+[Auto-Commit Transaction Committed]
+    |
+    | Write to WAL → Flush to DB
+    |
+    v
+[No Transaction]
+
+OR
+
+[No Transaction]
+    |
+    | Begin()
+    |
+    v
+[Explicit Transaction Active]
+    |
+    | Insert/Update/Delete operations
+    |
+    v
+[Commit() OR Rollback()]
+    |
+    | Commit: Write to WAL → Flush to DB
+    | Rollback: Restore original pages
+    |
+    v
+[No Transaction]
+```
+
+---
+
+**Crash Safety Guarantee:**
+
+MiniDB guarantees that **every single operation is crash-safe**. This means:
+
+1. **During Operation (Before Commit)**: If a crash occurs while modifying pages/nodes in memory, the main database file remains unchanged. On restart, the tree is in the same state as before the operation started.
+
+2. **During Commit (After WAL Write)**: If a crash occurs after WAL entries are written but before database file writes complete, the WAL contains all necessary information. On restart, recovery automatically replays WAL entries to restore the committed state.
+
+3. **After Commit**: Once commit completes, both WAL and database file are updated and synced. The operation is fully durable.
+
+**Implementation Details:**
+
+- **Write-Ahead Logging**: All page modifications are written to WAL **first** (with `Sync()`), then to the database file. This ensures that if a crash occurs, committed changes can be recovered.
+
+- **No Direct Writes**: All database writes (including meta page updates) go through the transaction commit process. No pages are written directly to disk during operations—they are only tracked in memory until commit.
+
+- **Atomic Commit**: The commit process is atomic: either all pages are written to WAL and database, or none are (if commit fails, transaction is rolled back).
+
+**Example Crash Scenarios:**
+
+```go
+// Scenario 1: Crash before commit
+tree.Insert(key, value)  // Modifies pages in memory, tracks changes
+// ... crash occurs before defer commit runs ...
+// Result: No WAL entries, no DB writes → Tree unchanged on restart ✓
+
+// Scenario 2: Crash during commit (after WAL, before DB)
+tree.Insert(key, value)  // Commit starts
+// WAL written and synced ✓
+// ... crash occurs before DB write ...
+// Result: WAL has entries → Recovery restores committed state ✓
+
+// Scenario 3: Crash after commit
+tree.Insert(key, value)  // Commit completes
+// WAL written ✓, DB written ✓, both synced ✓
+// ... crash occurs ...
+// Result: Both WAL and DB updated → State fully persisted ✓
 ```
 
 **Benefits:**
 
+- **Crash Recovery**: Every operation is recoverable via WAL, matching real database behavior
 - **Atomicity**: Multi-operation transactions either fully succeed or fully fail
 - **Durability**: Committed changes survive crashes via WAL replay
 - **Consistency**: Database remains in valid state even after rollback
-- **Recovery**: Automatic recovery from crashes by replaying WAL
+- **Real-World Alignment**: Matches how PostgreSQL, SQLite, and MySQL handle transactions
+- **Guaranteed Safety**: No partial writes—either the entire operation persists or nothing changes
 
 **Limitations:**
 
 - Single transaction at a time (no nested transactions)
 - No concurrent transaction support (requires locking for multi-threaded use)
 - WAL file grows until checkpoint (in production, would use WAL rotation)
+- Rollback uses reference-based page tracking (deep copying would be ideal for complex scenarios)
 
 ---
 
