@@ -1,10 +1,57 @@
 # MiniDB: B+Tree Database Implementation
 
 **Date:** January 13, 2026  
-**Author:** Lam Le Vu Ngan  
+**Author:** Lam Le Vu Ngan
 **Current Version:** 4.0 (Transaction Support)
 
-> 📝 **See [CHANGELOG.md](CHANGELOG.md) for complete development history and version evolution**
+> **See [CHANGELOG.md](CHANGELOG.md) for complete development history and version evolution**
+
+## Table of Contents
+
+- [MiniDB: B+Tree Database Implementation](#minidb-btree-database-implementation)
+  - [Table of Contents](#table-of-contents)
+  - [Overview](#overview)
+  - [Data Model](#data-model)
+    - [Type System](#type-system)
+      - [**Column Types**](#column-types)
+      - [**CompositeKey**](#compositekey)
+      - [**Record**](#record)
+      - [**Type Aliases**](#type-aliases)
+  - [B+Tree Structure \& Constants](#btree-structure--constants)
+    - [Core Constants](#core-constants)
+    - [Minimum Keys Calculation](#minimum-keys-calculation)
+    - [Page Types](#page-types)
+    - [Page Structure](#page-structure)
+      - [**PageHeader (56 bytes)** - Common to all page types](#pageheader-56-bytes---common-to-all-page-types)
+      - [**MetaPage Structure**](#metapage-structure)
+      - [**InternalPage Structure**](#internalpage-structure)
+      - [**LeafPage Structure**](#leafpage-structure)
+  - [Page Layout Calculation](#page-layout-calculation)
+    - [File Structure](#file-structure)
+    - [B+Tree Invariants Maintained](#btree-invariants-maintained)
+  - [What Was Implemented](#what-was-implemented)
+    - [Data Model Features](#data-model-features)
+    - [1. **Load from Disk Functionality**](#1-load-from-disk-functionality)
+    - [2. **Search Operation**](#2-search-operation)
+    - [3. **Range Query Operation**](#3-range-query-operation)
+    - [4. **Update Operation**](#4-update-operation)
+    - [5. **Delete Operation with Rebalancing**](#5-delete-operation-with-rebalancing)
+    - [6. **Page Persistence Enhancement**](#6-page-persistence-enhancement)
+    - [7. **Transaction Support with Write-Ahead Logging (WAL)**](#7-transaction-support-with-write-ahead-logging-wal)
+  - [Checklist: Completed Features](#checklist-completed-features)
+    - [Core Operations](#core-operations)
+    - [Transaction \& Durability](#transaction--durability)
+    - [Tree Maintenance](#tree-maintenance)
+    - [Testing](#testing)
+  - [Next Steps: Priority Ordered](#next-steps-priority-ordered)
+    - [High Priority](#high-priority)
+    - [Medium Priority](#medium-priority)
+    - [Low Priority](#low-priority)
+  - [Technical Debt / Considerations](#technical-debt--considerations)
+  - [Performance Characteristics](#performance-characteristics)
+  - [Files Modified/Created](#files-modifiedcreated)
+
+---
 
 ## Overview
 
@@ -17,7 +64,8 @@ This document presents the architecture and implementation of a file-backed B+Tr
 - Proper delete implementation with borrow and merge operations
 - Range query support leveraging leaf-level linked list
 - Page-based storage architecture with 4KB pages
-- Comprehensive test coverage with both binary and human-readable outputs
+- Transaction support with Write-Ahead Logging (WAL) for ACID guarantees
+- Comprehensive test coverage (see [TESTING.md](TESTING.md) for details)
 
 ---
 
@@ -497,81 +545,7 @@ function FlushAll():
 
 ---
 
-### 7. **Comprehensive Test Suite with Visualization**
-
-**Test Infrastructure:**
-
-The test suite includes a sophisticated test context system that automatically generates:
-
-- **Binary database files** (`.db`) - Persistent storage for verification
-- **Visual tree diagrams** (`.db.png`) - Graphical representation using Python matplotlib
-- **Human-readable descriptions** (`description.txt`) - Test steps, operations, and expected results
-
-**Visualization Features:**
-
-- Automatic tree structure visualization using `visualize_tree.py`
-- Visual representation of internal nodes, leaf nodes, and their relationships
-- Fallback to text-based dumps if Python/matplotlib unavailable
-- Each test generates a PNG image showing the B+Tree structure after operations
-
-**Tests Implemented:**
-
-| Test Category    | Test Name                       | Purpose                   | Scenario                                                 |
-| ---------------- | ------------------------------- | ------------------------- | -------------------------------------------------------- |
-| **Insert Tests** | `TestInsertWithoutSplit`        | Basic insertion           | Insert 3 keys without triggering page split              |
-|                  | `TestInsertWithSplit`           | Leaf split                | Insert 5 keys triggering leaf split and root creation    |
-|                  | `TestInsertManyComplex`         | Complex splits            | Insert many keys causing multiple splits and tree growth |
-| **Persistence**  | `TestLoadFromDisk`              | Disk persistence          | Insert data, close DB, reopen, verify data intact        |
-| **Search Tests** | `TestSearch`                    | Point queries             | Search for existing and non-existing keys                |
-| **Range Query**  | `TestRangeQuerySimple`          | Basic range scan          | Query subset [30, 60] from larger dataset                |
-|                  | `TestRangeQueryEdgeCases`       | Boundary conditions       | Empty range, single key, full range, out-of-bounds       |
-|                  | `TestRangeQueryAcrossPages`     | Multi-page traversal      | Range spanning multiple leaf nodes via linked list       |
-| **Update Tests** | `TestUpdateSimple`              | In-place update           | Modify value without triggering rebalancing              |
-|                  | `TestUpdateNonExistentKey`      | Error handling            | Verify error when updating non-existent key              |
-|                  | `TestUpdateWithLargeValue`      | Fallback to delete+insert | Update with value exceeding page capacity                |
-|                  | `TestUpdateMultiple`            | Batch modifications       | Multiple updates maintaining tree consistency            |
-| **Delete Tests** | `TestDeleteSimple`              | Basic delete              | Delete from leaf without triggering rebalancing          |
-|                  | `TestDeleteWithBorrowFromRight` | Borrow from right         | Create underflow, borrow key from right sibling          |
-|                  | `TestDeleteWithBorrowFromLeft`  | Borrow from left          | Create underflow, borrow key from left sibling           |
-|                  | `TestDeleteWithMerge`           | Merge operation           | Delete keys requiring node merge with sibling            |
-|                  | `TestDeleteComplex`             | Multiple deletes          | Delete 6 keys from 16-key tree in specific order         |
-|                  | `TestDeleteAll`                 | Edge case                 | Delete all keys, verify tree becomes empty (root = 0)    |
-
-**Test Context System:**
-
-Each test uses a `TestContext` helper that:
-
-- Creates isolated test directory under `testdata/<TestName>/`
-- Tracks all operations with natural language descriptions
-- Records expected results for documentation
-- Automatically generates description files
-- Invokes visualization script for PNG generation
-
-**Test Output Structure:**
-
-```
-testdata/
-  TestInsertWithSplit/
-    TestInsertWithSplit.db         # Binary database file
-    TestInsertWithSplit.db.png     # Visual tree diagram
-    description.txt                # Test documentation
-  TestDeleteWithMerge/
-    TestDeleteWithMerge.db
-    TestDeleteWithMerge.db.png
-    description.txt
-  ...
-```
-
-**Test Coverage:**
-
-- **18 comprehensive tests** covering all major operations
-- **1,650+ lines** of test code with helper functions
-- **Automatic documentation** generation for each test
-- **Visual verification** through tree structure diagrams
-
----
-
-### 8. **Transaction Support with Write-Ahead Logging (WAL)**
+### 7. **Transaction Support with Write-Ahead Logging (WAL)**
 
 **Overview:** Full ACID transaction support with Write-Ahead Logging for durability and crash recovery. This feature enables multi-operation atomicity, consistency, and durability guarantees—critical for production database systems.
 
@@ -721,12 +695,15 @@ tree.Checkpoint()
 - **Parent Pointer Updates** - Maintain correct parent-child relationships
 - **Sibling Link Maintenance** - Update prev/next pointers during operations
 
-### Test Coverage
+### Testing
+
+> **For comprehensive testing documentation, see [TESTING.md](TESTING.md)**
 
 - **18 Comprehensive Tests** - All operations tested with edge cases
 - **Visual Tree Diagrams** - PNG images showing B+Tree structure
 - **Automatic Documentation** - Generated description files for each test
 - **Binary Storage Validation** - Proper serialization/deserialization
+- **Test Infrastructure** - Ready for future HTML/CSS-based UI
 
 ---
 
@@ -830,6 +807,7 @@ tree.Checkpoint()
 **Tests:**
 
 - `tree_test.go` - 18 comprehensive tests with visualization (1,650+ lines)
+- `TESTING.md` - Complete testing documentation
 - Helper functions: K(), V(), KI(), VS() for test readability
 - TestContext system for automatic documentation generation
 
@@ -838,19 +816,8 @@ tree.Checkpoint()
 - `visualize_tree.py` - Python script for tree visualization (500+ lines)
 - Uses matplotlib to generate PNG diagrams of B+Tree structure
 - Parses binary database format directly
-
-**Test Output:**
-
-- `testdata/<TestName>/*.db` - Binary database files
-- `testdata/<TestName>/*.db.png` - Visual tree structure diagrams
-- `testdata/<TestName>/description.txt` - Test documentation
+- Designed for future HTML/CSS conversion
 
 **Total Code:** ~2,700+ lines (implementation + tests + visualization)
 
-**Test Statistics:**
-
-- 18 total tests with full visualization
-- 100% pass rate
-- Coverage: Insert, Search, Delete, Update, Range Query, Load, Edge Cases, Multi-column data
-- Automatic generation of test documentation and tree diagrams
-- Each test produces 3 artifacts: .db file, .png diagram, description.txt
+> **See [TESTING.md](TESTING.md) for detailed test documentation, test categories, and future HTML/CSS UI plans**

@@ -2,22 +2,58 @@
 
 This document tracks the evolution of the MiniDB B+Tree database implementation, documenting major development phases and feature additions.
 
+## Table of Contents
+
+- [Version 4.0 - Transaction Support & Write-Ahead Logging (Current)](#version-40---transaction-support--write-ahead-logging-current)
+  - [Major Features Added](#major-features-added)
+  - [Implementation Details](#implementation-details)
+  - [Real-World Context](#real-world-context)
+  - [Files Added](#files-added)
+  - [Files Modified](#files-modified)
+- [Version 3.0 - Composite Keys & Structured Records](#version-30---composite-keys--structured-records)
+  - [Major Features Added](#major-features-added-1)
+  - [Implementation Details](#implementation-details-1)
+  - [Benefits](#benefits)
+  - [Files Added](#files-added-1)
+  - [Files Modified](#files-modified-1)
+- [Version 2.0 - Disk Persistence & Load from Disk](#version-20---disk-persistence--load-from-disk)
+  - [Major Features Added](#major-features-added-2)
+  - [Implementation Details](#implementation-details-2)
+  - [Benefits](#benefits-1)
+  - [Files Modified](#files-modified-2)
+- [Version 1.0 - Core B+Tree Implementation](#version-10---core-btree-implementation)
+  - [Major Features Implemented](#major-features-implemented)
+  - [Implementation Details](#implementation-details-3)
+  - [Files Created](#files-created)
+- [Development Timeline](#development-timeline)
+- [Future Roadmap](#future-roadmap)
+  - [Version 5.0 - Concurrent Access (Planned)](#version-50---concurrent-access-planned)
+  - [Version 6.0 - Performance Optimizations (Planned)](#version-60---performance-optimizations-planned)
+  - [Version 7.0 - Advanced Features (Planned)](#version-70---advanced-features-planned)
+- [Statistics](#statistics)
+  - [Code Growth](#code-growth)
+  - [Test Coverage](#test-coverage)
+  - [Features by Version](#features-by-version)
+- [Notes](#notes)
+
 ---
 
 ## Version 4.0 - Transaction Support & Write-Ahead Logging (Current)
 
 **Date:** January 2026  
-**Status:** ✅ Completed
+**Status:** Completed
 
 ### Major Features Added
 
 - **Transaction Support**
+
   - `Begin()` - Start a new transaction
   - `Commit()` - Commit all changes atomically
   - `Rollback()` - Rollback all changes in transaction
   - Multi-operation atomicity guarantees
 
 - **Write-Ahead Logging (WAL)**
+
   - WAL file (`.wal` extension) for durability
   - Log Sequence Numbers (LSN) for ordering
   - Automatic crash recovery via WAL replay
@@ -41,16 +77,19 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
 ### Real-World Context
 
 This implementation follows industry-standard patterns:
+
 - **PostgreSQL**: WAL for durability (pg_xlog/pg_wal)
 - **SQLite**: WAL mode for crash recovery
 - **MySQL InnoDB**: Redo log for durability
 - **ARIES Algorithm**: Industry-standard recovery algorithm principles
 
 ### Files Added
+
 - `wal.go` - Write-Ahead Logging implementation
 - `transaction.go` - Transaction management
 
 ### Files Modified
+
 - `tree.go` - Added transaction support, WAL integration
 - `IMPLEMENTATION.md` - Added transaction documentation section
 
@@ -59,11 +98,12 @@ This implementation follows industry-standard patterns:
 ## Version 3.0 - Composite Keys & Structured Records
 
 **Date:** January 2026  
-**Status:** ✅ Completed
+**Status:** Completed
 
 ### Major Features Added
 
 - **Composite Keys**
+
   - Multi-column primary keys support
   - Lexicographic comparison (column-by-column)
   - Variable-length serialization
@@ -91,9 +131,11 @@ This implementation follows industry-standard patterns:
 - Efficient variable-length encoding
 
 ### Files Added
+
 - `types.go` - CompositeKey and Record type definitions
 
 ### Files Modified
+
 - `tree.go` - Updated to use CompositeKey and Record
 - `leaf_page.go` - Updated serialization
 - `internal_page.go` - Updated serialization
@@ -104,11 +146,12 @@ This implementation follows industry-standard patterns:
 ## Version 2.0 - Disk Persistence & Load from Disk
 
 **Date:** January 2026  
-**Status:** ✅ Completed
+**Status:** Completed
 
 ### Major Features Added
 
 - **Load from Disk**
+
   - Full tree reconstruction from persistent storage
   - Recursive page loading from root
   - Automatic tree structure restoration
@@ -136,6 +179,7 @@ This implementation follows industry-standard patterns:
 - Foundation for crash recovery
 
 ### Files Modified
+
 - `tree.go` - Added Load() and loadPage() methods
 - `page_manager.go` - Added FlushAll() method
 
@@ -144,11 +188,12 @@ This implementation follows industry-standard patterns:
 ## Version 1.0 - Core B+Tree Implementation
 
 **Date:** January 2026  
-**Status:** ✅ Completed
+**Status:** Completed
 
 ### Major Features Implemented
 
 - **B+Tree Structure**
+
   - Internal nodes for routing
   - Leaf nodes for data storage
   - Order = 4 (max 3 keys per node)
@@ -156,6 +201,7 @@ This implementation follows industry-standard patterns:
   - Balanced tree invariants
 
 - **Core Operations**
+
   - **Insert**: O(log n) with automatic node splitting
   - **Search**: O(log n) point queries
   - **Delete**: Full deletion with rebalancing (borrow/merge)
@@ -179,6 +225,7 @@ This implementation follows industry-standard patterns:
 - Page header with metadata
 
 ### Files Created
+
 - `tree.go` - Core B+Tree implementation
 - `node.go` - Node type definitions
 - `page_header.go` - Page header structure
@@ -219,18 +266,21 @@ Phase 4: Transactions (v4.0) ← Current
 ## Future Roadmap
 
 ### Version 5.0 - Concurrent Access (Planned)
+
 - Page-level locking
 - Multiple readers, single writer
 - B-link tree variant consideration
 - Transaction isolation levels
 
 ### Version 6.0 - Performance Optimizations (Planned)
+
 - Buffer pool with LRU eviction
 - Bulk loading for sorted data
 - Key compression
 - Index statistics
 
 ### Version 7.0 - Advanced Features (Planned)
+
 - MVCC (Multi-Version Concurrency Control)
 - Snapshot isolation
 - WAL segment rotation
@@ -241,18 +291,21 @@ Phase 4: Transactions (v4.0) ← Current
 ## Statistics
 
 ### Code Growth
+
 - **v1.0**: ~1,200 lines (core implementation)
 - **v2.0**: ~1,400 lines (+200 lines)
 - **v3.0**: ~2,000 lines (+600 lines)
 - **v4.0**: ~2,500 lines (+500 lines)
 
 ### Test Coverage
+
 - **v1.0**: 18 comprehensive tests
 - **v2.0**: Load from disk tests
 - **v3.0**: Multi-column key/value tests
 - **v4.0**: Transaction tests (pending)
 
 ### Features by Version
+
 - **v1.0**: 5 core operations
 - **v2.0**: +1 persistence feature
 - **v3.0**: +2 type system features
