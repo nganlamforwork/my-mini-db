@@ -1,139 +1,253 @@
-# MiniDB — B+Tree (in-memory) Documentation
+# MiniDB - B+Tree Database with Composite Keys
 
-Date: 2025-12-21
-Version: 0.1
+A file-backed B+Tree database implementation in Go featuring **composite keys** and **structured row values**, supporting full CRUD operations with persistent storage.
 
-## Overview
+## Features
 
-This repository contains a compact, educational B+Tree implementation focused on in-memory logic with optional page serialization APIs. The implementation emphasizes correctness of insertions, node splits, parent/child relationships, and basic per-page space accounting. Durability (WAL and on-disk pager) is intentionally out-of-scope for this version; serialization routines write to in-memory buffers for testing and future persistence extensions.
+### ✅ Composite Keys & Structured Records
 
-Key goals for this version:
+- **Multi-column primary keys** - Support for composite keys like `(userID, timestamp)`
+- **Typed columns** - Int64, String, Float64, Boolean
+- **Variable-length serialization** - Efficient binary encoding
+- **Type-safe comparisons** - Lexicographic ordering for composite keys
 
-- Clear, testable in-memory B+Tree operations (insert, split, traversal).
-- Stable serialization APIs for pages (`WriteToBuffer` / `ReadFromBuffer`).
-- Page header metadata including `KeyCount`, `FreeSpace`, `ParentPage`, and sibling links for leaves.
+### ✅ Complete B+Tree Operations
 
-## Important files
+- **Insert** - O(log n) with automatic node splitting
+- **Search** - O(log n) point queries
+- **Delete** - O(log n) with borrow/merge rebalancing
+- **Update** - O(log n) smart in-place updates
+- **Range Query** - O(log n + k) using leaf-level linked list
 
-- `page_header.go` — `PageHeader` type and header serialization.
-- `meta_page.go` — `MetaPage` and global metadata serialization.
-- `node.go` — type definitions for `InternalPage`, `LeafPage`, and constructors.
-- `internal_page.go` — internal node helpers, split logic, and serialization.
-- `leaf_page.go` — leaf helpers, split logic, payload accounting, and serialization.
-- `page_manager.go` — in-memory `PageManager` allocator used by tests.
-- `tree.go` — `BPlusTree` high-level operations (find, insert, root management).
-- `tree_test.go` — comprehensive tests for insert and invariant checks.
+### ✅ Persistence & Reliability
 
-## Key constants and types
+- **Disk-backed storage** - 4KB page-based architecture
+- **Load from disk** - Resume operations from saved state
+- **Write-back caching** - In-memory pages with FlushAll()
+- **Test coverage** - 18 comprehensive tests with 100% pass rate
 
-- `ORDER` — B+Tree order (max children per internal node). Current repo: `ORDER = 4`.
-- `KeyType` — integer type used for keys. Serialization uses 8-byte int (int64) representation.
-- `ValueType` — alias for string values. Values are serialized as length-prefixed byte arrays.
-- `DefaultPageSize` — 4096 bytes. Used for computing `FreeSpace` on pages.
-- `PageHeaderSize` — fixed header size (56 bytes) used to compute available payload per page.
+## Quick Start
 
-## Page layout & serialization
+### Basic Usage (Single-Column)
 
-All pages begin with a `PageHeader` written in a stable, big-endian order. Consumers MUST decode fields in the same order. The header fields include page id, parent id, sibling links, page type, `KeyCount`, `FreeSpace`, and `LSN`.
+```go
+// Create database
+pm := NewPageManagerWithFile("test.db", true)
+defer pm.Close()
 
-Payload formats:
+tree := &BPlusTree{
+    pager: pm,
+    meta:  pm.ReadMeta(),
+}
 
-- `MetaPage`: header + `RootPage (uint64)` + `PageSize (uint32)` + `Order (uint16)` + `Version (uint16)`.
-- `InternalPage`: header + keys (each int64) + children (each uint64). The number of keys equals `Header.KeyCount`; number of children equals `Header.KeyCount + 1`.
-- `LeafPage`: header + keys (each int64) + values (for each value: `uint32` length followed by raw bytes). The number of keys equals `Header.KeyCount`.
+// Insert data
+tree.Insert(K(10), V("Hello"))
+tree.Insert(K(20), V("World"))
 
-APIs implemented for serialization:
+// Search
+value, err := tree.Search(K(10))
+if err == nil {
+    fmt.Println(VS(value)) // Output: Hello
+}
 
-- `WriteToBuffer(buf *bytes.Buffer)` and `ReadFromBuffer(buf *bytes.Reader)` for `PageHeader`, `MetaPage`, `InternalPage`, and `LeafPage`.
+// Range query
+keys, values, err := tree.SearchRange(K(10), K(20))
 
-## In-memory structures & invariants
+// Update
+tree.Update(K(10), V("Updated"))
 
-InternalPage:
+// Delete
+tree.Delete(K(10))
+```
 
-- `Header PageHeader`
-- `keys []KeyType`
-- `children []uint64` (child page IDs)
-- Invariant: `len(children) == len(keys) + 1`.
+### Advanced Usage (Composite Keys)
 
-LeafPage:
+```go
+// Composite key: (userID, timestamp)
+key := NewCompositeKey(
+    NewInt(1001),       // userID
+    NewInt(1704067200), // timestamp
+)
 
-- `Header PageHeader`
-- `keys []KeyType`
-- `values []ValueType`
-- Invariant: `len(keys) == len(values) == Header.KeyCount`.
+// Structured row: (name, age, email, active)
+row := NewRecord(
+    NewString("John Doe"),
+    NewInt(30),
+    NewString("john@example.com"),
+    NewBool(true),
+)
 
-Header invariants:
+// Insert
+tree.Insert(key, row)
 
-- `Header.KeyCount` must always match the actual number of keys.
-- `Header.FreeSpace` is kept as `DefaultPageSize - PageHeaderSize - usedPayloadBytes` (uint16). For internal pages used bytes are estimated as `8*len(keys) + 8*len(children)`; for leaves the exact payload is `8*len(keys) + sum(4 + len(value))`.
+// Search
+value, _ := tree.Search(key)
+fmt.Println(value) // {John Doe, 30, john@example.com, true}
+```
 
-## Insert algorithm (detailed flow)
+## Architecture
 
-1. If the tree is empty (`rootPageID == 0`), allocate a new leaf via `PageManager.NewLeaf()`, insert the key/value, set `Header.KeyCount`, and set `tree.rootPageID`.
-2. Locate the target leaf using `findLeaf(key)`:
-   - Traverse from root.
-   - In each `InternalPage`, perform a binary search to find the last key `<= searchKey`. Follow `children[pos+1]` (or `children[0]` if all keys are greater).
-   - Record the path of internal page IDs for later upward propagation.
-3. Check for duplicate keys in the leaf (reject duplicates).
-4. Call `insertIntoLeaf(page, key, value)`:
-   - Insert the key/value in sorted order (slice insert).
-   - Update `Header.KeyCount`.
-   - Recompute `Header.FreeSpace` using `computeLeafPayloadSize`.
-   - If the single `value` size exceeds page payload capacity, return an error (this version does not store out-of-line values).
-5. Determine overflow:
-   - If `len(keys) > MAX_KEYS` (ORDER - 1) OR payload usage > payload capacity, split the leaf using `splitLeaf(left, newRight)`.
-6. `splitLeaf(left, right)`:
-   - Compute midpoint; move right-half keys and values into `newRight`.
-   - Update sibling links (`NextPage`/`PrevPage`).
-   - Set `Header.KeyCount` and recompute `Header.FreeSpace` for both pages.
-   - Return the separator key (first key of the right page) to be inserted into parent.
-7. Propagate split upward using the recorded path:
-   - For each parent ID from the bottom of the path, call `insertIntoInternal(parent, separatorKey, newChildPageID)`.
-   - If the parent overflows (>= ORDER keys), call `splitInternal(parent, newParentRight, pm)`.
-8. `splitInternal(page, newPage, pm)`:
-   - Choose mid index and promote `midKey`.
-   - Move keys and corresponding children (mid+1 onward) to `newPage`.
-   - Truncate left page to left half.
-   - Update `Header.KeyCount` on both pages.
-   - For each moved `childID`, use `pm.Get(childID)` and set child's `Header.ParentPage` = `newPage.Header.PageID`.
-   - Recompute `Header.FreeSpace` for both internal pages.
-   - Return `midKey` as the next separator to push upward.
-9. If the root splits, create a new internal `newRoot` with two children (left & right) and set their `Header.ParentPage` fields. Update `tree.rootPageID`.
+### Type System
 
-## Free-space tracking and large values
+```go
+// Column types
+TypeInt    = 0  // int64
+TypeString = 1  // string
+TypeFloat  = 2  // float64
+TypeBool   = 3  // bool
 
-- This version computes per-page `FreeSpace` conservatively and enforces that single values cannot exceed page payload capacity. If large-value support is required, consider:
-  - Storing large values out-of-line in a value log and storing references in leaves.
-  - Implementing compression or fragmentation.
+// Composite key
+type CompositeKey struct {
+    Values []Column
+}
 
-## Tests
+// Record value
+type Record struct {
+    Columns []Column
+}
+```
 
-- `tree_test.go` contains tests that verify:
-  - Insertions without split keep the tree as a single leaf root.
-  - Inserts that exceed capacity split leaves and propagate correctly to internal nodes.
-  - Parent pointers (`Header.ParentPage`) are maintained for children.
-  - `Header.KeyCount` and `Header.FreeSpace` are consistent with actual payload.
-  - Multi-insert scenarios yield sorted leaf scans and maintain invariants.
+### Page Structure
 
-## Reimplementation checklist (step-by-step)
+- **MetaPage** (Page 1): Root pointer, configuration
+- **InternalPage**: Routing keys + child pointers
+- **LeafPage**: Data keys + row values + sibling links
 
-1. Implement `PageHeader` with stable serialization.
-2. Implement `MetaPage` and serialize metadata.
-3. Define `InternalPage` and `LeafPage` with constructors that initialize `FreeSpace`.
-4. Implement `PageManager` (in-memory map) with `NewLeaf`, `NewInternal`, and `Get`.
-5. Implement `insertIntoLeaf` and `insertIntoInternal` helpers.
-6. Implement `splitLeaf` and `splitInternal` — ensure moved children's `ParentPage` are updated.
-7. Implement `findLeaf` and `BPlusTree.Insert` using the flow above.
-8. Add unit tests for structural invariants and serialization round-trip.
+### Constants
 
-## Next steps / improvements
+- `ORDER = 4` - Maximum 4 children per internal node
+- `MAX_KEYS = 3` - Maximum 3 keys per node
+- `PageSize = 4096` bytes
+- `PageHeader = 56` bytes
 
-- Add a small WAL and persistence layer in `PageManager` to persist pages and restore state.
-- Add support for out-of-line value storage (value log) to handle arbitrarily large values.
-- Improve packing/compaction and precise byte offsets to get exact `FreeSpace` accounting and reduce fragmentation.
-- Add concurrency controls (locks) for multi-threaded access.
-- Add checksums/version tags to serialized pages for corruption detection.
+## Data Model Examples
 
----
+### E-commerce Database
 
-This README documents the current repository state and provides enough detail for someone to reimplement the same flow and invariants. If you prefer a Jupyter notebook version with the same content split into explanatory cells, tell me and I will create it.
+```go
+// Product: (category, productID) -> (name, price, stock, active)
+productKey := NewCompositeKey(
+    NewString("electronics"),
+    NewInt(12345),
+)
+
+productRecord := NewRecord(
+    NewString("Laptop"),
+    NewFloat(999.99),
+    NewInt(50),
+    NewBool(true),
+)
+```
+
+### Time-Series Data
+
+```go
+// Sensor: (deviceID, timestamp) -> (temperature, humidity, battery)
+sensorKey := NewCompositeKey(
+    NewInt(sensor_001),
+    NewInt(1704067200),
+)
+
+sensorData := NewRecord(
+    NewFloat(23.5),  // temperature
+    NewFloat(65.0),  // humidity
+    NewFloat(87.5),  // battery %
+)
+```
+
+## Helper Functions (for tests)
+
+```go
+K(val int64)         // Create single-column key
+V(val string)        // Create single-column value
+KI(key KeyType)      // Extract int from key
+VS(val ValueType)    // Extract string from value
+```
+
+## Implementation Details
+
+See [IMPLEMENTATION.md](IMPLEMENTATION.md) for:
+
+- Complete algorithm descriptions
+- Page layouts and serialization formats
+- B+Tree invariants
+- Rebalancing strategies
+- Performance characteristics
+
+## Testing
+
+```bash
+# Run all tests
+go test -v
+
+# Run specific test
+go test -v -run TestInsertWithSplit
+
+# Check test output
+cat testdata/TestInsertWithSplit.db.txt
+```
+
+All 18 tests pass covering:
+
+- Insert (simple, split, complex)
+- Load from disk
+- Point queries
+- Delete (simple, borrow, merge)
+- Range queries (simple, edge cases, multi-page)
+- Update (simple, non-existent, large value, multiple)
+
+## Performance
+
+| Operation   | Complexity | Notes                    |
+| ----------- | ---------- | ------------------------ |
+| Insert      | O(log n)   | May trigger splits       |
+| Search      | O(log n)   | Single tree traversal    |
+| Delete      | O(log n)   | May trigger borrow/merge |
+| Update      | O(log n)   | In-place when possible   |
+| Range Query | O(log n+k) | k = result count         |
+
+## Project Structure
+
+```
+.
+├── types.go           # CompositeKey and Record types
+├── node.go            # Type aliases
+├── tree.go            # B+Tree operations
+├── leaf_page.go       # Leaf serialization
+├── internal_page.go   # Internal node serialization
+├── page_manager.go    # Disk I/O and caching
+├── tree_test.go       # Test suite
+├── example_types.go   # Usage examples
+├── IMPLEMENTATION.md  # Technical documentation
+└── testdata/          # Test outputs
+```
+
+## Next Steps
+
+See IMPLEMENTATION.md "Next Steps" section for:
+
+**High Priority:**
+
+- Transaction support (Begin/Commit/Rollback)
+- Concurrent access with locking
+
+**Medium Priority:**
+
+- Index statistics
+- Bulk loading optimization
+- Variable-length value optimization
+
+**Low Priority:**
+
+- Key compression
+- Snapshot isolation
+- Performance benchmarks
+
+## License
+
+Educational project - Free to use and modify.
+
+## Author
+
+Lam Le Vu Ngan  
+Date: January 13, 2026

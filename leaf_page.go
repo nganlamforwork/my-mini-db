@@ -2,9 +2,7 @@ package main
 
 import (
 	"bytes"
-	"encoding/binary"
 	"fmt"
-	"io"
 )
 
 // -----------------------------
@@ -20,15 +18,14 @@ import (
 // - Find the insertion index by scanning until the first key >= new key.
 // - Shift existing keys/values to make room and update key count.
 // computeLeafPayloadSize returns the number of payload bytes used by the
-// leaf page (sum of key sizes + value length prefixes + value bytes).
+// leaf page (sum of key sizes + value sizes).
 func computeLeafPayloadSize(p *LeafPage) int {
 	size := 0
-	for range p.keys {
-		size += 8 // key as int64
+	for _, k := range p.keys {
+		size += k.Size()
 	}
 	for _, v := range p.values {
-		size += 4               // uint32 length prefix
-		size += len([]byte(v))  // bytes of value
+		size += v.Size()
 	}
 	return size
 }
@@ -38,18 +35,18 @@ func computeLeafPayloadSize(p *LeafPage) int {
 func insertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
 	// check single-value size against page capacity
 	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-	if len([]byte(value))+4 > payloadCapacity {
-		return fmt.Errorf("value too large for single page: %d bytes", len([]byte(value)))
+	if value.Size() > payloadCapacity {
+		return fmt.Errorf("value too large for single page: %d bytes", value.Size())
 	}
 
 	i := 0
-	for i < len(page.keys) && page.keys[i] < key {
+	for i < len(page.keys) && page.keys[i].Compare(key) < 0 {
 		i++
 	}
 
 	// grow slices by one and shift elements right to make room
-	page.keys = append(page.keys, 0)
-	page.values = append(page.values, "")
+	page.keys = append(page.keys, CompositeKey{})
+	page.values = append(page.values, Record{})
 
 	copy(page.keys[i+1:], page.keys[i:])
 	copy(page.values[i+1:], page.values[i:])
@@ -121,8 +118,8 @@ func splitLeaf(page *LeafPage, newLeaf *LeafPage) KeyType {
 
 // WriteToBuffer serializes the leaf page into buf. Format:
 //  - header (PageHeader.WriteToBuffer)
-//  - keys (KeyCount entries as int64)
-//  - values (for each value: uint32 length, followed by bytes)
+//  - keys (KeyCount entries, each serialized via CompositeKey.WriteTo)
+//  - values (KeyCount entries, each serialized via Record.WriteTo)
 func (p *LeafPage) WriteToBuffer(buf *bytes.Buffer) error {
 	if err := p.Header.WriteToBuffer(buf); err != nil {
 		return err
@@ -130,18 +127,14 @@ func (p *LeafPage) WriteToBuffer(buf *bytes.Buffer) error {
 
 	// keys
 	for _, k := range p.keys {
-		if err := binary.Write(buf, binary.BigEndian, int64(k)); err != nil {
+		if err := k.WriteTo(buf); err != nil {
 			return err
 		}
 	}
 
-	// values: write length then bytes
+	// values
 	for _, v := range p.values {
-		b := []byte(v)
-		if err := binary.Write(buf, binary.BigEndian, uint32(len(b))); err != nil {
-			return err
-		}
-		if _, err := buf.Write(b); err != nil {
+		if err := v.WriteTo(buf); err != nil {
 			return err
 		}
 	}
@@ -151,31 +144,25 @@ func (p *LeafPage) WriteToBuffer(buf *bytes.Buffer) error {
 
 // ReadFromBuffer deserializes a leaf page from buf.
 func (p *LeafPage) ReadFromBuffer(buf *bytes.Reader) error {
-	if err := p.Header.ReadFromBuffer(buf); err != nil {
-		return err
-	}
+	// PageHeader already read by caller (readPageFromFile); payload follows.
 
 	keyCount := int(p.Header.KeyCount)
 	p.keys = make([]KeyType, 0, keyCount)
 	for i := 0; i < keyCount; i++ {
-		var k int64
-		if err := binary.Read(buf, binary.BigEndian, &k); err != nil {
+		k, err := ReadCompositeKeyFrom(buf)
+		if err != nil {
 			return err
 		}
-		p.keys = append(p.keys, KeyType(k))
+		p.keys = append(p.keys, k)
 	}
 
 	p.values = make([]ValueType, 0, keyCount)
 	for i := 0; i < keyCount; i++ {
-		var l uint32
-		if err := binary.Read(buf, binary.BigEndian, &l); err != nil {
+		v, err := ReadRecordFrom(buf)
+		if err != nil {
 			return err
 		}
-		b := make([]byte, l)
-		if _, err := io.ReadFull(buf, b); err != nil {
-			return err
-		}
-		p.values = append(p.values, ValueType(b))
+		p.values = append(p.values, v)
 	}
 
 	return nil

@@ -1,7 +1,8 @@
 package main
 
-type KeyType int
-type ValueType string
+// Type aliases for composite keys and structured rows
+type KeyType = CompositeKey
+type ValueType = Record
 
 const (
 	PageTypeMeta     PageType = 0

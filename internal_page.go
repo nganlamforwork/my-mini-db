@@ -21,12 +21,12 @@ import (
 func insertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
 	i := 0
 	// find the position for the new key (first key >= new key)
-	for i < len(page.keys) && key > page.keys[i] {
+	for i < len(page.keys) && key.Compare(page.keys[i]) > 0 {
 		i++
 	}
 
 	// insert key into keys slice and shift elements to the right
-	page.keys = append(page.keys, 0)
+	page.keys = append(page.keys, CompositeKey{})
 	copy(page.keys[i+1:], page.keys[i:])
 	page.keys[i] = key
 
@@ -82,15 +82,21 @@ func splitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) K
 		}
 	}
 
-	// recompute FreeSpace for internal pages (keys*8 + children*8 payload)
+	// recompute FreeSpace for internal pages (sum of key sizes + children*8 payload)
 	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
-	usedLeft := len(page.keys)*8 + len(page.children)*8
+	usedLeft := len(page.children) * 8
+	for _, k := range page.keys {
+		usedLeft += k.Size()
+	}
 	if usedLeft > payloadCapacity {
 		page.Header.FreeSpace = 0
 	} else {
 		page.Header.FreeSpace = uint16(payloadCapacity - usedLeft)
 	}
-	usedRight := len(newPage.keys)*8 + len(newPage.children)*8
+	usedRight := len(newPage.children) * 8
+	for _, k := range newPage.keys {
+		usedRight += k.Size()
+	}
 	if usedRight > payloadCapacity {
 		newPage.Header.FreeSpace = 0
 	} else {
@@ -102,16 +108,16 @@ func splitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) K
 
 // WriteToBuffer serializes the internal page into buf. Format:
 //  - header (PageHeader.WriteToBuffer)
-//  - keys (KeyCount entries, each written as int64 big-endian)
+//  - keys (KeyCount entries, each serialized via CompositeKey.WriteTo)
 //  - children (KeyCount+1 entries, each uint64 big-endian)
 func (p *InternalPage) WriteToBuffer(buf *bytes.Buffer) error {
 	if err := p.Header.WriteToBuffer(buf); err != nil {
 		return err
 	}
 
-	// write keys as fixed-size int64
+	// write keys
 	for _, k := range p.keys {
-		if err := binary.Write(buf, binary.BigEndian, int64(k)); err != nil {
+		if err := k.WriteTo(buf); err != nil {
 			return err
 		}
 	}
@@ -129,19 +135,17 @@ func (p *InternalPage) WriteToBuffer(buf *bytes.Buffer) error {
 // ReadFromBuffer deserializes an internal page from buf. It expects the
 // same layout used in WriteToBuffer.
 func (p *InternalPage) ReadFromBuffer(buf *bytes.Reader) error {
-	if err := p.Header.ReadFromBuffer(buf); err != nil {
-		return err
-	}
+	// PageHeader is already read by caller (readPageFromFile); payload follows.
 
 	// prepare slices
 	keyCount := int(p.Header.KeyCount)
 	p.keys = make([]KeyType, 0, keyCount)
 	for i := 0; i < keyCount; i++ {
-		var k int64
-		if err := binary.Read(buf, binary.BigEndian, &k); err != nil {
+		k, err := ReadCompositeKeyFrom(buf)
+		if err != nil {
 			return err
 		}
-		p.keys = append(p.keys, KeyType(k))
+		p.keys = append(p.keys, k)
 	}
 
 	// children: keyCount+1 entries

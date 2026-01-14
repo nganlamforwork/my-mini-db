@@ -1,0 +1,52 @@
+############################
+# Go build artifacts
+############################
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.a
+*.o
+*.out
+
+############################
+# Go test & coverage
+############################
+*.test
+*.prof
+*.cover
+coverage.*
+cover.out
+
+############################
+# Go module cache & workspace
+############################
+go.work
+go.work.sum
+
+############################
+# IDE / OS
+############################
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+############################
+# Logs & temp
+############################
+*.log
+tmp/
+temp/
+dist/
+bin/
+
+############################
+# Vendor (optional)
+############################
+vendor/
+
+# Ignore any directory that contains 'test' in its name
+**/*test*/ 
