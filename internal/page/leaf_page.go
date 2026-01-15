@@ -8,6 +8,29 @@ import (
 )
 
 // -----------------------------
+// Binary search utilities
+// -----------------------------
+
+// binarySearchInsertPosition finds the position where a key should be inserted
+// to maintain sorted order. Returns the index where the key should be inserted.
+func binarySearchInsertPosition(keys []KeyType, target KeyType) int {
+	left, right := 0, len(keys)-1
+	pos := len(keys) // Default: insert at end
+
+	for left <= right {
+		mid := (left + right) / 2
+		if keys[mid].Compare(target) >= 0 {
+			pos = mid
+			right = mid - 1 // Continue searching left for first position
+		} else {
+			left = mid + 1 // Search right
+		}
+	}
+
+	return pos
+}
+
+// -----------------------------
 // Insert into leaf
 // -----------------------------
 
@@ -41,10 +64,8 @@ func InsertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
 		return fmt.Errorf("value too large for single page: %d bytes", value.Size())
 	}
 
-	i := 0
-	for i < len(page.Keys) && page.Keys[i].Compare(key) < 0 {
-		i++
-	}
+	// Find insert position using binary search
+	i := binarySearchInsertPosition(page.Keys, key)
 
 	// grow slices by one and shift elements right to make room
 	page.Keys = append(page.Keys, storage.CompositeKey{})

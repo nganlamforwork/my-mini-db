@@ -307,7 +307,6 @@ Offset 8192:  Page 3 (Internal/Leaf)  - 4096 bytes
 2. **Load metadata** - Read meta page (page 1) to obtain root page ID and tree configuration
 3. **Traverse tree structure** - Starting from root, recursively visit each node in depth-first order
 4. **Cache pages** - Load each page into memory hash map, keyed by page ID
-5. **Validate structure** - Ensure all parent-child relationships are consistent during traversal
 
 **Pseudo Code:**
 
@@ -333,14 +332,14 @@ function loadPageRecursively(pageID):
 
 ### 2. **Search Operation**
 
-**Overview:** Standard B+Tree search with O(log n) complexity through binary search at internal nodes and linear scan at leaves. The search traverses from root to leaf using binary search to determine the correct path, then performs a linear search within the target leaf.
+**Overview:** Standard B+Tree search with O(log n) complexity through binary search at both internal nodes and leaves. The search traverses from root to leaf using binary search to determine the correct path, then performs binary search within the target leaf to find the exact key.
 
 **Algorithm Steps:**
 
 1. **Start at root** - Begin traversal from the root page
 2. **Navigate internal nodes** - Binary search keys to determine correct child pointer
 3. **Follow path downward** - Descend through internal nodes until reaching a leaf
-4. **Search leaf** - Linear search in the leaf's sorted key array
+4. **Search leaf** - Binary search in the leaf's sorted key array to find exact match
 5. **Return result** - Return value if found, error otherwise
 
 **Pseudo Code:**
@@ -354,7 +353,7 @@ function Search(key):
 
     while currentPage is not a leaf:
         // Binary search to find rightmost key <= search key
-        pos = binarySearch(currentPage.keys, key)
+        pos = binarySearchLastLessOrEqual(currentPage.keys, key)
 
         if pos == -1:
             // All keys > search key, follow leftmost child
@@ -363,10 +362,10 @@ function Search(key):
             // Follow child after found key
             currentPage = currentPage.children[pos + 1]
 
-    // Search in leaf
-    for each key in currentPage.keys:
-        if key == searchKey:
-            return currentPage.values[index]
+    // Binary search in leaf for exact match
+    index = binarySearch(currentPage.keys, key)
+    if index != -1:
+        return currentPage.values[index]
 
     return error "key not found"
 ```
@@ -375,9 +374,9 @@ function Search(key):
 
 - **Binary Search**: At each internal node, find the rightmost key ≤ search key to determine which child subtree to follow.
 - **Child Selection**: If key found at position `i`, follow `children[i+1]` (subtree with keys ≥ `keys[i]`).
-- **Linear Search**: Once at leaf, scan keys sequentially to find exact match.
+- **Binary Search in Leaves**: Once at leaf, use binary search to find exact match, providing O(log n) instead of O(n) performance.
 
-**Time Complexity:** O(log n) - One path traversal from root to leaf, with binary search at each internal node level.
+**Time Complexity:** O(log n) - One path traversal from root to leaf with binary search at each internal node level, plus binary search within the leaf.
 
 ---
 
@@ -410,11 +409,11 @@ function Insert(key, value):
     // Find target leaf and path to root
     leaf, path = findLeaf(key)
 
-    // Check for duplicate key
-    if key exists in leaf.keys:
+    // Check for duplicate key using binary search
+    if binarySearch(leaf.keys, key) != -1:
         return error "duplicate key"
 
-    // Insert key-value in sorted order
+    // Insert key-value in sorted order (uses binary search to find insert position)
     insertIntoLeaf(leaf, key, value)
 
     // Check if leaf overflows
@@ -605,10 +604,14 @@ function SearchRange(startKey, endKey):
 
     // Scan leaves horizontally using linked list
     while leaf != null:
+        // Find starting position using binary search
+        startIdx = binarySearchFirstGreaterOrEqual(leaf.keys, startKey)
+
         // Collect keys in current leaf that fall within range
-        for each key, value in leaf.keys:
+        for i = startIdx to leaf.keys.length:
+            key = leaf.keys[i]
             if key >= startKey and key <= endKey:
-                results.append((key, value))
+                results.append((key, leaf.values[i]))
 
             // Early exit if we've passed endKey
             if key > endKey:
@@ -653,8 +656,8 @@ function Update(key, newValue):
     // Find leaf containing the key
     leaf = findLeaf(key)
 
-    // Find key index in leaf
-    index = findKeyIndex(leaf, key)
+    // Find key index in leaf using binary search
+    index = binarySearch(leaf.keys, key)
     if index == -1:
         return error "key not found"
 
@@ -709,8 +712,13 @@ function Delete(key):
     // Find leaf containing key and path to root
     leaf, path = findLeaf(key)
 
+    // Find key index in leaf using binary search
+    index = binarySearch(leaf.keys, key)
+    if index == -1:
+        return error "key not found"
+
     // Remove key-value from leaf
-    removeKeyFromLeaf(leaf, key)
+    removeKeyFromLeaf(leaf, key, index)
 
     // Handle empty root
     if leaf is root and leaf.keyCount == 0:

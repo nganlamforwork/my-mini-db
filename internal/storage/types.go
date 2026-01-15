@@ -205,12 +205,7 @@ func NewCompositeKey(columns ...Column) CompositeKey {
 // Compare compares two CompositeKeys
 // Returns: -1 if k < other, 0 if k == other, 1 if k > other
 func (k CompositeKey) Compare(other CompositeKey) int {
-	minLen := len(k.Values)
-	if len(other.Values) < minLen {
-		minLen = len(other.Values)
-	}
-
-	for i := 0; i < minLen; i++ {
+	for i := 0; i < min(len(k.Values), len(other.Values)); i++ {
 		cmp := compareColumns(k.Values[i], other.Values[i])
 		if cmp != 0 {
 			return cmp
@@ -218,10 +213,11 @@ func (k CompositeKey) Compare(other CompositeKey) int {
 	}
 
 	// if all compared columns are equal, compare lengths
-	if len(k.Values) < len(other.Values) {
-		return -1
-	} else if len(k.Values) > len(other.Values) {
-		return 1
+	switch {
+		case len(k.Values) < len(other.Values):
+			return -1
+		case len(k.Values) > len(other.Values):
+			return 1
 	}
 	return 0
 }
@@ -238,42 +234,42 @@ func compareColumns(a, b Column) int {
 	}
 
 	switch a.Type {
-	case TypeInt:
-		aVal := a.Value.(int64)
-		bVal := b.Value.(int64)
-		if aVal < bVal {
-			return -1
-		} else if aVal > bVal {
-			return 1
-		}
-		return 0
-	case TypeString:
-		aVal := a.Value.(string)
-		bVal := b.Value.(string)
-		if aVal < bVal {
-			return -1
-		} else if aVal > bVal {
-			return 1
-		}
-		return 0
-	case TypeFloat:
-		aVal := a.Value.(float64)
-		bVal := b.Value.(float64)
-		if aVal < bVal {
-			return -1
-		} else if aVal > bVal {
-			return 1
-		}
-		return 0
-	case TypeBool:
-		aVal := a.Value.(bool)
-		bVal := b.Value.(bool)
-		if !aVal && bVal {
-			return -1
-		} else if aVal && !bVal {
-			return 1
-		}
-		return 0
+		case TypeInt:
+			aVal := a.Value.(int64)
+			bVal := b.Value.(int64)
+			if aVal < bVal {
+				return -1
+			} else if aVal > bVal {
+				return 1
+			}
+			return 0
+		case TypeString:
+			aVal := a.Value.(string)
+			bVal := b.Value.(string)
+			if aVal < bVal {
+				return -1
+			} else if aVal > bVal {
+				return 1
+			}
+			return 0
+		case TypeFloat:
+			aVal := a.Value.(float64)
+			bVal := b.Value.(float64)
+			if aVal < bVal {
+				return -1
+			} else if aVal > bVal {
+				return 1
+			}
+			return 0
+		case TypeBool:
+			aVal := a.Value.(bool)
+			bVal := b.Value.(bool)
+			if !aVal && bVal {
+				return -1
+			} else if aVal && !bVal {
+				return 1
+			}
+			return 0
 	}
 	return 0
 }

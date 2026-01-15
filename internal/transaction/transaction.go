@@ -158,7 +158,11 @@ func (tm *TransactionManager) Rollback() error {
 	// Restore original page states
 	pager := tm.activeTx.tree.GetPager()
 	for pageID, originalPage := range tm.activeTx.originalPages {
-		pager.Pages[pageID] = originalPage
+		// Deep copy the original page to avoid reference issues
+		restoredPage := page.ClonePage(originalPage)
+		if restoredPage != nil {
+			pager.Pages[pageID] = restoredPage
+		}
 	}
 
 	// Remove newly created pages
@@ -184,7 +188,7 @@ func (tm *TransactionManager) GetActiveTransaction() *Transaction {
 
 // TrackPageModification tracks a page modification for the current transaction
 // If no transaction exists, it will be created automatically (auto-commit)
-func (tm *TransactionManager) TrackPageModification(pageID uint64, page interface{}, tree TreeInterface) {
+func (tm *TransactionManager) TrackPageModification(pageID uint64, pageObj interface{}, tree TreeInterface) {
 	// Auto-create transaction if none exists (for crash recovery)
 	if tm.activeTx == nil {
 		_, _ = tm.BeginAutoCommit(tree)
@@ -194,27 +198,36 @@ func (tm *TransactionManager) TrackPageModification(pageID uint64, page interfac
 	if _, exists := tm.activeTx.originalPages[pageID]; !exists {
 		// Get original page from pager
 		pager := tm.activeTx.tree.GetPager()
-		originalPage := pager.Get(pageID)
+		// Read directly from disk to get the true original state
+		// This bypasses the cache which might already contain modifications
+		originalPage, err := pager.ReadPageFromDisk(pageID)
+		if err != nil || originalPage == nil {
+			// If not on disk, get from cache (for newly created pages)
+			originalPage = pager.Get(pageID)
+		}
+		
 		if originalPage != nil {
-			// Deep copy would be ideal, but for simplicity we'll track the reference
-			// In a production system, you'd want proper deep copying
-			tm.activeTx.originalPages[pageID] = originalPage
+			// Deep copy the page to ensure modifications don't affect the original
+			clonedPage := page.ClonePage(originalPage)
+			if clonedPage != nil {
+				tm.activeTx.originalPages[pageID] = clonedPage
+			}
 		}
 	}
 
 	// Track modified page
-	tm.activeTx.modifiedPages[pageID] = page
+	tm.activeTx.modifiedPages[pageID] = pageObj
 }
 
 // TrackPageAllocation tracks a newly allocated page
-func (tm *TransactionManager) TrackPageAllocation(pageID uint64, page interface{}, tree TreeInterface) {
+func (tm *TransactionManager) TrackPageAllocation(pageID uint64, pageObj interface{}, tree TreeInterface) {
 	// Auto-create transaction if none exists
 	if tm.activeTx == nil {
 		_, _ = tm.BeginAutoCommit(tree)
 	}
 	
 	// New pages don't have original state
-	tm.activeTx.modifiedPages[pageID] = page
+	tm.activeTx.modifiedPages[pageID] = pageObj
 }
 
 // TrackPageDeletion tracks a page deletion
@@ -229,7 +242,11 @@ func (tm *TransactionManager) TrackPageDeletion(pageID uint64, tree TreeInterfac
 		pager := tm.activeTx.tree.GetPager()
 		originalPage := pager.Get(pageID)
 		if originalPage != nil {
-			tm.activeTx.originalPages[pageID] = originalPage
+			// Deep copy the page to ensure modifications don't affect the original
+			clonedPage := page.ClonePage(originalPage)
+			if clonedPage != nil {
+				tm.activeTx.originalPages[pageID] = clonedPage
+			}
 		}
 	}
 	

@@ -210,6 +210,12 @@ func (pm *PageManager) WritePageToFile(pageID uint64, page interface{}) error {
 	return nil
 }
 
+// ReadPageFromDisk reads a page directly from disk, bypassing the cache.
+// This is useful for getting the original state of a page before modifications.
+func (pm *PageManager) ReadPageFromDisk(pageID uint64) (interface{}, error) {
+	return pm.readPageFromFile(pageID)
+}
+
 // readPageFromFile reads a page's bytes from disk and deserializes it
 // into the appropriate page struct based on the PageHeader.PageType.
 func (pm *PageManager) readPageFromFile(pageID uint64) (interface{}, error) {

@@ -382,6 +382,9 @@ func TestInsertManyComplex(t *testing.T) {
 	ctx.SetSummary("Tests insertion of 20 keys in shuffled order, triggering multiple splits at both leaf and internal node levels.")
 	
 	dbfile := ctx.GetDBFile()
+	// Clean up any existing database and WAL files
+	os.Remove(dbfile)
+	os.Remove(dbfile + ".wal")
 	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	m, err := pm.ReadMeta()
@@ -691,6 +694,9 @@ func TestSearch(t *testing.T) {
 	dbDir := "testdata"
 	_ = os.MkdirAll(dbDir, 0755)
 	dbfile := filepath.Join(dbDir, t.Name()+".db")
+	// Clean up any existing database and WAL files
+	os.Remove(dbfile)
+	os.Remove(dbfile + ".wal")
 	pm := page.NewPageManagerWithFile(dbfile, true)
 	defer pm.Close()
 	

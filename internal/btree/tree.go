@@ -24,13 +24,30 @@ type BPlusTree struct {
 }
 
 const MAX_KEYS = page.ORDER - 1
+const MIN_KEYS = (page.ORDER - 1) / 2
 
-// GetPager returns the page manager (implements transaction.TreeInterface)
+
+// GetPager function used for: Returning the page manager instance (implements transaction.TreeInterface for transaction system).
+//
+// Algorithm steps:
+// 1. Return the internal page manager pointer
+//
+// Return: *page.PageManager - the page manager instance
 func (tree *BPlusTree) GetPager() *page.PageManager {
 	return tree.pager
 }
 
-// NewBPlusTree creates a new B+Tree with WAL and transaction support
+// NewBPlusTree function used for: Creating a new B+Tree instance with Write-Ahead Logging (WAL) and transaction support for crash recovery.
+//
+// Algorithm steps:
+// 1. Initialize WAL manager using database filename from page manager
+// 2. Initialize transaction manager with WAL manager
+// 3. Create BPlusTree struct with page manager, transaction manager, and WAL
+// 4. Attempt WAL recovery to restore committed state from previous session
+// 5. Load meta page from disk if it exists
+// 6. Return initialized tree instance
+//
+// Return: (*BPlusTree, error) - new B+Tree instance, error if WAL creation fails
 func NewBPlusTree(pager *page.PageManager) (*BPlusTree, error) {
 	// Initialize WAL
 	dbFilename := pager.GetFileName()
@@ -66,25 +83,65 @@ func NewBPlusTree(pager *page.PageManager) (*BPlusTree, error) {
 	return tree, nil
 }
 
-// Begin starts a new explicit transaction (for multi-operation queries)
+// Begin function used for: Starting a new explicit transaction for multi-operation atomicity (all operations commit together or all rollback).
+//
+// Algorithm steps:
+// 1. Call transaction manager to begin new explicit transaction
+// 2. Return any error from transaction manager
+//
+// Return: error - nil on success, error if transaction cannot be started
 func (tree *BPlusTree) Begin() error {
 	_, err := tree.txManager.Begin(tree)
 	return err
 }
 
-// Commit commits the current transaction
-// If called on an auto-commit transaction, it commits and clears the auto-commit flag
+// Commit function used for: Committing the current transaction, persisting all page modifications to disk via WAL and clearing transaction state.
+//
+// Algorithm steps:
+// 1. Call transaction manager to commit current transaction
+// 2. If auto-commit transaction, commit and clear auto-commit flag
+// 3. Write all modified pages to disk and sync WAL
+//
+// Return: error - nil on success, error if commit fails
 func (tree *BPlusTree) Commit() error {
 	return tree.txManager.Commit()
 }
 
-// Rollback rolls back the current transaction
+// Rollback function used for: Rolling back the current transaction, discarding all uncommitted modifications and restoring previous state.
+//
+// Algorithm steps:
+// 1. Call transaction manager to rollback current transaction
+// 2. Discard all tracked page modifications
+// 3. Reload meta page from pager to ensure tree state is consistent
+// 4. Clear transaction state without writing to disk
+//
+// Return: error - nil on success, error if rollback fails
 func (tree *BPlusTree) Rollback() error {
-	return tree.txManager.Rollback()
+	err := tree.txManager.Rollback()
+	if err != nil {
+		return err
+	}
+	
+	// Reload meta page from pager to ensure tree state is consistent after rollback
+	if tree.pager != nil {
+		meta, err := tree.pager.ReadMeta()
+		if err == nil {
+			tree.meta = meta
+		}
+	}
+	
+	return nil
 }
 
-// ensureAutoCommitTransaction ensures a transaction exists for crash recovery
-// Returns true if a new auto-commit transaction was created
+// ensureAutoCommitTransaction function used for: Ensuring a transaction exists for single operations to provide crash recovery guarantees.
+//
+// Algorithm steps:
+// 1. Check if transaction manager exists, return false if not
+// 2. Check if active transaction already exists
+// 3. If no active transaction, create new auto-commit transaction
+// 4. Return true if new transaction was created, false otherwise
+//
+// Return: bool - true if new auto-commit transaction was created, false if transaction already exists
 func (tree *BPlusTree) ensureAutoCommitTransaction() bool {
 	if tree.txManager == nil {
 		return false
@@ -99,7 +156,15 @@ func (tree *BPlusTree) ensureAutoCommitTransaction() bool {
 	return false
 }
 
-// commitAutoTransaction commits an auto-commit transaction if one exists
+// commitAutoTransaction function used for: Committing an auto-commit transaction if one exists, ensuring single operations are crash-safe.
+//
+// Algorithm steps:
+// 1. Check if transaction manager exists, return nil if not
+// 2. Check if current transaction is auto-commit
+// 3. If auto-commit, commit the transaction
+// 4. Return nil if no auto-commit transaction exists
+//
+// Return: error - nil on success or if no auto-commit transaction, error if commit fails
 func (tree *BPlusTree) commitAutoTransaction() error {
 	if tree.txManager == nil {
 		return nil
@@ -111,12 +176,26 @@ func (tree *BPlusTree) commitAutoTransaction() error {
 	return nil
 }
 
-// Checkpoint creates a checkpoint in the WAL
+// Checkpoint function used for: Creating a checkpoint in the WAL to mark a stable point for recovery and allow WAL truncation.
+//
+// Algorithm steps:
+// 1. Call transaction manager to create WAL checkpoint
+// 2. Write checkpoint entry to WAL marking all committed transactions
+// 3. Allow WAL truncation up to checkpoint position
+//
+// Return: error - nil on success, error if checkpoint creation fails
 func (tree *BPlusTree) Checkpoint() error {
 	return tree.txManager.Checkpoint()
 }
 
-// Close closes the WAL and page manager
+// Close function used for: Closing the WAL and page manager, ensuring all data is flushed to disk and resources are released.
+//
+// Algorithm steps:
+// 1. Close WAL manager if it exists, flushing all pending writes
+// 2. Close page manager if it exists, flushing page cache to disk
+// 3. Return any error from closing operations
+//
+// Return: error - nil on success, error if closing fails
 func (tree *BPlusTree) Close() error {
 	if tree.wal != nil {
 		if err := tree.wal.Close(); err != nil {
@@ -129,21 +208,18 @@ func (tree *BPlusTree) Close() error {
 	return nil
 }
 
-// -----------------------------
-// Finding the correct leaf
-// -----------------------------
-
-// findLeaf traverses the B+Tree from the root to locate the leaf page
-// that should contain (or receive) `key`.
+// findLeaf function used for: Traversing the B+Tree from root to locate the leaf page that should contain (or receive) the given key.
 //
-// Key concepts and flow:
-//   - It iteratively follows internal nodes until a leaf is reached.
-//   - For each internal node it performs a binary search to determine
-//     which child pointer to follow (the last key <= search key).
-//   - The function returns the target leaf and a slice of internal
-//     page IDs representing the path from root to the leaf (excluding
-//     the leaf itself). The path is used for upward propagation when
-//     splits occur.
+// Algorithm steps:
+// 1. Load meta page if not already loaded
+// 2. Start from root page ID stored in meta
+// 3. Iteratively traverse internal nodes until leaf is reached
+// 4. For each internal node, perform binary search to find last key <= search key
+// 5. Follow corresponding child pointer to next level
+// 6. Track path of internal page IDs from root to leaf (excluding leaf itself)
+// 7. Return target leaf page, path of internal nodes, and any error
+//
+// Return: (*LeafPage, []uint64, error) - target leaf page, path of internal page IDs from root to leaf, error if page not found
 func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 	path := make([]uint64, 0)
 
@@ -172,17 +248,7 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 			path = append(path, currentID)
 
 			// binary search: last key <= key
-			left, right := 0, len(p.Keys)-1
-			pos := -1
-			for left <= right {
-				mid := (left + right) / 2
-				if p.Keys[mid].Compare(key) <= 0 {
-					pos = mid
-					left = mid + 1
-				} else {
-					right = mid - 1
-				}
-			}
+			pos := BinarySearchLastLessOrEqual(p.Keys, key)
 
 			// If pos == -1 then all keys in the internal node are > key,
 			// so the correct child to follow is the left-most child (index 0).
@@ -201,21 +267,19 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 	}
 }
 
-// -----------------------------
-// Insert into B+ Tree
-// -----------------------------
-
+// Insert function used for: B+Tree insertion with automatic node splitting to maintain balance. The operation handles two cases: simple insertion (no split) and insertion with splits that propagate upward.
+//
+// Algorithm steps:
+// 1. Handle empty tree - Create root leaf if tree is empty
+// 2. Find target leaf - Navigate to leaf that should contain the key
+// 3. Check duplicates - Return error if key already exists
+// 4. Insert into leaf - Add key-value pair in sorted order
+// 5. Check overflow - Verify if leaf exceeds capacity (key count or payload size)
+// 6. Split if needed - Split leaf and propagate split upward through internal nodes
+// 7. Create new root - If root splits, create new root internal node
+//
+// Return: error - nil on success, error if duplicate key or operation fails
 func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
-	// Insert inserts a key/value into the B+Tree, maintaining
-	// balanced properties and splitting nodes as needed.
-	//
-	// High-level flow:
-	// 1) If tree is empty, create a root leaf and insert.
-	// 2) Find the target leaf and check for duplicates.
-	// 3) Insert into the leaf; if it overflows, split the leaf.
-	// 4) Propagate splits upward through internal nodes.
-	// 5) If the root splits, create a new root internal node.
-	//
 	// Auto-commit: Ensures crash recovery even for single operations
 	wasAutoCommit := tree.ensureAutoCommitTransaction()
 	defer func() {
@@ -261,11 +325,9 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		return err
 	}
 
-	// Check for duplicate keys
-	for _, existingKey := range leaf.Keys {
-		if existingKey.Compare(key) == 0 {
-			return fmt.Errorf("duplicate key insertion: %v", key)
-		}
+	// Check for duplicate keys using binary search
+	if BinarySearch(leaf.Keys, key) != -1 {
+		return fmt.Errorf("duplicate key insertion: %v", key)
 	}
 
 	// Insert into the leaf in sorted order
@@ -375,13 +437,15 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	return nil
 }
 
-// -----------------------------
-// Load tree from disk
-// -----------------------------
-
-// Load reads the tree structure from disk into memory by starting
-// from the root page and recursively loading all child pages.
-// This should be called when opening an existing database.
+// Load function used for: Enabling the database to reload an existing tree structure from disk into memory when the application starts.
+//
+// Algorithm steps:
+// 1. Initialize file handle - Open database file in read/write mode without truncating existing data (handle already initialized in NewBPlusTree)
+// 2. Load metadata - Read meta page (page 1) to obtain root page ID and tree configuration
+// 3. Traverse tree structure - Starting from root, recursively visit each node in depth-first order (handle by loadPage function - recursively)
+// 4. Cache pages - Load each page into memory hash map, keyed by page ID (automatic via PageManager.Get() which caches pages when loading from disk)
+//
+// Return: error - nil on success, error if meta page read fails or page loading fails
 func (tree *BPlusTree) Load() error {
 	// Load meta page first
 	meta, err := tree.pager.ReadMeta()
@@ -399,13 +463,21 @@ func (tree *BPlusTree) Load() error {
 	return tree.loadPage(tree.meta.RootPage)
 }
 
-// loadPage recursively loads a page and all its descendants into memory
+// loadPage function used for: Recursively loading a page and all its descendant pages from disk into memory cache during tree initialization.
+//
+// Algorithm steps:
+// 1. If pageID is 0, return immediately (no page to load)
+// 2. Get page from page manager (loads from disk if not in cache, then caches it)
+// 3. If page is an internal node, recursively load all child pages
+// 4. Continue recursion until all leaf pages are reached
+//
+// Return: error - nil on success, error if page loading fails
 func (tree *BPlusTree) loadPage(pageID uint64) error {
 	if pageID == 0 {
 		return nil
 	}
 
-	// Get will load the page from disk if not already in cache
+	// Get will load the page from disk if not already in cache (and caches it), otherwise returns the page from cache
 	page := tree.pager.Get(pageID)
 	if page == nil {
 		return fmt.Errorf("failed to load page %d", pageID)
@@ -423,12 +495,16 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 	return nil
 }
 
-// -----------------------------
-// Search in B+ Tree
-// -----------------------------
-
-// Search finds and returns the value associated with the given key.
-// Returns an error if the key is not found.
+// Search function used for: Standard B+Tree search with O(log n) complexity through binary search at both internal nodes and leaves.
+//
+// Algorithm steps:
+// 1. Start at root - Begin traversal from the root page
+// 2. Navigate internal nodes - Binary search keys to determine correct child pointer
+// 3. Follow path downward - Descend through internal nodes until reaching a leaf
+// 4. Search leaf - Binary search in the leaf's sorted key array
+// 5. Return result - Return value if found, error otherwise
+//
+// Return: (ValueType, error) - value associated with key on success, error if key not found or tree is empty
 func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 	// Empty tree
 	if tree.meta == nil || tree.meta.RootPage == 0 {
@@ -441,25 +517,26 @@ func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 		return storage.Record{}, err
 	}
 
-	// Search for the key in the leaf
-	for i, k := range leaf.Keys {
-		if k.Compare(key) == 0 {
-			return leaf.Values[i], nil
-		}
+	// Search for the key in the leaf using binary search
+	index := BinarySearch(leaf.Keys, key)
+	if index != -1 {
+		return leaf.Values[index], nil
 	}
 
 	return storage.Record{}, fmt.Errorf("key not found: %v", key)
 }
 
-// -----------------------------
-// Range Query in B+ Tree
-// -----------------------------
-
-// SearchRange returns all key-value pairs where startKey <= key <= endKey.
-// The implementation leverages the leaf-level doubly-linked list for efficient
-// sequential scanning without tree traversal.
+// SearchRange function used for: Efficient range scanning leveraging the leaf-level doubly-linked list. Unlike point queries that require tree traversal, range queries follow horizontal links between leaves after locating the start position.
 //
-// Time complexity: O(log n + k) where k is the number of results
+// Algorithm steps:
+// 1. Validate range - Ensure startKey ≤ endKey
+// 2. Locate start leaf - Find leaf containing or after startKey
+// 3. Scan current leaf - Collect keys within range
+// 4. Follow leaf chain - Use NextPage pointer to traverse horizontally
+// 5. Early termination - Stop when keys exceed endKey
+// 6. Return results - Aggregate collected key-value pairs
+//
+// Return: ([]KeyType, []ValueType, error) - slice of keys, slice of values, error if range is invalid
 func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []ValueType, error) {
 	// Validate range
 	if startKey.Compare(endKey) > 0 {
@@ -482,8 +559,12 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 
 	// Traverse leaves using the linked list
 	for leaf != nil {
-		// Scan keys in current leaf
-		for i, k := range leaf.Keys {
+		// Find starting position using binary search
+		startIdx := BinarySearchFirstGreaterOrEqual(leaf.Keys, startKey)
+		
+		// Scan keys in current leaf from start position
+		for i := startIdx; i < len(leaf.Keys); i++ {
+			k := leaf.Keys[i]
 			if k.Compare(startKey) >= 0 && k.Compare(endKey) <= 0 {
 				keys = append(keys, k)
 				values = append(values, leaf.Values[i])
@@ -512,18 +593,17 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 	return keys, values, nil
 }
 
-// -----------------------------
-// Update in B+ Tree
-// -----------------------------
-
-// Update modifies the value associated with a given key.
-// This is more efficient than Delete + Insert because it:
-// - Avoids tree rebalancing if the new value fits in the same space
-// - Maintains page locality
-// - Reduces I/O operations
+// Update function used for: Atomic value modification that optimizes for the common case where the new value fits in the existing page. The implementation avoids unnecessary tree rebalancing by performing in-place updates when possible, falling back to delete-insert only when required.
 //
-// If the key doesn't exist, returns an error.
-// If the new value doesn't fit in the page, performs delete + insert.
+// Algorithm steps:
+// 1. Locate key - Find leaf containing target key
+// 2. Verify existence - Return error if key not found
+// 3. Calculate size change - Compare old and new value sizes
+// 4. Check capacity - Determine if new value fits in current page
+// 5. In-place update - If fits, replace value and update free space
+// 6. Fallback - If doesn't fit, delete old entry and re-insert
+//
+// Return: error - nil on success, error if key not found or update operation fails
 func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 	// Auto-commit: Ensures crash recovery even for single operations
 	wasAutoCommit := tree.ensureAutoCommitTransaction()
@@ -544,15 +624,8 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 		return err
 	}
 
-	// Find the key in the leaf
-	keyIndex := -1
-	for i, k := range leaf.Keys {
-		if k.Compare(key) == 0 {
-			keyIndex = i
-			break
-		}
-	}
-
+	// Find the key in the leaf using binary search
+	keyIndex := BinarySearch(leaf.Keys, key)
 	if keyIndex == -1 {
 		return fmt.Errorf("key not found: %v", key)
 	}
@@ -601,20 +674,17 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 	return nil
 }
 
-// -----------------------------
-// Delete from B+ Tree
-// -----------------------------
-
-// Delete removes a key from the B+Tree, maintaining balance through
-// borrowing from siblings or merging nodes when necessary.
+// Delete function used for: Full B+Tree deletion maintaining tree balance through redistribution (borrowing) and merging. The algorithm handles both leaf and internal node rebalancing with proper separator key management.
 //
-// High-level flow:
-// 1) Find the target leaf containing the key
-// 2) Remove the key from the leaf
-// 3) If leaf is underflowed (< ORDER/2 keys), try to borrow from siblings
-// 4) If borrowing fails, merge with a sibling
-// 5) Propagate changes upward through internal nodes
-// 6) Handle root special cases
+// Algorithm steps:
+// 1. Locate and remove - Find leaf and remove key-value pair
+// 2. Check underflow - Verify node maintains minimum occupancy
+// 3. Try borrowing - Attempt to borrow from sibling with surplus keys
+// 4. Merge if needed - If siblings at minimum, merge nodes and remove separator
+// 5. Propagate upward - Recursively rebalance parent if it underflows
+// 6. Handle root - Reduce tree height when root has single child
+//
+// Return: error - nil on success, error if key not found or deletion fails
 func (tree *BPlusTree) Delete(key KeyType) error {
 	// Empty tree
 	if tree.meta == nil || tree.meta.RootPage == 0 {
@@ -627,15 +697,8 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 		return err
 	}
 
-	// Find and remove the key from the leaf
-	keyIndex := -1
-	for i, k := range leaf.Keys {
-		if k.Compare(key) == 0 {
-			keyIndex = i
-			break
-		}
-	}
-
+	// Find and remove the key from the leaf using binary search
+	keyIndex := BinarySearch(leaf.Keys, key)
 	if keyIndex == -1 {
 		return fmt.Errorf("key not found: %v", key)
 	}
@@ -686,7 +749,21 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	return tree.rebalanceAfterDelete(leaf, path)
 }
 
-// rebalanceAfterDelete handles underflow by borrowing from siblings or merging
+// rebalanceAfterDelete function used for: Handling leaf node underflow by attempting to borrow keys from siblings (preferred strategy) or merging with siblings when borrowing is not possible.
+//
+// Algorithm steps:
+// 1. Get parent internal node from path
+// 2. Find index of current leaf in parent's children array
+// 3. Try borrow from right sibling first - If exists and has surplus keys, move first key from right to left
+// 4. Update parent separator - Adjust separator key in parent to reflect new boundary
+// 5. Try borrow from left sibling - If right borrow fails and left exists with surplus, move last key from left to right
+// 6. Update parent separator - Adjust separator key in parent to reflect new boundary
+// 7. Merge if cannot borrow - If both siblings at minimum, merge with right sibling (preferred) or left sibling
+// 8. Update sibling links - Maintain doubly-linked list between leaves
+// 9. Remove separator from parent - Delete separator key and child pointer
+// 10. Propagate upward - Recursively rebalance parent if it underflows after merge
+//
+// Return: error - nil on success, error if parent-child relationship is broken
 func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) error {
 	minKeys := (page.ORDER + 1) / 2 - 1
 
@@ -867,7 +944,26 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 	return tree.rebalanceInternalAfterDelete(parent, path[:len(path)-1])
 }
 
-// rebalanceInternalAfterDelete handles underflow in internal nodes
+// rebalanceInternalAfterDelete function used for: Handling internal node underflow by borrowing from siblings (preferred strategy) or merging, and reducing tree height when root has single child.
+//
+// Algorithm steps:
+// 1. Root reduction - If root has no keys and one child, make that child the new root
+// 2. Check underflow - If node has enough keys, return (no rebalancing needed)
+// 3. Get parent internal node from path
+// 4. Find index of current node in parent's children array
+// 5. Try borrow from right sibling - Pull separator from parent, add separator and first child from right to current node
+// 6. Push new separator to parent - Update parent with first key of right sibling as new separator
+// 7. Update parent pointers - Set parent of moved child to borrowing node
+// 8. Try borrow from left sibling - If right borrow fails, pull separator from parent, add separator and last child from left to current node
+// 9. Push new separator to parent - Update parent with last key of left sibling as new separator
+// 10. Update parent pointers - Set parent of moved child to borrowing node
+// 11. Merge if cannot borrow - If both siblings at minimum, merge with right sibling (preferred) or left sibling
+// 12. Pull separator from parent - Integrate separator key into merged node
+// 13. Update parent pointers - Set parent of all moved children to merged node
+// 14. Remove separator from parent - Delete separator key and child pointer
+// 15. Propagate upward - Recursively rebalance parent's parent if parent underflows after merge
+//
+// Return: error - nil on success, error if parent-child relationship is broken
 func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, path []uint64) error {
 	minKeys := (page.ORDER + 1) / 2 - 1
 
