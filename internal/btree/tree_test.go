@@ -210,20 +210,11 @@ func TestInsertWithoutSplit(t *testing.T) {
 	ctx.SetSummary("Tests basic insertion without triggering a page split. All keys should fit in a single leaf page.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 	out := ctx.GetImageFile()
 	defer func() {
 		if err := dumpTreeStructure(tree, out); err != nil {
@@ -275,20 +266,11 @@ func TestInsertWithSplit(t *testing.T) {
 	ctx.SetSummary("Tests insertion that triggers a leaf page split. The tree should grow from height 1 to height 2.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 	out := ctx.GetImageFile()
 	defer func() {
 		if err := dumpTreeStructure(tree, out); err != nil {
@@ -385,20 +367,11 @@ func TestInsertManyComplex(t *testing.T) {
 	// Clean up any existing database and WAL files
 	os.Remove(dbfile)
 	os.Remove(dbfile + ".wal")
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 	out := ctx.GetImageFile()
 	defer func() {
 		if err := dumpTreeStructure(tree, out); err != nil {
@@ -627,34 +600,24 @@ func TestLoadFromDisk(t *testing.T) {
 	
 	// Phase 1: Create and populate tree
 	ctx.AddOperation("Phase 1: Creating a new database and inserting data")
-	pm1 := page.NewPageManagerWithFile(dbfile, true)
-	m1, err := pm1.ReadMeta()
+	tree1, err := NewBPlusTree(dbfile, true)
 	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree1 := &BPlusTree{
-		pager: pm1,
-		meta:  m1,
+		t.Fatalf("failed to create tree: %v", err)
 	}
 
 	// Insert test data
 	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50), K(60), K(70), K(80)}
 	ctx.InsertKeys(tree1, keys, []ValueType{V("v10"), V("v20"), V("v30"), V("v40"), V("v50"), V("v60"), V("v70"), V("v80")})
 	ctx.AddOperation("Closed the database file (all data persisted to disk)")
-	pm1.Close()
+	tree1.Close()
 
 	// Phase 2: Load tree from disk
 	ctx.AddOperation("Phase 2: Reopening the database file and loading tree structure from disk")
-	pm2 := page.NewPageManagerWithFile(dbfile, false) // Open existing file
-	defer pm2.Close()
-	
-	tree2 := &BPlusTree{
-		pager: pm2,
+	tree2, err := NewBPlusTree(dbfile, false)
+	if err != nil {
+		t.Fatalf("failed to create tree: %v", err)
 	}
-	
-	if err := tree2.Load(); err != nil {
-		t.Fatalf("failed to load tree: %v", err)
-	}
+	defer tree2.Close()
 	ctx.AddOperation("Successfully loaded all pages from disk into memory")
 
 	// Verify all keys can be found
@@ -697,21 +660,11 @@ func TestSearch(t *testing.T) {
 	// Clean up any existing database and WAL files
 	os.Remove(dbfile)
 	os.Remove(dbfile + ".wal")
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert test data
 	testData := map[string]string{
@@ -766,21 +719,11 @@ func TestDeleteSimple(t *testing.T) {
 	ctx.SetSummary("Tests basic deletion: removes one key from a small tree and verifies it's gone while other keys remain.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert keys
 	keys := []storage.CompositeKey{K(10), K(20), K(30)}
@@ -828,21 +771,11 @@ func TestDeleteWithBorrowFromRight(t *testing.T) {
 	ctx.SetSummary("Tests deletion that triggers borrowing from right sibling when a leaf page becomes underflowed.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert keys to create structure: [10,20] | [30,40,50]
 	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
@@ -891,21 +824,11 @@ func TestDeleteWithBorrowFromLeft(t *testing.T) {
 	ctx.SetSummary("Tests deletion that triggers borrowing from left sibling when a leaf page becomes underflowed.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert keys to create structure: [10,20,30] | [40,50]
 	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
@@ -954,21 +877,11 @@ func TestDeleteWithMerge(t *testing.T) {
 	ctx.SetSummary("Tests deletion that triggers node merging when both siblings are at minimum capacity and cannot borrow.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert keys to create structure that will require merge
 	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
@@ -1023,21 +936,11 @@ func TestDeleteComplex(t *testing.T) {
 	ctx.SetSummary("Tests complex deletion scenario: deletes 6 keys from a 16-key tree in random order, triggering multiple rebalancing operations.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert many keys
 	keys := []storage.CompositeKey{K(5), K(10), K(15), K(20), K(25), K(30), K(35), K(40), K(45), K(50), K(55), K(60), K(65), K(70), K(75), K(80)}
@@ -1140,21 +1043,11 @@ func TestDeleteAll(t *testing.T) {
 	ctx.SetSummary("Tests edge case: deletes all keys from the tree, verifying the tree becomes empty and handles this correctly.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert keys
 	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
@@ -1206,21 +1099,11 @@ func TestRangeQuerySimple(t *testing.T) {
 	ctx.SetSummary("Tests range query: retrieves all keys and values within a specified range [30, 60].")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert test data
 	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50), K(60), K(70), K(80), K(90)}
@@ -1270,21 +1153,11 @@ func TestRangeQueryEdgeCases(t *testing.T) {
 	ctx.SetSummary("Tests edge cases for range queries: empty ranges, single key ranges, full ranges, out-of-bounds ranges, and invalid ranges.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert test data
 	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
@@ -1381,21 +1254,11 @@ func TestRangeQueryAcrossPages(t *testing.T) {
 	ctx.SetSummary("Tests range query that spans multiple leaf pages, verifying the leaf chain traversal works correctly.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert enough data to span multiple leaf pages
 	keys := make([]KeyType, 20)
@@ -1458,21 +1321,11 @@ func TestUpdateSimple(t *testing.T) {
 	ctx.SetSummary("Tests basic update operation: modifies the value of an existing key and verifies the change.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert test data
 	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
@@ -1532,21 +1385,11 @@ func TestUpdateNonExistentKey(t *testing.T) {
 	ctx.SetSummary("Tests error handling: attempting to update a non-existent key should return an error.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert test data
 	ctx.InsertKey(tree, K(10), V("v10"))
@@ -1580,21 +1423,11 @@ func TestUpdateWithLargeValue(t *testing.T) {
 	ctx.SetSummary("Tests update with a value too large to fit in the current page, which should trigger delete+insert rebalancing.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert keys with small values
 	keys := []storage.CompositeKey{K(10), K(20), K(30)}
@@ -1652,21 +1485,11 @@ func TestUpdateMultiple(t *testing.T) {
 	ctx.SetSummary("Tests updating multiple keys in sequence, verifying each update succeeds and other keys remain unchanged.")
 	
 	dbfile := ctx.GetDBFile()
-	pm := page.NewPageManagerWithFile(dbfile, true)
-	defer pm.Close()
-	
-	m, err := pm.ReadMeta()
-	if err != nil {
-		t.Fatalf("failed to read meta: %v", err)
-	}
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbfile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
-	m, _ = pm.ReadMeta()
-	if m != nil {
-		tree.meta = m
-	}
+	defer tree.Close()
 
 	// Insert test data
 	keys := []storage.CompositeKey{K(5), K(10), K(15), K(20), K(25), K(30), K(35), K(40)}
@@ -1738,10 +1561,7 @@ func TestAutoCommitSingleInsert(t *testing.T) {
 	// Clean up any existing files
 	os.Remove(dbFile)
 	os.Remove(dbFile + ".wal")
-	pm := page.NewPageManagerWithFile(dbFile, true)
-	defer pm.Close()
-	
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbFile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
@@ -1790,9 +1610,7 @@ func TestAutoCommitCrashRecovery(t *testing.T) {
 	os.Remove(dbFile + ".wal")
 	
 	// Phase 1: Insert data with auto-commit
-	pm1 := page.NewPageManagerWithFile(dbFile, true)
-	
-	tree1, err := NewBPlusTree(pm1)
+	tree1, err := NewBPlusTree(dbFile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
@@ -1808,14 +1626,10 @@ func TestAutoCommitCrashRecovery(t *testing.T) {
 	
 	// Simulate crash: close without explicit checkpoint
 	tree1.Close()
-	pm1.Close()
 	
 	// Phase 2: Recover from WAL
 	ctx.AddOperation("Phase 2: Simulating crash recovery (reopening database)")
-	pm2 := page.NewPageManagerWithFile(dbFile, false)
-	defer pm2.Close()
-	
-	tree2, err := NewBPlusTree(pm2)
+	tree2, err := NewBPlusTree(dbFile, false)
 	if err != nil {
 		t.Fatalf("failed to recreate tree: %v", err)
 	}
@@ -1855,10 +1669,7 @@ func TestExplicitTransactionMultipleOperations(t *testing.T) {
 	// Clean up any existing files
 	os.Remove(dbFile)
 	os.Remove(dbFile + ".wal")
-	pm := page.NewPageManagerWithFile(dbFile, true)
-	defer pm.Close()
-	
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbFile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
@@ -1939,10 +1750,7 @@ func TestExplicitTransactionRollback(t *testing.T) {
 	// Clean up any existing files
 	os.Remove(dbFile)
 	os.Remove(dbFile + ".wal")
-	pm := page.NewPageManagerWithFile(dbFile, true)
-	defer pm.Close()
-	
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbFile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}
@@ -2013,10 +1821,7 @@ func TestAutoCommitVsExplicitTransaction(t *testing.T) {
 	// Clean up any existing files
 	os.Remove(dbFile)
 	os.Remove(dbFile + ".wal")
-	pm := page.NewPageManagerWithFile(dbFile, true)
-	defer pm.Close()
-	
-	tree, err := NewBPlusTree(pm)
+	tree, err := NewBPlusTree(dbFile, true)
 	if err != nil {
 		t.Fatalf("failed to create tree: %v", err)
 	}

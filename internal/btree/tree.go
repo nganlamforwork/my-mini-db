@@ -3,6 +3,7 @@ package btree
 import (
 	"fmt"
 
+	"bplustree/internal/common"
 	"bplustree/internal/page"
 	"bplustree/internal/storage"
 	"bplustree/internal/transaction"
@@ -37,25 +38,28 @@ func (tree *BPlusTree) GetPager() *page.PageManager {
 	return tree.pager
 }
 
-// NewBPlusTree function used for: Creating a new B+Tree instance with Write-Ahead Logging (WAL) and transaction support for crash recovery.
+// NewBPlusTree function used for: Creating a new B+Tree instance with a custom database filename, automatically creating PageManager and initializing WAL/transaction support for crash recovery.
 //
 // Algorithm steps:
-// 1. Initialize WAL manager using database filename from page manager
-// 2. Initialize transaction manager with WAL manager
-// 3. Create BPlusTree struct with page manager, transaction manager, and WAL
-// 4. Attempt WAL recovery to restore committed state from previous session
-// 5. Load meta page from disk if it exists
-// 6. Return initialized tree instance
+// 1. Create PageManager - Initialize PageManager with specified filename and truncate flag
+// 2. Initialize WAL manager - Create WAL manager using the database filename
+// 3. Initialize transaction manager - Create transaction manager with WAL manager
+// 4. Create BPlusTree struct - Create tree with page manager, transaction manager, and WAL
+// 5. Attempt WAL recovery - Restore committed state from previous session if WAL exists
+// 6. Load meta page - Load meta page from disk if it exists
+// 7. Return initialized tree - Return tree instance ready for use
 //
-// Return: (*BPlusTree, error) - new B+Tree instance, error if WAL creation fails
-func NewBPlusTree(pager *page.PageManager) (*BPlusTree, error) {
-	// Initialize WAL
-	dbFilename := pager.GetFileName()
-	if dbFilename == "" {
-		dbFilename = "minidb.db"
-	}
-	wal, err := transaction.NewWALManager(dbFilename)
+// Note: The PageManager is managed internally by the BPlusTree. When tree.Close() is called, it will close both the WAL and the PageManager.
+//
+// Return: (*BPlusTree, error) - new B+Tree instance, error if PageManager creation or WAL initialization fails
+func NewBPlusTree(filename string, truncate bool) (*BPlusTree, error) {
+	// Create PageManager with specified filename
+	pager := page.NewPageManagerWithFile(filename, truncate)
+	
+	// Initialize WAL manager using database filename
+	wal, err := transaction.NewWALManager(filename)
 	if err != nil {
+		pager.Close() // Close pager on error to avoid resource leak
 		return nil, fmt.Errorf("failed to create WAL: %w", err)
 	}
 
@@ -248,7 +252,7 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 			path = append(path, currentID)
 
 			// binary search: last key <= key
-			pos := BinarySearchLastLessOrEqual(p.Keys, key)
+			pos := common.BinarySearchLastLessOrEqual(p.Keys, key)
 
 			// If pos == -1 then all keys in the internal node are > key,
 			// so the correct child to follow is the left-most child (index 0).
@@ -326,7 +330,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	}
 
 	// Check for duplicate keys using binary search
-	if BinarySearch(leaf.Keys, key) != -1 {
+	if common.BinarySearch(leaf.Keys, key) != -1 {
 		return fmt.Errorf("duplicate key insertion: %v", key)
 	}
 
@@ -499,7 +503,7 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 //
 // Algorithm steps:
 // 1. Start at root - Begin traversal from the root page
-// 2. Navigate internal nodes - Binary search keys to determine correct child pointer
+// 2. Navigate internal nodes - Binary search keys to determine correct child pointer (use findLeaf function)
 // 3. Follow path downward - Descend through internal nodes until reaching a leaf
 // 4. Search leaf - Binary search in the leaf's sorted key array
 // 5. Return result - Return value if found, error otherwise
@@ -507,7 +511,7 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 // Return: (ValueType, error) - value associated with key on success, error if key not found or tree is empty
 func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 	// Empty tree
-	if tree.meta == nil || tree.meta.RootPage == 0 {
+	if tree.IsEmpty() {
 		return storage.Record{}, fmt.Errorf("key not found: %v (empty tree)", key)
 	}
 
@@ -517,8 +521,8 @@ func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 		return storage.Record{}, err
 	}
 
-	// Search for the key in the leaf using binary search
-	index := BinarySearch(leaf.Keys, key)
+	// Search for the key in the leaf using binary search (exact match)
+	index := common.BinarySearch(leaf.Keys, key)
 	if index != -1 {
 		return leaf.Values[index], nil
 	}
@@ -526,7 +530,8 @@ func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 	return storage.Record{}, fmt.Errorf("key not found: %v", key)
 }
 
-// SearchRange function used for: Efficient range scanning leveraging the leaf-level doubly-linked list. Unlike point queries that require tree traversal, range queries follow horizontal links between leaves after locating the start position.
+// SearchRange function used for: Efficient range scanning leveraging the leaf-level doubly-linked list.
+// Unlike point queries that require tree traversal, range queries follow horizontal links between leaves after locating the start position.
 //
 // Algorithm steps:
 // 1. Validate range - Ensure startKey ≤ endKey
@@ -544,7 +549,7 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 	}
 
 	// Empty tree
-	if tree.meta == nil || tree.meta.RootPage == 0 {
+	if tree.IsEmpty() {
 		return []KeyType{}, []ValueType{}, nil
 	}
 
@@ -560,7 +565,7 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 	// Traverse leaves using the linked list
 	for leaf != nil {
 		// Find starting position using binary search
-		startIdx := BinarySearchFirstGreaterOrEqual(leaf.Keys, startKey)
+		startIdx := common.BinarySearchFirstGreaterOrEqual(leaf.Keys, startKey)
 		
 		// Scan keys in current leaf from start position
 		for i := startIdx; i < len(leaf.Keys); i++ {
@@ -593,7 +598,8 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 	return keys, values, nil
 }
 
-// Update function used for: Atomic value modification that optimizes for the common case where the new value fits in the existing page. The implementation avoids unnecessary tree rebalancing by performing in-place updates when possible, falling back to delete-insert only when required.
+// Update function used for: Atomic value modification that optimizes for the common case where the new value fits in the existing page.
+// The implementation avoids unnecessary tree rebalancing by performing in-place updates when possible, falling back to delete-insert only when required.
 //
 // Algorithm steps:
 // 1. Locate key - Find leaf containing target key
@@ -614,7 +620,7 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 	}()
 
 	// Empty tree
-	if tree.meta == nil || tree.meta.RootPage == 0 {
+	if tree.IsEmpty() {
 		return fmt.Errorf("key not found: %v (empty tree)", key)
 	}
 
@@ -625,7 +631,7 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 	}
 
 	// Find the key in the leaf using binary search
-	keyIndex := BinarySearch(leaf.Keys, key)
+	keyIndex := common.BinarySearch(leaf.Keys, key)
 	if keyIndex == -1 {
 		return fmt.Errorf("key not found: %v", key)
 	}
@@ -674,7 +680,8 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 	return nil
 }
 
-// Delete function used for: Full B+Tree deletion maintaining tree balance through redistribution (borrowing) and merging. The algorithm handles both leaf and internal node rebalancing with proper separator key management.
+// Delete function used for: Full B+Tree deletion maintaining tree balance through redistribution (borrowing) and merging.
+// The algorithm handles both leaf and internal node rebalancing with proper separator key management.
 //
 // Algorithm steps:
 // 1. Locate and remove - Find leaf and remove key-value pair
@@ -686,8 +693,16 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 //
 // Return: error - nil on success, error if key not found or deletion fails
 func (tree *BPlusTree) Delete(key KeyType) error {
+	// Auto-commit: Ensures crash recovery even for single operations
+	wasAutoCommit := tree.ensureAutoCommitTransaction()
+	defer func() {
+		if wasAutoCommit {
+			_ = tree.commitAutoTransaction()
+		}
+	}()
+
 	// Empty tree
-	if tree.meta == nil || tree.meta.RootPage == 0 {
+	if tree.IsEmpty() {
 		return fmt.Errorf("cannot delete from empty tree")
 	}
 
@@ -698,7 +713,7 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	}
 
 	// Find and remove the key from the leaf using binary search
-	keyIndex := BinarySearch(leaf.Keys, key)
+	keyIndex := common.BinarySearch(leaf.Keys, key)
 	if keyIndex == -1 {
 		return fmt.Errorf("key not found: %v", key)
 	}
@@ -739,17 +754,17 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 		return nil
 	}
 
-	// Check if leaf needs rebalancing (minimum keys = ceil(ORDER/2) - 1 for leaf)
-	minKeys := (page.ORDER + 1) / 2 - 1 // For ORDER=4: minKeys = 1
-	if len(leaf.Keys) >= minKeys {
+	// Check if leaf needs rebalancing
+	if len(leaf.Keys) >= MIN_KEYS {
 		return nil // No underflow, we're done
 	}
 
 	// Handle underflow: try to borrow or merge
-	return tree.rebalanceAfterDelete(leaf, path)
+	return tree.rebalanceLeafAfterDelete(leaf, path)
 }
 
-// rebalanceAfterDelete function used for: Handling leaf node underflow by attempting to borrow keys from siblings (preferred strategy) or merging with siblings when borrowing is not possible.
+// rebalanceLeafAfterDelete function used for: Handling leaf node underflow by attempting to borrow keys from siblings (preferred strategy)
+// or merging with siblings when borrowing is not possible.
 //
 // Algorithm steps:
 // 1. Get parent internal node from path
@@ -764,9 +779,7 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 // 10. Propagate upward - Recursively rebalance parent if it underflows after merge
 //
 // Return: error - nil on success, error if parent-child relationship is broken
-func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) error {
-	minKeys := (page.ORDER + 1) / 2 - 1
-
+func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint64) error {
 	// Get parent
 	parentID := path[len(path)-1]
 	parent := tree.pager.Get(parentID).(*InternalPage)
@@ -781,15 +794,16 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 	}
 
 	if childIndex == -1 {
-		return fmt.Errorf("parent-child relationship broken")
+		return fmt.Errorf("invalid parent-child relationship")
 	}
 
 	// Try to borrow from right sibling first
 	if childIndex < len(parent.Children)-1 {
+		// Get right sibling
 		rightSiblingID := parent.Children[childIndex+1]
 		rightSibling := tree.pager.Get(rightSiblingID).(*page.LeafPage)
 
-		if len(rightSibling.Keys) > minKeys {
+		if len(rightSibling.Keys) > MIN_KEYS {
 			// Borrow from right sibling
 			leaf.Keys = append(leaf.Keys, rightSibling.Keys[0])
 			leaf.Values = append(leaf.Values, rightSibling.Values[0])
@@ -802,7 +816,7 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 			// Update separator key in parent
 			parent.Keys[childIndex] = rightSibling.Keys[0]
 
-			// Recompute free space
+			// Recompute free space for this leaf and right sibling
 			payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
 			used := page.ComputeLeafPayloadSize(leaf)
 			leaf.Header.FreeSpace = uint16(payloadCapacity - used)
@@ -820,12 +834,12 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 		}
 	}
 
-	// Try to borrow from left sibling
+	// Try to borrow from left sibling (same logic as right sibling)
 	if childIndex > 0 {
 		leftSiblingID := parent.Children[childIndex-1]
 		leftSibling := tree.pager.Get(leftSiblingID).(*page.LeafPage)
 
-		if len(leftSibling.Keys) > minKeys {
+		if len(leftSibling.Keys) > MIN_KEYS {
 			// Borrow from left sibling
 			lastIdx := len(leftSibling.Keys) - 1
 			
@@ -944,7 +958,8 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 	return tree.rebalanceInternalAfterDelete(parent, path[:len(path)-1])
 }
 
-// rebalanceInternalAfterDelete function used for: Handling internal node underflow by borrowing from siblings (preferred strategy) or merging, and reducing tree height when root has single child.
+// rebalanceInternalAfterDelete function used for: Handling internal node underflow by borrowing from siblings (preferred strategy)
+// or merging, and reducing tree height when root has single child.
 //
 // Algorithm steps:
 // 1. Root reduction - If root has no keys and one child, make that child the new root
@@ -965,8 +980,6 @@ func (tree *BPlusTree) rebalanceAfterDelete(leaf *page.LeafPage, path []uint64) 
 //
 // Return: error - nil on success, error if parent-child relationship is broken
 func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, path []uint64) error {
-	minKeys := (page.ORDER + 1) / 2 - 1
-
 	// If this is the root
 	if len(path) == 0 {
 		// If root has no keys and one child, make that child the new root
@@ -1004,7 +1017,7 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 	}
 
 	// Check if node has enough keys
-	if len(node.Keys) >= minKeys {
+	if len(node.Keys) >= MIN_KEYS {
 		return nil
 	}
 
@@ -1030,7 +1043,7 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 		rightSiblingID := parent.Children[childIndex+1]
 		rightSibling := tree.pager.Get(rightSiblingID).(*page.InternalPage)
 
-		if len(rightSibling.Keys) > minKeys {
+		if len(rightSibling.Keys) > MIN_KEYS {
 			// Borrow from right sibling
 			// Pull separator from parent
 			separatorKey := parent.Keys[childIndex]
@@ -1079,7 +1092,7 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 		leftSiblingID := parent.Children[childIndex-1]
 		leftSibling := tree.pager.Get(leftSiblingID).(*page.InternalPage)
 
-		if len(leftSibling.Keys) > minKeys {
+		if len(leftSibling.Keys) > MIN_KEYS {
 			// Borrow from left sibling
 			// Pull separator from parent
 			separatorKey := parent.Keys[childIndex-1]

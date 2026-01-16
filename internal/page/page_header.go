@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 )
 
-const PageHeaderSize = 56
+const PageHeaderSize = 56 // bytes (56 bytes)
 
 type PageType uint8
 type PageHeader struct {
@@ -28,6 +28,9 @@ type PageHeader struct {
 	LSN uint64 // log sequence number (for WAL)
 }
 
+// WriteToBuffer function used for: Serializing a page header into a buffer for persistent storage on disk.
+//
+// Format: [page header] [page type] [key count] [free space] [padding] [LSN]
 func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
 	// Serialize header fields in a stable, explicitly-defined order
 	// (big-endian). The serialization order is independent of the Go
@@ -75,6 +78,9 @@ func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
 	return nil
 }
 
+// ReadFromBuffer function used for: Deserializing a page header from a buffer loaded from persistent storage on disk.
+//
+// Format: [page header] [page type] [key count] [free space] [padding] [LSN]
 func (h *PageHeader) ReadFromBuffer(buf *bytes.Reader) error {
 	// Deserialize fields in the same order they were written.
 	if err := binary.Read(buf, binary.BigEndian, &h.PageID); err != nil {

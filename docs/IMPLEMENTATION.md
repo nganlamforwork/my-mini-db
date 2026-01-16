@@ -150,17 +150,19 @@ type ValueType = Record
 
 ### Core Constants
 
-| Constant          | Value      | Description                                  |
-| ----------------- | ---------- | -------------------------------------------- |
-| `ORDER`           | 4          | Maximum number of children per internal node |
-| `MAX_KEYS`        | 3          | Maximum keys per node (ORDER - 1)            |
-| `DefaultPageSize` | 4096 bytes | Size of each page on disk                    |
-| `PageHeaderSize`  | 56 bytes   | Fixed size of page header                    |
+| Constant          | Value      | Description                                      |
+| ----------------- | ---------- | ------------------------------------------------ |
+| `ORDER`           | 4          | Maximum number of children per internal node     |
+| `MAX_KEYS`        | 3          | Maximum keys per node (ORDER - 1)                |
+| `MIN_KEYS`        | 1          | Minimum keys per non-root node ((ORDER - 1) / 2) |
+| `DefaultPageSize` | 4096 bytes | Size of each page on disk                        |
+| `PageHeaderSize`  | 56 bytes   | Fixed size of page header                        |
 
 ### Minimum Keys Calculation
 
-- **Leaf Nodes:** `minKeys = ceil(ORDER/2) - 1 = 1` (for ORDER=4)
-- **Internal Nodes:** `minKeys = ceil(ORDER/2) - 1 = 1` (for ORDER=4)
+- **Leaf Nodes:** `MIN_KEYS = (ORDER - 1) / 2 = 1` (for ORDER=4)
+- **Internal Nodes:** `MIN_KEYS = (ORDER - 1) / 2 = 1` (for ORDER=4)
+- **Implementation:** Defined as constant `MIN_KEYS` in `tree.go` to avoid hardcoded calculations
 - **Root Special Case:** Root can have 0 keys (when empty) or 1+ keys
 
 ### Page Types
@@ -280,7 +282,7 @@ Offset 8192:  Page 3 (Internal/Leaf)  - 4096 bytes
 
 1. **Order Property:** Internal nodes have ≤ ORDER children
 2. **Balance Property:** All leaf nodes are at the same depth
-3. **Occupancy:** Non-root nodes have ≥ ceil(ORDER/2) - 1 keys
+3. **Occupancy:** Non-root nodes have ≥ MIN_KEYS keys (MIN_KEYS = (ORDER - 1) / 2)
 4. **Leaf Linking:** All leaves connected in sorted order via NextPage
 5. **Parent Pointers:** All non-root pages correctly reference parent
 6. **Key Ordering:** Keys in each node are sorted using Compare method
@@ -726,25 +728,24 @@ function Delete(key):
         return
 
     // Check if rebalancing needed
-    minKeys = ceil(ORDER/2) - 1
-    if leaf.keyCount >= minKeys:
+    if leaf.keyCount >= MIN_KEYS:
         return  // No underflow
 
     // Rebalance leaf
-    rebalanceAfterDelete(leaf, path)
+    rebalanceLeafAfterDelete(leaf, path)
 
-function rebalanceAfterDelete(leaf, path):
+function rebalanceLeafAfterDelete(leaf, path):
     parent = getParent(leaf, path)
 
     // Try borrow from right sibling first
-    if rightSibling exists and rightSibling.keyCount > minKeys:
+    if rightSibling exists and rightSibling.keyCount > MIN_KEYS:
         // Move first key from right to left
         borrowFromRight(leaf, rightSibling)
         updateParentSeparator(parent, leaf)
         return
 
     // Try borrow from left sibling
-    if leftSibling exists and leftSibling.keyCount > minKeys:
+    if leftSibling exists and leftSibling.keyCount > MIN_KEYS:
         // Move last key from left to right
         borrowFromLeft(leftSibling, leaf)
         updateParentSeparator(parent, leftSibling)
@@ -766,7 +767,7 @@ function rebalanceInternalAfterDelete(node, path):
         meta.rootPage = node.children[0]
         return
 
-    if node.keyCount >= minKeys:
+    if node.keyCount >= MIN_KEYS:
         return  // No underflow
 
     // Similar borrow/merge logic for internal nodes
@@ -936,7 +937,7 @@ function mergeWithRight(leaf, rightSibling, parent):
     updateFreeSpace(leaf)
 
     // Check if parent underflows and propagate
-    if parent.keyCount < minKeys:
+    if parent.keyCount < MIN_KEYS:
         rebalanceInternalAfterDelete(parent, path)
 
 function mergeWithLeft(leftSibling, leaf, parent):
@@ -956,7 +957,7 @@ function mergeWithLeft(leftSibling, leaf, parent):
     updateFreeSpace(leftSibling)
 
     // Check if parent underflows and propagate
-    if parent.keyCount < minKeys:
+    if parent.keyCount < MIN_KEYS:
         rebalanceInternalAfterDelete(parent, path)
 ```
 
@@ -994,7 +995,7 @@ function mergeWithRight(node, rightSibling, parent):
     node.keyCount = node.keys.length
 
     // Check if parent underflows and propagate
-    if parent.keyCount < minKeys:
+    if parent.keyCount < MIN_KEYS:
         rebalanceInternalAfterDelete(parent, path)
 
 function mergeWithLeft(leftSibling, node, parent):
@@ -1020,7 +1021,7 @@ function mergeWithLeft(leftSibling, node, parent):
     leftSibling.keyCount = leftSibling.keys.length
 
     // Check if parent underflows and propagate
-    if parent.keyCount < minKeys:
+    if parent.keyCount < MIN_KEYS:
         rebalanceInternalAfterDelete(parent, path)
 ```
 
@@ -1134,7 +1135,10 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 **Usage Example:**
 
 ```go
-tree, _ := NewBPlusTree(pager)
+// Create B+Tree with custom database filename
+// The PageManager is created internally and will be closed when tree.Close() is called
+tree, _ := NewBPlusTree("mydatabase.db", true)  // true = truncate existing file
+defer tree.Close()
 
 // Single insert - automatically transactional and crash-recoverable
 tree.Insert(key1, value1)  // Auto-commits internally
@@ -1148,19 +1152,24 @@ tree.Delete(key3)  // Auto-commits internally
 // All operations are immediately durable and crash-recoverable
 ```
 
+**Note:** Users can choose any database filename. The `NewBPlusTree(filename, truncate)` function creates the PageManager internally with the specified filename. Set `truncate=true` to create a new database, or `truncate=false` to open an existing database.
+
 **Crash Recovery:**
 
 If the database crashes after any single operation, the WAL contains all necessary information to recover that operation:
 
 ```go
 // Phase 1: Insert data (crashes before checkpoint)
+tree, _ := NewBPlusTree("mydatabase.db", true)
 tree.Insert(K(1), V("value1"))
 tree.Insert(K(2), V("value2"))
+tree.Close()
 // ... crash occurs ...
 
 // Phase 2: Recovery (reopen database)
-tree2, _ := NewBPlusTree(pager)  // Automatically recovers from WAL
-val, _ := tree2.Search(K(1))     // Data recovered successfully
+tree2, _ := NewBPlusTree("mydatabase.db", false)  // false = open existing file
+defer tree2.Close()
+val, _ := tree2.Search(K(1))     // Data recovered successfully from WAL
 ```
 
 ---
@@ -1264,7 +1273,9 @@ function Rollback():
 **Usage Example:**
 
 ```go
-tree, _ := NewBPlusTree(pager)
+// Create B+Tree with custom database filename
+tree, _ := NewBPlusTree("mydatabase.db", true)
+defer tree.Close()
 
 // Begin explicit transaction
 tree.Begin()

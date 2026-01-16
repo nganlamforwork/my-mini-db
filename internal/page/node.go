@@ -34,14 +34,7 @@ type LeafPage struct {
 	Values []ValueType 
 }
 
-// -----------------------------
-// Node creation helpers
-// -----------------------------
-
-// NewLeafPage constructs an in-memory leaf page with initialized
-// internal slices and header metadata. It does not register the
-// page with any pager — callers should use PageManager to allocate
-// and track pages when persistence or shared lookup is required.
+// NewLeafPage function used for: Constructing an in-memory leaf page with initialized slices and header metadata for B+Tree leaf nodes.
 func NewLeafPage(pageID uint64) *LeafPage {
 	return &LeafPage{
 		Header: PageHeader{
@@ -54,10 +47,7 @@ func NewLeafPage(pageID uint64) *LeafPage {
 	}
 }
 
-// NewInternalPage constructs an in-memory internal node with
-// pre-sized slices for keys and child pointers. The child slice
-// capacity is ORDER because an internal node with m children has
-// up to m-1 keys.
+// NewInternalPage function used for: Constructing an in-memory internal node with pre-sized slices for keys and child pointers.
 func NewInternalPage(pageID uint64) *InternalPage {
 	return &InternalPage{
 		Header: PageHeader{

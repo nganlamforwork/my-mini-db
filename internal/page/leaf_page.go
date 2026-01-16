@@ -4,46 +4,18 @@ import (
 	"bytes"
 	"fmt"
 
+	"bplustree/internal/common"
 	"bplustree/internal/storage"
 )
 
-// -----------------------------
-// Binary search utilities
-// -----------------------------
-
-// binarySearchInsertPosition finds the position where a key should be inserted
-// to maintain sorted order. Returns the index where the key should be inserted.
-func binarySearchInsertPosition(keys []KeyType, target KeyType) int {
-	left, right := 0, len(keys)-1
-	pos := len(keys) // Default: insert at end
-
-	for left <= right {
-		mid := (left + right) / 2
-		if keys[mid].Compare(target) >= 0 {
-			pos = mid
-			right = mid - 1 // Continue searching left for first position
-		} else {
-			left = mid + 1 // Search right
-		}
-	}
-
-	return pos
-}
-
-// -----------------------------
-// Insert into leaf
-// -----------------------------
-
-// insertIntoLeaf inserts a key/value pair into `page` keeping
-// the keys sorted. This is an in-memory, stable insertion used
-// by higher-level tree operations; it does not persist data to
-// disk — the pager layer is responsible for page lifecycle.
+// ComputeLeafPayloadSize function used for: Calculating the total payload size (sum of all key sizes and value sizes) in a leaf page.
 //
-// Key points:
-// - Find the insertion index by scanning until the first key >= new key.
-// - Shift existing keys/values to make room and update key count.
-// ComputeLeafPayloadSize returns the number of payload bytes used by the
-// leaf page (sum of key sizes + value sizes).
+// Algorithm steps:
+// 1. Sum key sizes - Iterate through all keys and sum their serialized sizes
+// 2. Sum value sizes - Iterate through all values and sum their serialized sizes
+// 3. Return total - Return the sum of key sizes and value sizes
+//
+// Return: int - total number of payload bytes used by the leaf page
 func ComputeLeafPayloadSize(p *LeafPage) int {
 	size := 0
 	for _, k := range p.Keys {
@@ -55,8 +27,17 @@ func ComputeLeafPayloadSize(p *LeafPage) int {
 	return size
 }
 
-// InsertIntoLeaf inserts a key/value pair into `page` keeping the keys sorted.
-// Returns an error if the single value is larger than the page payload capacity.
+// InsertIntoLeaf function used for: Inserting a key-value pair into a leaf page while maintaining sorted order and updating free space.
+//
+// Algorithm steps:
+// 1. Check value size - Verify that the single value does not exceed page payload capacity
+// 2. Find insert position - Use binary search to locate insertion index to maintain sorted order
+// 3. Shift elements - Grow slices and shift existing keys/values to the right to make room
+// 4. Insert key-value - Insert new key-value pair at the calculated position
+// 5. Update metadata - Update KeyCount to reflect new key-value pair
+// 6. Recompute free space - Calculate used payload and update FreeSpace header field
+//
+// Return: error - nil on success, error if value exceeds page capacity or insertion fails
 func InsertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
 	// check single-value size against page capacity
 	payloadCapacity := int(DefaultPageSize - PageHeaderSize)
@@ -65,7 +46,7 @@ func InsertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
 	}
 
 	// Find insert position using binary search
-	i := binarySearchInsertPosition(page.Keys, key)
+	i := common.BinarySearchInsertPosition(page.Keys, key)
 
 	// grow slices by one and shift elements right to make room
 	page.Keys = append(page.Keys, storage.CompositeKey{})
@@ -79,7 +60,7 @@ func InsertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
 
 	// update header metadata and recompute free space
 	page.Header.KeyCount = uint16(len(page.Keys))
-		used := ComputeLeafPayloadSize(page)
+	used := ComputeLeafPayloadSize(page)
 	if used > payloadCapacity {
 		// shouldn't normally happen because we checked single value size,
 		// but signal caller that page is overfull so it can split.
@@ -91,15 +72,20 @@ func InsertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
 	return nil
 }
 
-// SplitLeaf splits `page` into two leaf pages: the existing `page`
-// becomes the left sibling and `newLeaf` becomes the right sibling.
+// SplitLeaf function used for: Splitting a full leaf page into two leaf pages when it overflows,
+// redistributing keys and values, and promoting the first key of the right leaf to the parent internal node.
 //
-// Key concepts:
-//   - Use a midpoint to divide keys/values for relatively even distribution.
-//   - The first key of the new right-side leaf is the separator pushed
-//     up into the parent internal node.
-//   - Sibling links (`NextPage`/`PrevPage`) are updated to maintain
-//     the leaf-level doubly-linked list used for range scans.
+// Algorithm steps:
+// 1. Calculate midpoint - Divide keys at midpoint for even distribution (mid = len(keys) / 2)
+// 2. Redistribute keys - Move keys from midpoint onward to new leaf (right half)
+// 3. Redistribute values - Move values from midpoint onward to new leaf (right half)
+// 4. Truncate original page - Keep left half (keys and values up to midpoint) in original leaf
+// 5. Update sibling links - Maintain doubly-linked list between leaves (update NextPage/PrevPage pointers)
+// 6. Update next sibling pointer - Update next sibling's PrevPage pointer if it exists
+// 7. Update metadata - Update KeyCount for both leaves to reflect actual slice lengths
+// 8. Recompute free space - Calculate free space for both leaves based on payload capacity
+//
+// Return: KeyType - the first key of the new right leaf (separator key to be promoted to parent)
 func SplitLeaf(page *LeafPage, newLeaf *LeafPage) KeyType {
 	mid := len(page.Keys) / 2 // Calculate midpoint for even distribution
 
@@ -139,10 +125,19 @@ func SplitLeaf(page *LeafPage, newLeaf *LeafPage) KeyType {
 	return newLeaf.Keys[0]
 }
 
-// WriteToBuffer serializes the leaf page into buf. Format:
-//  - header (PageHeader.WriteToBuffer)
-//  - keys (KeyCount entries, each serialized via CompositeKey.WriteTo)
-//  - values (KeyCount entries, each serialized via Record.WriteTo)
+// WriteToBuffer function used for: Serializing a leaf page into a buffer for persistent storage on disk.
+//
+// Algorithm steps:
+// 1. Write page header - Serialize PageHeader structure to buffer
+// 2. Write keys - Serialize all keys (KeyCount entries) using CompositeKey.WriteTo
+// 3. Write values - Serialize all values (KeyCount entries) using Record.WriteTo
+//
+// Format: [page header] [keys] [values]
+//  - PageHeader (via PageHeader.WriteToBuffer)
+//  - Keys[] (KeyCount entries, each serialized via CompositeKey.WriteTo)
+//  - Values[] (KeyCount entries, each serialized via Record.WriteTo)
+//
+// Return: error - nil on success, error if serialization fails
 func (p *LeafPage) WriteToBuffer(buf *bytes.Buffer) error {
 	if err := p.Header.WriteToBuffer(buf); err != nil {
 		return err
@@ -165,13 +160,27 @@ func (p *LeafPage) WriteToBuffer(buf *bytes.Buffer) error {
 	return nil
 }
 
-// ReadFromBuffer deserializes a leaf page from buf.
+// ReadFromBuffer function used for: Deserializing a leaf page from a buffer loaded from persistent storage on disk.
+//
+// Algorithm steps:
+// 1. Prepare key slice - Allocate slice with capacity equal to KeyCount from header
+// 2. Read keys - Deserialize all keys (KeyCount entries) using ReadCompositeKeyFrom
+// 3. Prepare value slice - Allocate slice with capacity equal to KeyCount from header
+// 4. Read values - Deserialize all values (KeyCount entries) using ReadRecordFrom
+//
+// Assumes: PageHeader has already been read by the caller (readPageFromFile).
+//  - Keys[] (KeyCount entries, each deserialized via ReadCompositeKeyFrom)
+//  - Values[] (KeyCount entries, each deserialized via ReadRecordFrom)
+//
+// Format: [page header] [keys] [values]
+//
+// Return: error - nil on success, error if deserialization fails
 func (p *LeafPage) ReadFromBuffer(buf *bytes.Reader) error {
-	// PageHeader already read by caller (readPageFromFile); payload follows.
+	// PageHeader is already read by caller (readPageFromFile); payload follows.
 
 	keyCount := int(p.Header.KeyCount)
 	p.Keys = make([]KeyType, 0, keyCount)
-	for i := 0; i < keyCount; i++ {
+	for range keyCount {
 		k, err := storage.ReadCompositeKeyFrom(buf)
 		if err != nil {
 			return err
@@ -180,7 +189,7 @@ func (p *LeafPage) ReadFromBuffer(buf *bytes.Reader) error {
 	}
 
 	p.Values = make([]ValueType, 0, keyCount)
-	for i := 0; i < keyCount; i++ {
+	for range keyCount {
 		v, err := storage.ReadRecordFrom(buf)
 		if err != nil {
 			return err

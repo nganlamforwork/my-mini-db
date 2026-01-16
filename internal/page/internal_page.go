@@ -1,25 +1,25 @@
 package page
 
 import (
+	"bplustree/internal/storage"
 	"bytes"
 	"encoding/binary"
-
-	"bplustree/internal/storage"
 )
 
-// -----------------------------
-// Insert into internal node
-// -----------------------------
-
-// InsertIntoInternal inserts `key` and the associated right-side child
-// pointer into an internal node `page` at the correct position.
+// InsertIntoInternal function used for: Inserting a separator key and its associated right-side child pointer
+// into an internal node at the correct sorted position.
 //
-// Routing semantics (precise): for an internal node with keys K[0..n-1]
-// and children C[0..n], the subtree C[i] contains keys where
-// K[i-1] < key <= K[i], with K[-1] = -inf and K[n] = +inf. To choose
-// a child for `searchKey` we find the last key <= searchKey (pos) and
-// follow child C[pos+1]; if no key <= searchKey, follow C[0]. This
-// matches the binary search used in `findLeaf`.
+// Algorithm steps:
+// 1. Find insertion position - Locate first key >= new key to maintain sorted order
+// 2. Insert key - Shift existing keys to the right and insert new key at correct position
+// 3. Insert child pointer - Insert child page ID after the key (right-side child)
+// 4. Update metadata - Update KeyCount to reflect new key and child
+//
+// Routing semantics: For an internal node with keys K[0..n-1] and children C[0..n],
+// the subtree C[i] contains keys where K[i-1] < key <= K[i], with K[-1] = -inf and K[n] = +inf.
+// The child pointer is inserted at position i+1, corresponding to the right subtree of key K[i].
+//
+// Return: void - modifies page in place
 func InsertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
 	i := 0
 	// find the position for the new key (first key >= new key)
@@ -41,15 +41,20 @@ func InsertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
 	page.Header.KeyCount = uint16(len(page.Keys))
 }
 
-// SplitInternal splits a full internal node and returns new node and the middle key
-// SplitInternal splits a full internal node `page` into two nodes:
-// the original `page` becomes the left node and `newPage` becomes the
-// right node. The middle key is returned to be promoted to the parent.
+// SplitInternal function used for: Splitting a full internal node into two nodes when it overflows,
+// redistributing keys and children, and promoting the middle key to the parent.
 //
-// Key points:
-// - The middle key (mid) is removed from the node and propagated upward.
-// - Keys to the right of mid and corresponding child pointers move to `newPage`.
-// - Parent pointers for moved children should be updated by caller if tracked.
+// Algorithm steps:
+// 1. Calculate midpoint - Find middle key index to promote (mid = len(keys) / 2)
+// 2. Promote middle key - Middle key is removed from node and returned to parent (not kept in either split node)
+// 3. Redistribute keys - Move keys after midpoint to new node (right half)
+// 4. Redistribute children - Move corresponding child pointers after midpoint to new node
+// 5. Truncate original node - Keep left half (keys and children up to midpoint) in original page
+// 6. Update parent pointers - Set parent of all moved children to new node's page ID
+// 7. Update metadata - Update KeyCount for both nodes to reflect actual slice lengths
+// 8. Recompute free space - Calculate free space for both nodes based on payload capacity
+//
+// Return: KeyType - the middle key to be promoted to the parent internal node
 func SplitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) KeyType {
 	mid := len(page.Keys) / 2 // middle index
 	midKey := page.Keys[mid]  // key to push up
@@ -108,10 +113,19 @@ func SplitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) K
 	return midKey
 }
 
-// WriteToBuffer serializes the internal page into buf. Format:
-//  - header (PageHeader.WriteToBuffer)
-//  - keys (KeyCount entries, each serialized via CompositeKey.WriteTo)
-//  - children (KeyCount+1 entries, each uint64 big-endian)
+// WriteToBuffer function used for: Serializing an internal page into a buffer for persistent storage on disk.
+//
+// Algorithm steps:
+// 1. Write page header - Serialize PageHeader structure to buffer
+// 2. Write keys - Serialize all keys (KeyCount entries) using CompositeKey.WriteTo
+// 3. Write children - Serialize all child page IDs (KeyCount+1 entries) as uint64 big-endian
+//
+// Format: [page header] [keys] [children]
+//  - PageHeader (via PageHeader.WriteToBuffer)
+//  - Keys[] (KeyCount entries, each serialized via CompositeKey.WriteTo)
+//  - Children[] (KeyCount+1 entries, each uint64 big-endian)
+//
+// Return: error - nil on success, error if serialization fails
 func (p *InternalPage) WriteToBuffer(buf *bytes.Buffer) error {
 	if err := p.Header.WriteToBuffer(buf); err != nil {
 		return err
@@ -134,15 +148,27 @@ func (p *InternalPage) WriteToBuffer(buf *bytes.Buffer) error {
 	return nil
 }
 
-// ReadFromBuffer deserializes an internal page from buf. It expects the
-// same layout used in WriteToBuffer.
+// ReadFromBuffer function used for: Deserializing an internal page from a buffer loaded from persistent storage on disk.
+//
+// Algorithm steps:
+// 1. Prepare key slice - Allocate slice with capacity equal to KeyCount from header
+// 2. Read keys - Deserialize all keys (KeyCount entries) using ReadCompositeKeyFrom
+// 3. Prepare children slice - Allocate slice with capacity KeyCount+1 (one more child than keys)
+// 4. Read children - Deserialize all child page IDs (KeyCount+1 entries) as uint64 big-endian
+//
+// Format: [page header] [keys] [children]
+//  - PageHeader (via PageHeader.ReadFromBuffer)
+//  - Keys[] (KeyCount entries, each deserialized via ReadCompositeKeyFrom)
+//  - Children[] (KeyCount+1 entries, each uint64 big-endian)
+//
+// Return: error - nil on success, error if deserialization fails
 func (p *InternalPage) ReadFromBuffer(buf *bytes.Reader) error {
 	// PageHeader is already read by caller (readPageFromFile); payload follows.
 
 	// prepare slices
 	keyCount := int(p.Header.KeyCount)
 	p.Keys = make([]KeyType, 0, keyCount)
-	for i := 0; i < keyCount; i++ {
+	for range keyCount {
 		k, err := storage.ReadCompositeKeyFrom(buf)
 		if err != nil {
 			return err
@@ -153,7 +179,7 @@ func (p *InternalPage) ReadFromBuffer(buf *bytes.Reader) error {
 	// children: keyCount+1 entries
 	childCount := keyCount + 1
 	p.Children = make([]uint64, 0, childCount)
-	for i := 0; i < childCount; i++ {
+	for range childCount {
 		var c uint64
 		if err := binary.Read(buf, binary.BigEndian, &c); err != nil {
 			return err

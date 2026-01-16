@@ -12,25 +12,27 @@ import (
 // inside a single database file (`minidb.db`). The PageManager also
 // keeps an in-memory map for quick access and updates.
 type PageManager struct {
-	Pages    map[uint64]interface{} // Exported for tests
-	Next     uint64                 // Exported for tests
+	Pages    map[uint64]interface{} 
+	Next     uint64                 
 	file     *os.File
 	pageSize int
 }
 
-// NewPageManager creates or truncates a file-backed PageManager using
-// DefaultPageSize as the page size. The file is `minidb.db` in the
-// current working directory. This keeps the API compatible with
-// existing callers (no arguments).
-// NewPageManager opens the default `minidb.db` without truncation.
-// For tests, prefer NewPageManagerWithFile to get per-test DB files.
 func NewPageManager() *PageManager {
 	return NewPageManagerWithFile("minidb.db", false)
 }
 
-// NewPageManagerWithFile opens or creates the given filename. If
-// truncate==true the file will be truncated (fresh DB). Otherwise
-// an existing DB will be opened and the meta page loaded if present.
+// NewPageManagerWithFile function used for: Opening or creating a database file and initializing a PageManager with file-backed page storage.
+//
+// Algorithm steps:
+// 1. Open file - Open or create the database file with read/write flags (truncate if requested)
+// 2. Initialize PageManager - Create PageManager struct with empty page cache and file handle
+// 3. Check file size - Determine if file is empty (new database) or contains existing pages
+// 4. Handle empty file - If file is empty, create and persist default meta page at page ID 1, set Next to 2
+// 5. Handle existing file - If file exists, calculate page count, load meta page into cache, set Next to pageCount+1
+// 6. Return PageManager - Return initialized PageManager ready for use
+//
+// Return: *PageManager - a new PageManager instance for the specified database file
 func NewPageManagerWithFile(filename string, truncate bool) *PageManager {
 	flags := os.O_RDWR | os.O_CREATE
 	if truncate {
@@ -87,7 +89,7 @@ func NewPageManagerWithFile(filename string, truncate bool) *PageManager {
 	return pm
 }
 
-// WriteMeta persists the given meta page into slot 1 and updates cache.
+// WriteMeta function used for: Persisting a meta page to disk at page ID 1 and updating the in-memory cache.
 func (pm *PageManager) WriteMeta(m *MetaPage) error {
 	m.Header.PageID = 1
 	m.Header.PageType = PageTypeMeta
@@ -95,7 +97,7 @@ func (pm *PageManager) WriteMeta(m *MetaPage) error {
 	return pm.WritePageToFile(1, m)
 }
 
-// ReadMeta loads the meta page from disk (or cache) and returns it.
+// ReadMeta function used for: Loading the meta page from cache or disk (page ID 1) and returning it.
 func (pm *PageManager) ReadMeta() (*MetaPage, error) {
 	if p, ok := pm.Pages[1]; ok {
 		if m, ok2 := p.(*MetaPage); ok2 {
@@ -114,14 +116,15 @@ func (pm *PageManager) ReadMeta() (*MetaPage, error) {
 	return m, nil
 }
 
-// allocateID returns the next page id and increments the counter.
+// allocateID function used for: Allocating the next available page ID and incrementing the allocation counter.
+// Return: uint64 - the next available page ID
 func (pm *PageManager) allocateID() uint64 {
 	id := pm.Next
 	pm.Next++
 	return id
 }
 
-// NewLeaf allocates, registers, and persists a new leaf page.
+// NewLeaf function used for: Allocating, registering in cache, and persisting a new leaf page to disk.
 func (pm *PageManager) NewLeaf() *LeafPage {
 	id := pm.allocateID()
 	p := NewLeafPage(id)
@@ -132,7 +135,7 @@ func (pm *PageManager) NewLeaf() *LeafPage {
 	return p
 }
 
-// NewInternal allocates, registers, and persists a new internal page.
+// NewInternal function used for: Allocating, registering in cache, and persisting a new internal page to disk.
 func (pm *PageManager) NewInternal() *InternalPage {
 	id := pm.allocateID()
 	p := NewInternalPage(id)
@@ -143,8 +146,7 @@ func (pm *PageManager) NewInternal() *InternalPage {
 	return p
 }
 
-// Get returns a page by id. If the page is not cached in memory, it
-// attempts to read it from the file and cache it.
+// Get function used for: Retrieving a page by ID from cache or loading it from disk if not cached, then caching it in the map.
 func (pm *PageManager) Get(pageID uint64) interface{} {
 	if pageID == 0 {
 		return nil
@@ -166,10 +168,7 @@ func (pm *PageManager) Get(pageID uint64) interface{} {
 	return page
 }
 
-// writePageToFile serializes the given page and writes it into the
-// file slot corresponding to pageID. The serialized page must not
-// exceed pageSize.
-// WritePageToFile writes a page to disk (exported for transaction/WAL)
+// WritePageToFile function used for: Serializing a page and writing it to the database file at the slot corresponding to pageID (exported for transaction/WAL use).
 func (pm *PageManager) WritePageToFile(pageID uint64, page interface{}) error {
 	buf := &bytes.Buffer{}
 	switch p := page.(type) {
@@ -210,14 +209,12 @@ func (pm *PageManager) WritePageToFile(pageID uint64, page interface{}) error {
 	return nil
 }
 
-// ReadPageFromDisk reads a page directly from disk, bypassing the cache.
-// This is useful for getting the original state of a page before modifications.
+// ReadPageFromDisk function used for: Reading a page directly from disk bypassing the cache to get the original unmodified state.
 func (pm *PageManager) ReadPageFromDisk(pageID uint64) (interface{}, error) {
 	return pm.readPageFromFile(pageID)
 }
 
-// readPageFromFile reads a page's bytes from disk and deserializes it
-// into the appropriate page struct based on the PageHeader.PageType.
+// readPageFromFile function used for: Reading a page's bytes from disk and deserializing it into the appropriate page struct based on PageType.
 func (pm *PageManager) readPageFromFile(pageID uint64) (interface{}, error) {
 	offset := int64((pageID - 1) * uint64(pm.pageSize))
 	data := make([]byte, pm.pageSize)
@@ -260,7 +257,7 @@ func (pm *PageManager) readPageFromFile(pageID uint64) (interface{}, error) {
 	}
 }
 
-// Close closes the underlying file. Call when application exits.
+// Close function used for: Closing the PageManager and ensuring all cached pages are flushed to disk before closing the file.
 func (pm *PageManager) Close() error {
 	// Flush all pages before closing
 	if err := pm.FlushAll(); err != nil {
@@ -272,7 +269,7 @@ func (pm *PageManager) Close() error {
 	return nil
 }
 
-// FlushAll writes all cached pages back to disk
+// FlushAll function used for: Writing all cached pages back to disk to ensure persistence of all in-memory modifications.
 func (pm *PageManager) FlushAll() error {
 	for pageID, page := range pm.Pages {
 		if err := pm.WritePageToFile(pageID, page); err != nil {
@@ -282,7 +279,7 @@ func (pm *PageManager) FlushAll() error {
 	return nil
 }
 
-// GetFileName returns the name of the database file
+// GetFileName function used for: Retrieving the filename of the database file associated with this PageManager.
 func (pm *PageManager) GetFileName() string {
 	if pm.file == nil {
 		return ""
