@@ -131,3 +131,15 @@ func (c *LRUCache) GetMaxSize() int {
 	defer c.mu.RUnlock()
 	return c.maxSize
 }
+
+// GetAllPageIDs returns a list of all page IDs currently in the cache
+func (c *LRUCache) GetAllPageIDs() []uint64 {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	pageIDs := make([]uint64, 0, len(c.cache))
+	for pageID := range c.cache {
+		pageIDs = append(pageIDs, pageID)
+	}
+	return pageIDs
+}

@@ -5,18 +5,32 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
+	"time"
 )
+
+// IOReadEntry represents a single I/O read operation
+type IOReadEntry struct {
+	PageID    uint64    `json:"pageId"`
+	PageType  string    `json:"pageType"`  // "meta", "internal", "leaf"
+	Timestamp time.Time `json:"timestamp"`
+}
 
 // PageManager is a file-backed page allocator with LRU cache.
 // Pages are allocated sequentially and stored in fixed-size slots
 // inside a single database file. The PageManager uses an LRU cache
 // to keep frequently accessed pages in memory for fast access.
 type PageManager struct {
-	cache    *LRUCache              // LRU cache for pages
-	Next     uint64                 // Next available page ID
-	file     *os.File               // Database file handle
-	pageSize int                    // Page size in bytes
-	maxCacheSize int                // Maximum number of pages in cache
+	cache       *LRUCache              // LRU cache for pages
+	Next        uint64                 // Next available page ID
+	file        *os.File               // Database file handle
+	pageSize    int                    // Page size in bytes
+	maxCacheSize int                   // Maximum number of pages in cache
+	
+	// I/O tracking
+	ioReads     uint64                 // Counter for I/O reads
+	ioReadDetails []IOReadEntry        // Details of each I/O read
+	ioMu        sync.RWMutex           // Mutex for I/O tracking
 }
 
 // DefaultCacheSize is the default maximum number of pages to cache in memory
@@ -57,6 +71,7 @@ func NewPageManagerWithCacheSize(filename string, truncate bool, maxCacheSize in
 		file:          f,
 		pageSize:     DefaultPageSize,
 		maxCacheSize: maxCacheSize,
+		ioReadDetails: make([]IOReadEntry, 0),
 	}
 
 	fi, err := f.Stat()
@@ -89,6 +104,8 @@ func NewPageManagerWithCacheSize(filename string, truncate bool, maxCacheSize in
 			p, err := pm.readPageFromFile(1)
 			if err == nil {
 				if m, ok := p.(*MetaPage); ok {
+					// Track I/O read during initialization
+					pm.trackIORead(1, m)
 					pm.cache.Put(1, m)
 				}
 			}
@@ -125,6 +142,7 @@ func NewPageManagerWithFile(filename string, truncate bool) *PageManager {
 		file:          f,
 		pageSize:     DefaultPageSize,
 		maxCacheSize: DefaultCacheSize,
+		ioReadDetails: make([]IOReadEntry, 0),
 	}
 
 	fi, err := f.Stat()
@@ -157,6 +175,8 @@ func NewPageManagerWithFile(filename string, truncate bool) *PageManager {
 			p, err := pm.readPageFromFile(1)
 			if err == nil {
 				if m, ok := p.(*MetaPage); ok {
+					// Track I/O read during initialization
+					pm.trackIORead(1, m)
 					pm.cache.Put(1, m)
 				}
 			}
@@ -238,7 +258,7 @@ func (pm *PageManager) Get(pageID uint64) interface{} {
 		return cached
 	}
 
-	// Load from disk if not in cache
+	// Load from disk if not in cache (cache miss - I/O read)
 	page, err := pm.readPageFromFile(pageID)
 	if err != nil {
 		if err == io.EOF {
@@ -246,6 +266,9 @@ func (pm *PageManager) Get(pageID uint64) interface{} {
 		}
 		panic(err)
 	}
+	
+	// Track I/O read
+	pm.trackIORead(pageID, page)
 	
 	// Add to cache (may evict least recently used page if cache is full)
 	pm.cache.Put(pageID, page)
@@ -392,4 +415,59 @@ func (pm *PageManager) GetFileName() string {
 		return ""
 	}
 	return pm.file.Name()
+}
+
+// GetCachedPageIDs returns a list of all page IDs currently in the cache
+func (pm *PageManager) GetCachedPageIDs() []uint64 {
+	return pm.cache.GetAllPageIDs()
+}
+
+// trackIORead records an I/O read operation
+func (pm *PageManager) trackIORead(pageID uint64, page interface{}) {
+	pm.ioMu.Lock()
+	defer pm.ioMu.Unlock()
+
+	pm.ioReads++
+
+	// Determine page type
+	pageType := "unknown"
+	switch page.(type) {
+	case *MetaPage:
+		pageType = "meta"
+	case *InternalPage:
+		pageType = "internal"
+	case *LeafPage:
+		pageType = "leaf"
+	}
+
+	// Add to details (limit to last 1000 entries to avoid unbounded growth)
+	entry := IOReadEntry{
+		PageID:    pageID,
+		PageType:  pageType,
+		Timestamp: time.Now(),
+	}
+
+	pm.ioReadDetails = append(pm.ioReadDetails, entry)
+	// Keep only last 1000 entries
+	if len(pm.ioReadDetails) > 1000 {
+		pm.ioReadDetails = pm.ioReadDetails[len(pm.ioReadDetails)-1000:]
+	}
+}
+
+// GetIOReads returns the total number of I/O reads
+func (pm *PageManager) GetIOReads() uint64 {
+	pm.ioMu.RLock()
+	defer pm.ioMu.RUnlock()
+	return pm.ioReads
+}
+
+// GetIOReadDetails returns details of all I/O reads (up to last 1000)
+func (pm *PageManager) GetIOReadDetails() []IOReadEntry {
+	pm.ioMu.RLock()
+	defer pm.ioMu.RUnlock()
+	
+	// Return a copy to avoid race conditions
+	details := make([]IOReadEntry, len(pm.ioReadDetails))
+	copy(details, pm.ioReadDetails)
+	return details
 }
