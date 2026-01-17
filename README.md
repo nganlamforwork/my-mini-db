@@ -50,35 +50,40 @@ For full technical details, see [IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
 ```
 MiniDB/
 ├── cmd/
-│   └── minidb/         # Main application entry point
+│   └── minidb/                     # Main application entry point
 │       ├── main.go
 │       └── example_types.go
 ├── internal/
-│   ├── btree/          # B+Tree implementation
-│   │   ├── tree.go
-│   │   └── tree_test.go
-│   ├── page/           # Page management
-│   │   ├── page_header.go
-│   │   ├── meta_page.go
-│   │   ├── leaf_page.go
-│   │   ├── internal_page.go
-│   │   ├── node.go
-│   │   └── page_manager.go
-│   ├── storage/        # Storage types
-│   │   └── types.go
-│   └── transaction/    # Transaction & WAL
-│       ├── transaction.go
-│       └── wal.go
-├── docs/               # Documentation
-│   ├── IMPLEMENTATION.md
-│   ├── TESTING.md
-│   └── CHANGELOG.md
-├── scripts/            # Utility scripts
-│   └── visualize_tree.py
-├── testdata/           # Test artifacts
-│   └── [test directories]
-├── go.mod
-└── README.md           # This file
+│   ├── btree/                      # B+Tree implementation
+│   │   ├── tree.go                 # Core B+Tree operations
+│   │   ├── tree_test.go            # B+Tree integration tests
+│   │   ├── cache_test.go           # Cache configuration & LRU cache tests
+│   │   ├── utils.go                # Utility functions (IsEmpty, etc.)
+│   │   └── testdata/               # Test artifacts (DB files, PNG diagrams)
+│   ├── page/                       # Page management
+│   │   ├── page_header.go          # Page header structure
+│   │   ├── meta_page.go            # Metadata page implementation
+│   │   ├── leaf_page.go            # Leaf page operations
+│   │   ├── internal_page.go        # Internal page operations
+│   │   ├── node.go                 # Common page types
+│   │   ├── page_manager.go         # Page allocation & caching
+│   │   ├── cache.go                # LRU cache implementation
+│   │   └── clone.go                # Page cloning utilities
+│   ├── common/                     # Shared utilities
+│   │   └── search.go               # Binary search functions
+│   ├── storage/                    # Storage types
+│   │   └── types.go                # CompositeKey & Record types
+│   └── transaction/                # Transaction & WAL
+│       ├── transaction.go          # Transaction management
+│       └── wal.go                  # Write-Ahead Logging
+├── docs/                           # Documentation
+│   ├── IMPLEMENTATION.md           # Implementation details & algorithms
+│   ├── TESTING.md                  # Test suite documentation
+│   └── CHANGELOG.md                # Development history
+├── scripts/                        # Utility scripts
+│   └── visualize_tree.py           # Tree visualization tool
+├── go.mod                          # Go module definition
+└── README.md                       # This file
 ```
 
 ---
@@ -100,8 +105,9 @@ MiniDB/
 - **Transaction Support**: Multi-operation atomicity with Begin/Commit/Rollback
 - **Write-Ahead Logging**: All changes logged before database writes
 - **Crash Recovery**: Automatic recovery by replaying WAL entries
+- **LRU Page Cache**: Configurable in-memory cache with automatic eviction (default: 100 pages, customizable at database creation)
 - **Disk Persistence**: Load tree structure from disk on startup
-- **Page Management**: In-memory caching with 4KB page size
+- **Page Management**: 4KB page size with efficient memory management
 - **Composite Keys**: Multi-column primary keys with lexicographic ordering
 - **Structured Records**: Typed database rows (Int, String, Float, Bool)
 
@@ -110,6 +116,7 @@ MiniDB/
 - **Page-Based Storage**: Fixed-size 4KB pages with page headers
 - **B+Tree Order**: 4 (max 3 keys per node, 4 children)
 - **Page Types**: Meta, Internal, Leaf
+- **LRU Cache**: Least Recently Used cache for frequently accessed pages
 - **Leaf Linking**: Doubly-linked list for efficient range scans
 - **WAL File**: Separate `.wal` file for transaction logging
 
@@ -130,38 +137,43 @@ import (
     "fmt"
 
     "bplustree/internal/btree"
-    "bplustree/internal/page"
     "bplustree/internal/storage"
 )
 
 func main() {
-    // Create page manager
-    pager := page.NewPageManagerWithFile("mydb.db", true)
-    defer pager.Close()
-
-    // Create B+Tree with transaction support
-    tree, err := btree.NewBPlusTree(pager)
+    // Create B+Tree with custom database filename (default cache: 100 pages)
+    // PageManager and WAL are created internally
+    tree, err := btree.NewBPlusTree("mydb.db", true)  // true = truncate existing file
     if err != nil {
         panic(err)
     }
     defer tree.Close()
 
-    // Start transaction
-    tree.Begin()
+    // Or create with custom cache size (e.g., 200 pages for ~800KB cache)
+    // tree, err := btree.NewBPlusTreeWithCacheSize("mydb.db", true, 200)
 
-    // Insert data
+    // Single insert - automatically transactional and crash-recoverable
     key := storage.NewCompositeKey(storage.NewInt(10))
     value := storage.NewRecord(storage.NewString("Hello"), storage.NewInt(42))
-    tree.Insert(key, value)
+    tree.Insert(key, value)  // Auto-commits internally
 
-    // Commit transaction
-    tree.Commit()
+    // Or use explicit transaction for multiple operations
+    tree.Begin()
+    tree.Insert(key, value)
+    tree.Update(key, storage.NewRecord(storage.NewString("Updated")))
+    tree.Commit()  // All operations persist together
 
     // Search
     result, err := tree.Search(key)
     if err == nil {
         fmt.Println("Found:", result)
     }
+
+    // Check cache statistics
+    stats := tree.GetPager().GetCacheStats()
+    fmt.Printf("Cache: hits=%d, misses=%d, evictions=%d, size=%d/%d\n",
+        stats.Hits, stats.Misses, stats.Evictions,
+        stats.Size, tree.GetPager().GetMaxCacheSize())
 }
 ```
 
@@ -215,5 +227,5 @@ This project is for educational and demonstration purposes.
 
 ---
 
-**Version:** 4.0  
+**Version:** 5.0 (LRU Page Cache)  
 **Last Updated:** January 2026

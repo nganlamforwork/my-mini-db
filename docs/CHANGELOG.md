@@ -6,29 +6,41 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
 
 - [MiniDB Development Changelog](#minidb-development-changelog)
   - [Table of Contents](#table-of-contents)
-  - [Version 4.0 - Complete Transaction Support \& Write-Ahead Logging (Current)](#version-40---complete-transaction-support--write-ahead-logging-current)
+  - [Version 5.0 - LRU Page Cache (Current)](#version-50---lru-page-cache-current)
     - [Major Features Added](#major-features-added)
     - [Implementation Details](#implementation-details)
     - [Real-World Context](#real-world-context)
-    - [Crash Safety Scenarios](#crash-safety-scenarios)
+    - [Benefits](#benefits)
+    - [Cache Statistics](#cache-statistics)
     - [Testing](#testing)
     - [Files Added](#files-added)
     - [Files Modified](#files-modified)
-    - [Key Improvements Over Initial Transaction Implementation](#key-improvements-over-initial-transaction-implementation)
-  - [Version 3.0 - Composite Keys \& Structured Records](#version-30---composite-keys--structured-records)
+    - [Key Improvements Over Version 4.0](#key-improvements-over-version-40)
+  - [Version 4.0 - Complete Transaction Support \& Write-Ahead Logging](#version-40---complete-transaction-support--write-ahead-logging)
     - [Major Features Added](#major-features-added-1)
     - [Implementation Details](#implementation-details-1)
-    - [Benefits](#benefits)
+    - [Real-World Context](#real-world-context-1)
+    - [Crash Safety Scenarios](#crash-safety-scenarios)
+    - [Testing](#testing-1)
     - [Files Added](#files-added-1)
     - [Files Modified](#files-modified-1)
-  - [Version 2.0 - Disk Persistence \& Load from Disk](#version-20---disk-persistence--load-from-disk)
+    - [Key Improvements Over Version 3.0](#key-improvements-over-version-30)
+  - [Version 3.0 - Composite Keys \& Structured Records](#version-30---composite-keys--structured-records)
     - [Major Features Added](#major-features-added-2)
     - [Implementation Details](#implementation-details-2)
     - [Benefits](#benefits-1)
+    - [Files Added](#files-added-2)
     - [Files Modified](#files-modified-2)
+    - [Key Improvements Over Version 2.0](#key-improvements-over-version-20)
+  - [Version 2.0 - Disk Persistence \& Load from Disk](#version-20---disk-persistence--load-from-disk)
+    - [Major Features Added](#major-features-added-3)
+    - [Implementation Details](#implementation-details-3)
+    - [Benefits](#benefits-2)
+    - [Files Modified](#files-modified-3)
+    - [Key Improvements Over Version 1.0](#key-improvements-over-version-10)
   - [Version 1.0 - Core B+Tree Implementation](#version-10---core-btree-implementation)
     - [Major Features Implemented](#major-features-implemented)
-    - [Implementation Details](#implementation-details-3)
+    - [Implementation Details](#implementation-details-4)
     - [Files Created](#files-created)
   - [Development Timeline](#development-timeline)
   - [Future Roadmap](#future-roadmap)
@@ -43,7 +55,123 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
 
 ---
 
-## Version 4.0 - Complete Transaction Support & Write-Ahead Logging (Current)
+## Version 5.0 - LRU Page Cache (Current)
+
+**Date:** January 2026  
+**Status:** Completed
+
+### Major Features Added
+
+- **LRU Page Cache**
+
+  - Least Recently Used (LRU) cache for page management
+  - Configurable cache size at database creation (default: 100 pages, ~400KB)
+  - Automatic eviction of least recently used pages
+  - Thread-safe implementation with read-write mutex
+  - Cache statistics (hits, misses, evictions, size)
+
+- **Cache Size Configuration**
+  - `NewBPlusTreeWithCacheSize(filename, truncate, maxCacheSize)` - Create database with custom cache size
+  - `NewBPlusTree(filename, truncate)` - Uses default cache size (100 pages) for backward compatibility
+  - Users can configure cache size based on available memory and workload requirements
+
+### Implementation Details
+
+- **New File**: `internal/page/cache.go` - LRU cache implementation
+
+  - Doubly-linked list for LRU ordering
+  - Hash map for O(1) page lookup
+  - Thread-safe operations
+  - Cache statistics tracking
+
+- **Updated**: `internal/btree/tree.go`
+
+  - Added `NewBPlusTreeWithCacheSize()` constructor for custom cache size configuration
+  - Updated `NewBPlusTree()` to use default cache size (backward compatible)
+
+- **Updated**: `internal/page/page_manager.go`
+
+  - Replaced unbounded map with LRU cache
+  - Enhanced `NewPageManagerWithCacheSize()` to properly initialize cache with custom size
+  - Added `GetCacheStats()` method for performance monitoring
+  - Added `GetMaxCacheSize()` method
+  - Added `Put()` and `RemoveFromCache()` methods for cache management
+
+- **Updated**: `internal/transaction/transaction.go` and `internal/transaction/wal.go`
+  - Updated to use new cache API (`Put()` instead of direct map access)
+
+### Real-World Context
+
+This implementation matches how production databases manage memory:
+
+- **PostgreSQL**: Uses shared buffer pool (similar to LRU cache) with configurable size
+- **MySQL InnoDB**: Uses buffer pool with LRU eviction (default 128MB)
+- **Oracle**: Uses database buffer cache with LRU eviction
+
+### Benefits
+
+- **Predictable Memory Usage**: Cache size limit prevents unbounded memory growth
+- **Improved Performance**: Frequently accessed pages stay in memory, reducing disk I/O
+- **Production-Like Behavior**: Matches real database memory management
+- **Performance Monitoring**: Cache statistics enable performance analysis
+- **Scalability**: Can handle large databases without loading all pages into memory
+
+### Cache Statistics
+
+The cache provides detailed performance metrics:
+
+```go
+type CacheStats struct {
+    Hits      uint64  // Number of cache hits
+    Misses    uint64  // Number of cache misses
+    Evictions uint64  // Number of pages evicted
+    Size      int     // Current cache size
+}
+```
+
+### Testing
+
+- Added comprehensive cache tests in `internal/page/cache_test.go`
+
+  - Basic LRU operations (Put, Get, Eviction)
+  - Cache statistics validation
+  - Update operations
+  - Remove and Clear operations
+
+- Added cache configuration tests in `internal/btree/cache_test.go`
+
+  - `TestCustomCacheSize` - Verifies custom cache size configuration
+  - `TestDefaultCacheSize` - Verifies default cache size (100 pages)
+  - `TestCacheSizeEviction` - Verifies cache eviction with small cache size
+
+- All existing B+Tree tests pass with new cache implementation
+- Cache eviction verified under memory pressure
+
+### Files Added
+
+- `internal/page/cache.go` - LRU cache implementation
+- `internal/page/cache_test.go` - Cache unit tests
+- `internal/btree/cache_test.go` - Cache configuration and integration tests
+
+### Files Modified
+
+- `internal/btree/tree.go` - Added `NewBPlusTreeWithCacheSize()` constructor
+- `internal/page/page_manager.go` - Enhanced cache initialization with custom size support
+- `internal/transaction/transaction.go` - Updated to use cache API
+- `internal/transaction/wal.go` - Updated to use cache API
+
+### Key Improvements Over Version 4.0
+
+- **Memory Management**: Bounded memory usage with LRU eviction
+- **Configurable Cache Size**: Users can set cache size based on available memory and workload
+- **Performance**: Reduced disk I/O for frequently accessed pages
+- **Monitoring**: Cache statistics for performance analysis
+- **Scalability**: Can handle databases larger than available RAM
+- **Production-Like Configuration**: Matches real database systems where cache size is configurable
+
+---
+
+## Version 4.0 - Complete Transaction Support & Write-Ahead Logging
 
 **Date:** January 2026  
 **Status:** Completed - Production Ready
@@ -94,14 +222,14 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
 
 - **WAL Implementation**
 
-  - Created `wal.go` (350+ lines) - Complete WAL implementation
+  - Created `wal.go` - Complete WAL implementation
   - `LogPageWrite()` - Logs complete page snapshots to WAL
   - `Recover()` - Replays WAL entries on database open
   - `Checkpoint()` - Truncates WAL after ensuring durability
 
 - **Transaction Management**
 
-  - Created `transaction.go` (250+ lines) - Complete transaction management
+  - Created `transaction.go` - Complete transaction management
   - Page modification tracking with original state preservation
   - Page allocation and deletion tracking
   - Transaction state management (Active, Committed, RolledBack)
@@ -157,14 +285,16 @@ Version 4.0 guarantees crash safety in all scenarios:
 - `docs/IMPLEMENTATION.md` - Comprehensive transaction documentation with crash safety details
 - `docs/CHANGELOG.md` - This changelog entry
 
-### Key Improvements Over Initial Transaction Implementation
+### Key Improvements Over Version 3.0
 
-The initial transaction implementation had a critical bug where single operations without explicit `Begin()` were not crash-recoverable. Version 4.0 fixes this by:
+Version 4.0 adds complete transaction support and crash recovery, addressing critical durability and consistency requirements:
 
-1. **Auto-Commit Transactions**: Every operation automatically uses transactions
-2. **No Direct Writes**: All writes go through transaction commit (including meta page)
-3. **Complete Crash Safety**: Guaranteed consistency even if crash occurs during page/node management
-4. **Production Ready**: Matches real database behavior where every operation is transactional
+1. **Crash Recovery**: Every operation is now crash-recoverable via WAL, ensuring no data loss
+2. **ACID Properties**: Full atomicity, consistency, durability guarantees for all operations
+3. **Auto-Commit Transactions**: Single operations automatically transactional without user intervention
+4. **Explicit Transactions**: Multi-operation atomicity with Begin/Commit/Rollback
+5. **Write-Ahead Logging**: Industry-standard WAL implementation for durability
+6. **Production Ready**: Matches real database behavior (PostgreSQL, SQLite, MySQL InnoDB)
 
 ---
 
@@ -190,7 +320,7 @@ The initial transaction implementation had a critical bug where single operation
 
 ### Implementation Details
 
-- Created `types.go` (400+ lines) - CompositeKey and Record types
+- Created `types.go` - CompositeKey and Record types
 - Updated all tree operations to use `Compare()` method
 - Updated serialization/deserialization for new types
 - Modified `leaf_page.go` and `internal_page.go` for new types
@@ -213,6 +343,16 @@ The initial transaction implementation had a critical bug where single operation
 - `leaf_page.go` - Updated serialization
 - `internal_page.go` - Updated serialization
 - `node.go` - Updated type aliases
+
+### Key Improvements Over Version 2.0
+
+Version 3.0 introduces a more realistic data model, moving from simple key-value pairs to structured database records:
+
+1. **Multi-Column Keys**: Support for composite primary keys (e.g., (user_id, timestamp))
+2. **Structured Data**: Full database rows with multiple typed columns instead of single values
+3. **Type Safety**: Strong typing for keys and values (Int, String, Float, Bool)
+4. **Realistic Database Model**: Closer to real database systems with structured records
+5. **Flexible Serialization**: Variable-length encoding for efficient storage
 
 ---
 
@@ -255,6 +395,16 @@ The initial transaction implementation had a critical bug where single operation
 
 - `tree.go` - Added Load() and loadPage() methods
 - `page_manager.go` - Added FlushAll() method
+
+### Key Improvements Over Version 1.0
+
+Version 2.0 adds persistence capabilities, making the database usable across application restarts:
+
+1. **Data Persistence**: Database survives application restarts and system crashes
+2. **Load from Disk**: Automatic tree reconstruction on startup
+3. **FlushAll()**: Ensures all modifications are written to disk before shutdown
+4. **Session Continuity**: Can resume work from previous session
+5. **Foundation for Recovery**: Sets up infrastructure for future crash recovery features
 
 ---
 
@@ -367,10 +517,11 @@ Phase 4: Complete Transactions (v4.0) ← Current
 
 ### Code Growth
 
-- **v1.0**: ~1,200 lines (core implementation)
-- **v2.0**: ~1,400 lines (+200 lines)
-- **v3.0**: ~2,000 lines (+600 lines)
-- **v4.0**: ~2,700 lines (+700 lines) - Complete transaction implementation with crash safety
+- **v1.0**: Core implementation
+- **v2.0**: Disk persistence and load from disk
+- **v3.0**: Composite keys and structured records
+- **v4.0**: Complete transaction implementation with crash safety
+- **v5.0**: LRU page cache for memory management
 
 ### Test Coverage
 

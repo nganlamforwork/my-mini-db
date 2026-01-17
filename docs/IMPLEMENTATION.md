@@ -2,7 +2,7 @@
 
 **Date:** January 13, 2026  
 **Author:** Lam Le Vu Ngan
-**Current Version:** 4.0 (Transaction Support)
+**Current Version:** 5.0 (LRU Page Cache)
 
 > **See [CHANGELOG.md](CHANGELOG.md) for complete development history and version evolution**
 
@@ -42,11 +42,12 @@
       - [6.1. **Borrow from Sibling**](#61-borrow-from-sibling)
       - [6.2. **Merge Nodes**](#62-merge-nodes)
     - [7. **Page Persistence Enhancement**](#7-page-persistence-enhancement)
-    - [8. **Transaction Support with Write-Ahead Logging (WAL)**](#8-transaction-support-with-write-ahead-logging-wal)
-      - [8.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**](#81-auto-commit-transactions-crash-recovery-for-single-operations)
-      - [8.2. **Explicit Transactions (Multi-Operation Atomicity)**](#82-explicit-transactions-multi-operation-atomicity)
-      - [8.3. **Write-Ahead Logging (WAL) Implementation**](#83-write-ahead-logging-wal-implementation)
-      - [8.4. **Transaction States and Lifecycle**](#84-transaction-states-and-lifecycle)
+    - [8. **LRU Page Cache (Memory Management)**](#8-lru-page-cache-memory-management)
+    - [9. **Transaction Support with Write-Ahead Logging (WAL)**](#9-transaction-support-with-write-ahead-logging-wal)
+      - [9.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**](#91-auto-commit-transactions-crash-recovery-for-single-operations)
+      - [9.2. **Explicit Transactions (Multi-Operation Atomicity)**](#92-explicit-transactions-multi-operation-atomicity)
+      - [9.3. **Write-Ahead Logging (WAL) Implementation**](#93-write-ahead-logging-wal-implementation)
+      - [9.4. **Transaction States and Lifecycle**](#94-transaction-states-and-lifecycle)
   - [Checklist: Completed Features](#checklist-completed-features)
     - [Core Operations](#core-operations)
     - [Transaction \& Durability](#transaction--durability)
@@ -1049,7 +1050,151 @@ function FlushAll():
 
 ---
 
-### 8. **Transaction Support with Write-Ahead Logging (WAL)**
+### 8. **LRU Page Cache (Memory Management)**
+
+**Overview:** Implemented an LRU (Least Recently Used) cache for page management, matching the behavior of production databases like PostgreSQL, MySQL InnoDB, and Oracle. The cache keeps frequently accessed pages in memory for fast access while automatically evicting least recently used pages when the cache limit is reached.
+
+**Real-World Database Comparison:**
+
+- **PostgreSQL**: Uses shared buffer pool (similar to LRU cache) to keep frequently accessed pages in memory. Default size is typically 25% of system RAM.
+- **MySQL InnoDB**: Uses buffer pool with LRU eviction. Default size is typically 128MB, configurable up to system RAM limits.
+- **Oracle**: Uses database buffer cache (similar concept) with LRU eviction for frequently accessed data blocks.
+
+**Algorithm Steps:**
+
+1. **Cache Lookup** - Check if page exists in cache (O(1) hash map lookup)
+2. **Cache Hit** - If found, move page to front of LRU list (most recently used) and return
+3. **Cache Miss** - If not found, load from disk, add to cache
+4. **Eviction** - If cache is full, evict least recently used page (back of LRU list)
+5. **Update Cache** - Add newly loaded page to front of LRU list
+
+**Pseudo Code:**
+
+```
+type LRUCache struct:
+    cache: Map[pageID → ListElement]  // Hash map for O(1) lookup
+    lruList: DoublyLinkedList         // For LRU ordering
+    maxSize: int                      // Maximum pages in cache
+
+function Get(pageID):
+    // Step 1: Check cache (O(1) lookup)
+    if pageID in cache:
+        elem = cache[pageID]
+        // Step 2: Move to front (most recently used)
+        lruList.moveToFront(elem)
+        stats.hits++
+        return elem.page
+    else:
+        // Step 3: Cache miss - load from disk
+        page = readPageFromDisk(pageID)
+        stats.misses++
+
+        // Step 4: Check if cache is full
+        if cache.size >= maxSize:
+            // Evict least recently used (back of list)
+            back = lruList.back()
+            evictedPageID = back.pageID
+            delete cache[evictedPageID]
+            lruList.remove(back)
+            stats.evictions++
+
+        // Step 5: Add to cache (front of list)
+        elem = lruList.pushFront(page)
+        cache[pageID] = elem
+        return page
+
+function Put(pageID, page):
+    if pageID in cache:
+        // Update existing entry and move to front
+        elem = cache[pageID]
+        elem.page = page
+        lruList.moveToFront(elem)
+    else:
+        // Add new entry (with eviction if needed)
+        if cache.size >= maxSize:
+            evictLRU()
+        elem = lruList.pushFront(page)
+        cache[pageID] = elem
+```
+
+**Key Concepts:**
+
+- **LRU Eviction**: When cache is full, the least recently accessed page is evicted to make room for new pages. This ensures frequently accessed pages stay in memory.
+- **O(1) Lookup**: Hash map provides constant-time page lookup by page ID.
+- **O(1) Update**: Moving pages to front of doubly-linked list is constant time.
+- **Thread-Safe**: Cache operations are protected by read-write mutex for concurrent access (future-proofing).
+- **Cache Statistics**: Tracks hits, misses, evictions, and current size for performance monitoring.
+
+**Cache Configuration:**
+
+- **Default Size**: 100 pages (400KB with 4KB pages) - Used by `NewBPlusTree(filename, truncate)`
+- **Configurable**: Can be set via `NewBPlusTreeWithCacheSize(filename, truncate, maxCacheSize)` for custom cache sizes
+- **Memory Usage**: Each cached page consumes ~4KB + overhead (Go struct size)
+- **Real-World Configuration**: Production databases allow cache size configuration:
+  - **PostgreSQL**: `shared_buffers` parameter (default 128MB, configurable)
+  - **MySQL InnoDB**: `innodb_buffer_pool_size` parameter (default 128MB, configurable)
+  - **Oracle**: `DB_CACHE_SIZE` parameter (configurable based on available memory)
+
+**Cache Statistics:**
+
+The cache provides performance metrics:
+
+```go
+type CacheStats struct {
+    Hits      uint64  // Number of cache hits
+    Misses    uint64  // Number of cache misses
+    Evictions uint64  // Number of pages evicted
+    Size      int     // Current cache size
+}
+```
+
+**Usage Example:**
+
+```go
+// Default cache size (100 pages)
+tree, _ := NewBPlusTree("mydatabase.db", true)
+defer tree.Close()
+
+// Or with custom cache size (e.g., 200 pages for ~800KB cache)
+tree, _ := NewBPlusTreeWithCacheSize("mydatabase.db", true, 200)
+defer tree.Close()
+
+// Get cache statistics
+stats := tree.GetPager().GetCacheStats()
+fmt.Printf("Cache hits: %d, misses: %d, evictions: %d, size: %d/%d\n",
+    stats.Hits, stats.Misses, stats.Evictions, stats.Size, tree.GetPager().GetMaxCacheSize())
+```
+
+**Cache Size Selection Guidelines:**
+
+- **Small Databases (< 1MB)**: 50-100 pages (200-400KB) - Sufficient for small datasets
+- **Medium Databases (1-100MB)**: 100-500 pages (400KB-2MB) - Good balance for most applications
+- **Large Databases (> 100MB)**: 500-2000 pages (2MB-8MB) - For frequently accessed data
+- **Memory-Constrained Systems**: 25-50 pages (100-200KB) - Minimal memory footprint
+- **High-Performance Systems**: 1000+ pages (4MB+) - Maximize cache hits for hot data
+
+**Performance Impact:**
+
+- **Cache Hit**: O(1) - Instant page access from memory
+- **Cache Miss**: O(1) + disk I/O - Page loaded from disk, then cached
+- **Eviction**: O(1) - Constant time removal of least recently used page
+
+**Benefits:**
+
+- **Reduced Disk I/O**: Frequently accessed pages stay in memory, avoiding repeated disk reads
+- **Predictable Memory Usage**: Cache size limit prevents unbounded memory growth
+- **Production-Like Behavior**: Matches how real databases manage memory
+- **Performance Monitoring**: Cache statistics enable performance analysis
+
+**Limitations:**
+
+- **Fixed Size**: Cache size is fixed at initialization (no dynamic resizing)
+- **No Dirty Page Tracking**: Cache doesn't track which pages are modified (handled by transactions)
+- **Simple Eviction**: Only LRU eviction (no advanced policies like 2Q or ARC)
+
+---
+
+### 9. **Transaction Support with Write-Ahead Logging (WAL)**
 
 **Overview:** Full ACID transaction support with Write-Ahead Logging (WAL) for durability and crash recovery. MiniDB implements two transaction modes: **auto-commit transactions** (automatically created for single operations) and **explicit transactions** (user-initiated for multi-operation atomicity). This design ensures every operation is crash-recoverable while supporting atomic multi-operation transactions—critical for production database systems.
 
@@ -1180,7 +1325,7 @@ Transactions progress through well-defined states (Active → Committed/RolledBa
 
 ---
 
-#### 8.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**
+#### 9.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**
 
 **Purpose:** Automatically wrap every Insert/Update/Delete operation in a transaction, ensuring crash recovery even for simple single-operation queries. This matches production database behavior where every operation is transactional.
 
@@ -1293,13 +1438,13 @@ tree.Delete(key3)  // Auto-commits internally
 // All operations are immediately durable and crash-recoverable
 ```
 
-**Note:** Users can choose any database filename. The `NewBPlusTree(filename, truncate)` function creates the PageManager internally. Set `truncate=true` for new databases, `truncate=false` for existing ones.
+**Note:** Users can choose any database filename. The `NewBPlusTree(filename, truncate)` function creates the PageManager internally with default cache size (100 pages). For custom cache size, use `NewBPlusTreeWithCacheSize(filename, truncate, maxCacheSize)`. Set `truncate=true` for new databases, `truncate=false` for existing ones.
 
 **Time Complexity:** O(1) transaction overhead per operation (transaction creation/commit is constant time). Page writes are O(k) where k is number of modified pages (typically 1-3 for single operations).
 
 ---
 
-#### 8.2. **Explicit Transactions (Multi-Operation Atomicity)**
+#### 9.2. **Explicit Transactions (Multi-Operation Atomicity)**
 
 **Purpose:** Enable users to group multiple operations into a single atomic transaction. All operations either succeed together (commit) or fail together (rollback), maintaining database consistency.
 
@@ -1412,9 +1557,13 @@ function Rollback():
 **Usage Example:**
 
 ```go
-// Create B+Tree with custom database filename
+// Create B+Tree with custom database filename (default cache: 100 pages)
 tree, _ := NewBPlusTree("mydatabase.db", true)
 defer tree.Close()
+
+// Or with custom cache size (e.g., 200 pages)
+// tree, _ := NewBPlusTreeWithCacheSize("mydatabase.db", true, 200)
+// defer tree.Close()
 
 // Begin explicit transaction
 tree.Begin()
@@ -1448,7 +1597,7 @@ tree.Commit()             // Commits both operations atomically
 
 ---
 
-#### 8.3. **Write-Ahead Logging (WAL) Implementation**
+#### 9.3. **Write-Ahead Logging (WAL) Implementation**
 
 **Overview:** Write-Ahead Logging (WAL) ensures durability by logging all page modifications to a separate WAL file before writing to the main database file. This follows the ARIES recovery algorithm principle: log writes must complete (and be synced to disk) before database file writes. If a crash occurs, committed changes can be recovered by replaying WAL entries.
 
@@ -1668,7 +1817,7 @@ In production databases, checkpoints are typically created:
 
 ---
 
-#### 8.4. **Transaction States and Lifecycle**
+#### 9.4. **Transaction States and Lifecycle**
 
 **Overview:** Transactions progress through well-defined states (Active → Committed/RolledBack) with clear state transitions. The transaction manager tracks all modifications and ensures atomicity through state management.
 
@@ -1953,7 +2102,7 @@ tree.Insert(key, value)  // Commit completes
 ## Technical Debt / Considerations
 
 - **Error Handling:** Some panics could be graceful errors
-- **Memory Usage:** All pages loaded into memory; consider LRU cache eviction
+- **Memory Usage:** LRU cache limits memory usage with configurable size (default 100 pages)
 - **File Format Version:** Add version handling for schema migration
 - **Defragmentation:** Deleted pages not reused; implement free page list
 - **WAL Rotation:** Currently truncates WAL on checkpoint; production systems use WAL segment rotation
@@ -1975,7 +2124,7 @@ tree.Insert(key, value)  // Commit completes
 
 - ORDER = 4 (max 3 keys per node, 4 children)
 - Page size = 4KB
-- No buffer pool (all pages in memory)
+- LRU page cache with configurable size (default 100 pages, ~400KB)
 - Single-threaded access only (transaction support added, but no concurrent transactions)
 - Variable-length keys/values based on data content
 - WAL enabled for durability and crash recovery

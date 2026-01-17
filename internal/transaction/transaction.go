@@ -161,15 +161,15 @@ func (tm *TransactionManager) Rollback() error {
 		// Deep copy the original page to avoid reference issues
 		restoredPage := page.ClonePage(originalPage)
 		if restoredPage != nil {
-			pager.Pages[pageID] = restoredPage
+			pager.Put(pageID, restoredPage)
 		}
 	}
 
 	// Remove newly created pages
 	for pageID := range tm.activeTx.modifiedPages {
 		if _, wasOriginal := tm.activeTx.originalPages[pageID]; !wasOriginal {
-			// This was a new page, remove it
-			delete(pager.Pages, pageID)
+			// This was a new page, remove it from cache
+			pager.RemoveFromCache(pageID)
 		}
 	}
 

@@ -41,7 +41,7 @@ func (tree *BPlusTree) GetPager() *page.PageManager {
 // NewBPlusTree function used for: Creating a new B+Tree instance with a custom database filename, automatically creating PageManager and initializing WAL/transaction support for crash recovery.
 //
 // Algorithm steps:
-// 1. Create PageManager - Initialize PageManager with specified filename and truncate flag
+// 1. Create PageManager - Initialize PageManager with specified filename and truncate flag (default cache size)
 // 2. Initialize WAL manager - Create WAL manager using the database filename
 // 3. Initialize transaction manager - Create transaction manager with WAL manager
 // 4. Create BPlusTree struct - Create tree with page manager, transaction manager, and WAL
@@ -50,11 +50,67 @@ func (tree *BPlusTree) GetPager() *page.PageManager {
 // 7. Return initialized tree - Return tree instance ready for use
 //
 // Note: The PageManager is managed internally by the BPlusTree. When tree.Close() is called, it will close both the WAL and the PageManager.
+// Uses default cache size (100 pages). For custom cache size, use NewBPlusTreeWithCacheSize().
 //
 // Return: (*BPlusTree, error) - new B+Tree instance, error if PageManager creation or WAL initialization fails
 func NewBPlusTree(filename string, truncate bool) (*BPlusTree, error) {
-	// Create PageManager with specified filename
+	// Create PageManager with specified filename (default cache size)
 	pager := page.NewPageManagerWithFile(filename, truncate)
+	
+	// Initialize WAL manager using database filename
+	wal, err := transaction.NewWALManager(filename)
+	if err != nil {
+		pager.Close() // Close pager on error to avoid resource leak
+		return nil, fmt.Errorf("failed to create WAL: %w", err)
+	}
+
+	// Initialize transaction manager
+	txManager := transaction.NewTransactionManager(wal)
+
+	tree := &BPlusTree{
+		pager:     pager,
+		txManager: txManager,
+		wal:       wal,
+	}
+
+	// Try to recover from WAL if needed
+	if err := wal.Recover(pager); err != nil {
+		// If recovery fails, continue anyway (might be first run)
+		// In production, you'd want better error handling
+	}
+
+	// Load meta page
+	meta, err := pager.ReadMeta()
+	if err == nil {
+		tree.meta = meta
+	}
+
+	return tree, nil
+}
+
+// NewBPlusTreeWithCacheSize function used for: Creating a new B+Tree instance with a custom database filename and configurable cache size, automatically creating PageManager and initializing WAL/transaction support for crash recovery.
+//
+// Algorithm steps:
+// 1. Create PageManager - Initialize PageManager with specified filename, truncate flag, and custom cache size
+// 2. Initialize WAL manager - Create WAL manager using the database filename
+// 3. Initialize transaction manager - Create transaction manager with WAL manager
+// 4. Create BPlusTree struct - Create tree with page manager, transaction manager, and WAL
+// 5. Attempt WAL recovery - Restore committed state from previous session if WAL exists
+// 6. Load meta page - Load meta page from disk if it exists
+// 7. Return initialized tree - Return tree instance ready for use
+//
+// Note: The PageManager is managed internally by the BPlusTree. When tree.Close() is called, it will close both the WAL and the PageManager.
+// This allows users to configure cache size based on available memory and workload requirements.
+//
+// Parameters:
+//   - filename: Database filename (e.g., "mydb.db")
+//   - truncate: true to create new database, false to open existing
+//   - maxCacheSize: Maximum number of pages to cache in memory (e.g., 200 for ~800KB cache)
+//
+// Return: (*BPlusTree, error) - new B+Tree instance, error if PageManager creation or WAL initialization fails
+func NewBPlusTreeWithCacheSize(filename string, truncate bool, maxCacheSize int) (*BPlusTree, error) {
+	// Create PageManager with specified filename and custom cache size
+	pager := page.NewPageManagerWithCacheSize(filename, truncate, maxCacheSize)
 	
 	// Initialize WAL manager using database filename
 	wal, err := transaction.NewWALManager(filename)

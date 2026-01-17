@@ -1,7 +1,7 @@
 # MiniDB Testing Documentation
 
 **Date:** January 2026  
-**Version:** 4.0  
+**Version:** 5.0  
 **Status:** Comprehensive Test Suite with Visualization
 
 > **Note:** This document describes the external testing infrastructure. For core implementation details, see [IMPLEMENTATION.md](IMPLEMENTATION.md)
@@ -328,6 +328,100 @@ Tests verify deletion with full rebalancing (borrow and merge).
 
 ---
 
+### 7. Cache Testing
+
+The cache implementation is tested separately in `internal/page/cache_test.go` to verify LRU eviction behavior and cache statistics.
+
+#### Cache Unit Tests
+
+**TestLRUCacheBasic**
+- **Purpose**: Verify basic LRU cache operations
+- **Validates**:
+  - Put and Get operations
+  - LRU eviction when cache is full
+  - Most recently used pages stay in cache
+  - Least recently used pages are evicted
+
+**TestLRUCacheStats**
+- **Purpose**: Verify cache statistics tracking
+- **Validates**:
+  - Cache hit counting
+  - Cache miss counting
+  - Eviction counting
+  - Current cache size tracking
+
+**TestLRUCacheUpdate**
+- **Purpose**: Verify page updates in cache
+- **Validates**:
+  - Updating existing cache entries
+  - Cache size remains constant after update
+  - Updated pages remain in cache
+
+**TestLRUCacheRemove**
+- **Purpose**: Verify manual cache removal
+- **Validates**:
+  - Removing specific pages from cache
+  - Cache size decreases after removal
+  - Other pages remain unaffected
+
+**TestLRUCacheClear**
+- **Purpose**: Verify cache clearing
+- **Validates**:
+  - All pages removed from cache
+  - Cache size reset to zero
+  - Cache ready for reuse
+
+#### Cache Integration Testing
+
+All B+Tree operations automatically exercise the cache:
+- **Insert operations**: New pages added to cache
+- **Search operations**: Pages loaded from cache or disk
+- **Delete operations**: Pages accessed from cache
+- **Range queries**: Multiple pages loaded, testing cache behavior
+- **Load from disk**: Pages loaded and cached during tree reconstruction
+
+#### Cache Configuration Testing
+
+**TestCustomCacheSize**
+- **Purpose**: Verify custom cache size configuration
+- **Scenario**: Create database with custom cache size (50 pages)
+- **Validates**:
+  - Custom cache size is correctly set
+  - Cache operations work with custom size
+  - Cache statistics reflect custom configuration
+
+**TestDefaultCacheSize**
+- **Purpose**: Verify default cache size
+- **Scenario**: Create database without specifying cache size
+- **Validates**:
+  - Default cache size is 100 pages
+  - Default configuration works correctly
+
+**TestCacheSizeEviction**
+- **Purpose**: Verify cache eviction with small cache size
+- **Scenario**: Create database with very small cache (5 pages), insert many keys
+- **Validates**:
+  - Cache size never exceeds maximum
+  - Evictions occur when cache is full
+  - Cache statistics track evictions correctly
+
+#### Cache Performance Verification
+
+Cache statistics can be accessed during tests:
+
+```go
+stats := tree.pager.GetCacheStats()
+fmt.Printf("Hits: %d, Misses: %d, Evictions: %d, Size: %d\n",
+    stats.Hits, stats.Misses, stats.Evictions, stats.Size)
+```
+
+**Expected Behavior:**
+- Frequently accessed pages (root, hot leaves) should have high hit rates
+- Cache evictions should occur when working with large datasets
+- Cache size should never exceed configured maximum
+
+---
+
 ## Test Helper Functions
 
 ### Key/Value Constructors
@@ -451,7 +545,7 @@ Tests automatically:
 ### Current Coverage
 
 - **Total Tests**: 18 comprehensive tests
-- **Test Code**: 1,650+ lines
+- **Test Code**: Comprehensive test suite
 - **Coverage Areas**:
   - Insert operations (3 tests)
   - Search operations (1 test)
@@ -551,8 +645,8 @@ The test infrastructure is structured to support:
 
 ## Files
 
-- `tree_test.go` - Main test file (1,650+ lines)
-- `visualize_tree.py` - Tree visualization script (500+ lines)
+- `tree_test.go` - Main test file
+- `visualize_tree.py` - Tree visualization script
 - `testdata/` - Test output directory
 - `TESTING.md` - This document
 

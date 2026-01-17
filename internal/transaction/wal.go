@@ -327,8 +327,8 @@ func (w *WALManager) Recover(pm *page.PageManager) error {
 			return fmt.Errorf("unknown page type %d during recovery", hdr.PageType)
 		}
 
-		// Restore page to page manager
-		pm.Pages[pageID] = pageObj
+		// Restore page to page manager cache
+		pm.Put(pageID, pageObj)
 		// Write to main database file
 		if err := pm.WritePageToFile(pageID, pageObj); err != nil {
 			return fmt.Errorf("failed to restore page %d: %w", pageID, err)
