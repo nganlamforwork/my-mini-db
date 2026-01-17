@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
-import { Link, useLocation } from 'react-router-dom'
-import { Sun, Moon } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
+import { ArrowLeft, Sun, Moon } from 'lucide-react'
+import { Button } from './ui/button'
 import { Switch } from './ui/switch'
-import { cn } from '@/lib/utils'
 
 function getInitialTheme(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'light'
@@ -13,9 +13,13 @@ function getInitialTheme(): 'light' | 'dark' {
   return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
 }
 
-export function Header() {
+interface DatabaseHeaderProps {
+  databaseName: string
+}
+
+export function DatabaseHeader({ databaseName }: DatabaseHeaderProps) {
   const [theme, setTheme] = useState<'light' | 'dark'>(getInitialTheme)
-  const location = useLocation()
+  const navigate = useNavigate()
 
   useEffect(() => {
     const root = document.documentElement
@@ -27,35 +31,19 @@ export function Header() {
     localStorage.setItem('theme', theme)
   }, [theme])
 
-  const navLinks = [
-    { path: '/about', label: 'About' },
-    { path: '/documentation', label: 'Documentation' },
-    { path: '/how-to-use', label: 'How to Use' },
-  ]
-
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex h-14 items-center justify-between px-4">
-        <div className="flex items-center gap-8">
-          <Link to="/" className="text-xl font-bold hover:opacity-80 transition-opacity">
-            MiniDB
-          </Link>
-          <nav className="hidden md:flex items-center gap-6">
-            {navLinks.map((link) => (
-              <Link
-                key={link.path}
-                to={link.path}
-                className={cn(
-                  "text-sm font-medium transition-colors hover:text-primary",
-                  location.pathname === link.path
-                    ? "text-foreground"
-                    : "text-muted-foreground"
-                )}
-              >
-                {link.label}
-              </Link>
-            ))}
-          </nav>
+        <div className="flex items-center gap-4">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => navigate('/')}
+            className="h-8 w-8"
+          >
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <h1 className="text-lg font-semibold">{databaseName}</h1>
         </div>
         <div className="flex items-center gap-2">
           <Sun className="h-4 w-4" />

@@ -1,18 +1,15 @@
+import type { 
+  DatabaseInfo, 
+  TreeStructure, 
+  CacheStats, 
+  CachePages, 
+  IOReadInfo 
+} from '@/types/database'
+
 const API_BASE_URL = 'http://localhost:8080/api'
 
 export interface Database {
   name: string
-}
-
-export interface DatabaseInfo {
-  name: string
-  filename: string
-  order: number
-  pageSize: number
-  walEnabled: boolean
-  cacheSize: number
-  rootPage: number
-  height: number
 }
 
 export interface CreateDatabaseRequest {
@@ -78,5 +75,41 @@ export const api = {
     if (!response.ok) {
       throw new Error('Failed to drop database')
     }
+  },
+
+  // Get tree structure
+  async getTreeStructure(name: string): Promise<TreeStructure> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/tree`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch tree structure: ${name}`)
+    }
+    return await response.json()
+  },
+
+  // Get cache statistics
+  async getCacheStats(name: string): Promise<CacheStats> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/cache`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch cache stats: ${name}`)
+    }
+    return await response.json()
+  },
+
+  // Get cached pages
+  async getCachePages(name: string): Promise<CachePages> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/cache/pages`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch cache pages: ${name}`)
+    }
+    return await response.json()
+  },
+
+  // Get I/O read statistics
+  async getIOReads(name: string): Promise<IOReadInfo> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/io`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch I/O reads: ${name}`)
+    }
+    return await response.json()
   },
 }

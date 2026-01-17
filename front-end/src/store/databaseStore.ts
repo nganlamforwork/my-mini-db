@@ -1,10 +1,10 @@
 import { create } from 'zustand'
-import { type DatabaseInfo } from '@/lib/api'
+import type { DatabaseInfo } from '@/types/database'
 
 interface DatabaseStore {
   databases: string[]
   selectedDatabase: string | null
-  databaseInfo: Record<string, DatabaseInfo>
+  databaseInfo: { [key: string]: DatabaseInfo }
   setDatabases: (databases: string[]) => void
   setSelectedDatabase: (name: string | null) => void
   setDatabaseInfo: (name: string, info: DatabaseInfo) => void
