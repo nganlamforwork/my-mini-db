@@ -58,7 +58,6 @@
     - [Low Priority](#low-priority)
   - [Technical Debt / Considerations](#technical-debt--considerations)
   - [Performance Characteristics](#performance-characteristics)
-  - [Files Modified/Created](#files-modifiedcreated)
 
 ---
 
@@ -1052,91 +1051,233 @@ function FlushAll():
 
 ### 8. **Transaction Support with Write-Ahead Logging (WAL)**
 
-**Overview:** Full ACID transaction support with Write-Ahead Logging for durability and crash recovery. MiniDB implements two types of transactions: **auto-commit transactions** (for single operations) and **explicit transactions** (for multi-operation queries). This dual approach ensures that every operation is crash-recoverable while also supporting atomic multi-operation transactions—critical for production database systems.
+**Overview:** Full ACID transaction support with Write-Ahead Logging (WAL) for durability and crash recovery. MiniDB implements two transaction modes: **auto-commit transactions** (automatically created for single operations) and **explicit transactions** (user-initiated for multi-operation atomicity). This design ensures every operation is crash-recoverable while supporting atomic multi-operation transactions—critical for production database systems.
 
-**Real-World Context:**
+**Theoretical Foundation:**
 
-Transaction support with WAL is a fundamental feature in production databases. This implementation follows the same principles used by:
+This implementation is based on the **ARIES (Algorithms for Recovery and Isolation Exploiting Semantics)** recovery algorithm, the industry standard for database recovery developed by IBM researchers in the 1990s and used by production databases today. Understanding these fundamental concepts is essential before diving into the implementation details.
 
-- **PostgreSQL**: Uses WAL (called "pg_xlog" or "pg_wal") for durability. All changes are logged before being written to data pages, enabling point-in-time recovery and crash recovery. PostgreSQL uses auto-commit by default for single statements, with explicit transactions for multi-statement blocks.
-- **SQLite**: Implements WAL mode where changes are written to a separate WAL file before being checkpointed to the main database file. SQLite uses auto-commit for individual statements and explicit transactions (BEGIN/COMMIT) for multi-statement operations.
-- **MySQL InnoDB**: Uses a redo log (similar to WAL) to ensure durability and enable crash recovery. InnoDB uses auto-commit mode by default, with explicit transactions for multi-statement operations.
-- **Foundation**: Based on the **ARIES (Algorithms for Recovery and Isolation Exploiting Semantics)** recovery algorithm principles, which is the industry standard for database recovery.
+**1. Write-Ahead Logging (WAL) Principle**
 
-**Key Concepts:**
+The Write-Ahead Logging principle states that **all page modifications must be written to stable storage (WAL file) before being written to the database file**. This fundamental rule ensures that if a crash occurs, committed transactions can be recovered by replaying WAL entries, even if the database file was only partially written.
 
-1. **Write-Ahead Logging (WAL)**: All modifications are logged to a separate WAL file before being written to the main database file. This ensures that if a crash occurs, all committed transactions can be recovered by replaying the WAL.
-2. **Transaction Atomicity**: Operations within a transaction either all succeed (commit) or all fail (rollback), maintaining database consistency.
-3. **Durability**: Once a transaction is committed, its changes are guaranteed to persist even if the system crashes immediately after.
-4. **Auto-Commit Transactions**: Every single operation (Insert, Update, Delete) automatically creates and commits a transaction, ensuring crash recovery even for simple operations.
-5. **Explicit Transactions**: Multi-operation queries can be grouped into explicit transactions for atomicity across multiple operations.
+**Why WAL is Critical:**
+
+- **Durability Guarantee**: Committed changes survive crashes because they are logged to WAL (which is synced to disk) before database writes
+- **Crash Recovery**: On restart, the database can replay WAL entries to restore all committed changes, even if database file writes were incomplete
+- **Atomicity**: The two-phase write (WAL first, then database) ensures atomicity—either both succeed (after sync) or neither persists (if crash occurs before sync)
+
+**Real-World Implementation:**
+
+- **PostgreSQL**: Uses WAL (pg_wal directory) where all changes are logged before being written to data pages
+- **MySQL InnoDB**: Uses redo log (similar to WAL) where transactions are logged before being written to tablespace files
+- **Oracle**: Uses redo log files where all changes are recorded before being written to data files
+
+**References:**
+
+- PostgreSQL WAL Documentation: https://www.postgresql.org/docs/current/wal-intro.html
+- MySQL InnoDB Redo Log: https://dev.mysql.com/doc/refman/8.0/en/innodb-redo-log.html
+- Wikipedia - Write-Ahead Logging: https://en.wikipedia.org/wiki/Write-ahead_logging
+
+**2. Physical Logging vs Logical Logging**
+
+This implementation uses **physical logging**, where the WAL stores complete page snapshots (entire physical pages) rather than logical operations (e.g., "INSERT key=10, value=A"). Physical logging enables fast recovery by simply restoring page contents without re-executing operations.
+
+**Physical Logging Advantages:**
+
+- **Efficient Recovery**: Recovery is fast—simply restore pages from WAL without re-executing operations
+- **Idempotent Replay**: Same WAL entry can be replayed multiple times safely (just overwrite page)
+- **Minimal Dependencies**: Recovery doesn't require understanding operation semantics
+
+**Logical Logging Disadvantages:**
+
+- **Slower Recovery**: Must re-execute operations, which may fail or have side effects
+- **Dependency Issues**: Operations may depend on state that no longer exists
+- **Non-Idempotent**: Replaying same operation multiple times may cause errors
+
+**Why Production Databases Use Physical Logging:**
+
+- **PostgreSQL**: Uses physical logging (page-level changes) for efficiency
+- **MySQL InnoDB**: Uses physical logging (page images) for fast recovery
+- **Oracle**: Uses physical logging (redo log entries contain page changes) for reliability
+
+**References:**
+
+- Database System Concepts (Silberschatz, Korth, Sudarshan) - Chapter 17: Recovery System
+
+**3. Log Sequence Number (LSN)**
+
+Every WAL entry receives a **monotonically increasing LSN (Log Sequence Number)**, which enables ordered replay during recovery and provides a global ordering of all database modifications. LSNs are critical for recovery algorithms because they ensure transactions are replayed in the correct order.
+
+**LSN Properties:**
+
+- **Monotonicity**: LSNs always increase (no LSN is ever reused)
+- **Ordering**: Higher LSN means later modification; enables chronological replay
+- **Global Scope**: All pages reference LSNs, enabling consistency checks
+- **Recovery Boundary**: Checkpoints mark stable LSNs where recovery can start
+
+**LSN Usage in Recovery:**
+
+- **Ordered Replay**: Recovery processes WAL entries in LSN order, ensuring correct state reconstruction
+- **Consistency Checks**: Page LSNs can be compared to WAL LSNs to detect inconsistencies
+- **Checkpoint Tracking**: Checkpoints record stable LSNs, allowing recovery to start from last checkpoint
+
+**Real-World LSN Implementation:**
+
+- **PostgreSQL**: Uses 64-bit LSNs (XLogRecPtr) to track log positions
+- **MySQL InnoDB**: Uses LSN (Log Sequence Number) for redo log ordering
+- **SQL Server**: Uses LSNs for transaction log ordering and recovery
+
+**References:**
+
+- PostgreSQL LSN Documentation: https://www.postgresql.org/docs/current/functions-admin.html#FUNCTIONS-ADMIN-BACKUP
+- MySQL InnoDB LSN: https://dev.mysql.com/doc/refman/8.0/en/innodb-checkpoints.html
+- ARIES Paper - LSN Usage: https://www.cs.berkeley.edu/~brewer/cs262/Aries.pdf (original IBM paper)
+
+**4. Transaction States and State Transitions**
+
+Transactions progress through well-defined states (Active → Committed/RolledBack) with strict state transition rules. All modifications are tracked during the Active state (in memory only), then atomically persisted (Commit) or discarded (Rollback) based on transaction outcome.
+
+**Transaction State Machine:**
+
+- **Active**: Transaction is in progress; modifications tracked in memory only (no disk writes)
+- **Committed**: Transaction completed successfully; all modifications written to WAL and database file (with sync)
+- **RolledBack**: Transaction was aborted; original page states restored, new pages removed (no disk writes)
+
+**State Transition Rules:**
+
+- **Active → Committed**: Only via `Commit()`; must write all modifications to WAL (synced), then to database file (synced)
+- **Active → RolledBack**: Only via `Rollback()`; must restore original page states in memory
+- **Committed/RolledBack → No Transaction**: Automatic after state transition; transaction object cleared
+
+**ACID Properties Guaranteed:**
+
+- **Atomicity**: All operations in transaction either all succeed (Commit) or all fail (Rollback)
+- **Consistency**: Database remains in valid state even if transaction fails
+- **Isolation**: In this implementation, single transaction at a time (no concurrency conflicts)
+- **Durability**: Once committed, changes survive crashes via WAL replay
+
+**References:**
+
+- ACID Properties: https://en.wikipedia.org/wiki/ACID
+- Transaction State Management: Database System Concepts (Silberschatz, Korth, Sudarshan) - Chapter 15: Transactions
+- ARIES Transaction Recovery: https://www.cs.berkeley.edu/~brewer/cs262/Aries.pdf
+
+**Real-World Database Comparison:**
+
+- **PostgreSQL**: Uses WAL ("pg_wal") for durability and point-in-time recovery. Auto-commits single statements; supports explicit transactions for multi-statement blocks.
+- **SQLite**: WAL mode writes changes to `.wal` file before checkpointing to main database. Auto-commits individual statements; explicit transactions for atomicity.
+- **MySQL InnoDB**: Redo log (similar to WAL) ensures durability and enables crash recovery. Auto-commit mode by default; explicit transactions for multi-statement operations.
+- **Oracle**: Uses redo log files (similar concept) for durability and recovery. Follows ARIES principles.
+
+**Key Design Principles:**
+
+1. **Write-Ahead Logging**: All page modifications logged to WAL **first**, then to database file (with `Sync()` for durability)
+2. **In-Memory Tracking**: Pages modified in memory only during operations; written to disk only at commit
+3. **Atomic Commit**: Commit process is all-or-nothing—either all pages written to WAL and database, or none (rollback on failure)
+4. **Crash Recovery**: On restart, WAL entries are replayed to restore committed state
+5. **Auto-Commit for Single Operations**: Every Insert/Update/Delete automatically wrapped in transaction for crash safety
 
 ---
 
 #### 8.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**
 
-**Purpose:** Ensure that every operation, even simple single-operation queries, is crash-recoverable. This matches the behavior of real production databases where every operation is transactional.
+**Purpose:** Automatically wrap every Insert/Update/Delete operation in a transaction, ensuring crash recovery even for simple single-operation queries. This matches production database behavior where every operation is transactional.
 
-**How It Works:**
+**Algorithm Steps:**
 
-When a user calls `Insert()`, `Update()`, or `Delete()` without an explicit `Begin()`, the system automatically:
+1. **Operation Start** - Check if active transaction exists
+2. **Create Auto-Commit Transaction** - If no transaction, create one automatically (marked as auto-commit)
+3. **Track Page Modifications** - Save original page states and track all modified pages in memory
+4. **Perform Operation** - Execute Insert/Update/Delete (all modifications in memory only)
+5. **Auto-Commit at End** - Write all changes to WAL first, then to database file
+6. **Mark Committed** - Clear transaction state
 
-1. Creates an auto-commit transaction
-2. Tracks all page modifications during the operation
-3. Commits the transaction automatically at the end
-4. Writes all changes to WAL for crash recovery
+**Pseudo Code:**
+
+```
+function Insert(key, value):
+    // Ensure transaction exists for crash recovery
+    wasAutoCommit = ensureAutoCommitTransaction()
+
+    try:
+        // Perform insert operation (modifies pages in memory only)
+        // All page modifications are tracked via TrackPageModification()
+        doInsertOperation(key, value)
+
+    finally:
+        // Auto-commit if we created the transaction
+        if wasAutoCommit:
+            commitAutoTransaction()
+
+function ensureAutoCommitTransaction():
+    if activeTx == null:
+        // Create auto-commit transaction
+        tx = new Transaction()
+        tx.autoCommit = true
+        tx.modifiedPages = {}
+        tx.originalPages = {}
+        activeTx = tx
+        return true  // We created it
+    return false  // Already exists
+
+function TrackPageModification(pageID, pageObj):
+    // Auto-create transaction if none exists
+    if activeTx == null:
+        ensureAutoCommitTransaction()
+
+    // Save original page state if not already saved
+    if pageID not in originalPages:
+        originalPage = readPageFromDisk(pageID)  // Bypass cache for true original
+        if originalPage == null:
+            originalPage = getPageFromCache(pageID)  // New page
+        originalPages[pageID] = clonePage(originalPage)
+
+    // Track modified page (in-memory modification)
+    modifiedPages[pageID] = pageObj
+
+function commitAutoTransaction():
+    // Step 1: Write all modified pages to WAL first (Write-Ahead Logging)
+    for each (pageID, pageObj) in modifiedPages:
+        entryType = originalPages[pageID] exists ? UPDATE : INSERT
+        lsn = wal.LogPageWrite(pageID, pageObj, entryType)
+        pageObj.Header.LSN = lsn
+        wal.file.Sync()  // Ensure durability
+
+    // Step 2: Write all modified pages to main database file
+    for each (pageID, pageObj) in modifiedPages:
+        writePageToFile(pageID, pageObj)
+        file.Sync()  // Ensure durability
+
+    // Step 3: Mark transaction as committed and clear state
+    activeTx = null
+    autoCommit = false
+```
+
+**Key Concepts:**
+
+- **Automatic Transaction Creation**: Every operation checks for active transaction; creates auto-commit transaction if none exists.
+- **In-Memory Modifications Only**: All page changes occur in memory during operation; no disk writes until commit.
+- **Write-Ahead Logging Order**: WAL entries written and synced **first**, then database file writes (with sync). This ensures committed changes can be recovered.
+- **Original State Preservation**: Original page states saved before modification enable rollback if commit fails.
+- **No User Overhead**: Users don't need to manage transactions for single operations—system handles it automatically.
+
+**Crash Safety:**
+
+1. **Before Commit**: If crash occurs during operation (before commit), no WAL entries or database writes exist. Tree remains unchanged on restart.
+2. **After WAL Write**: If crash occurs after WAL write but before database write, WAL contains all changes. Recovery replays WAL to restore committed state.
+3. **After Commit**: Both WAL and database file updated and synced. Operation fully durable.
 
 **Real-World Comparison:**
 
-- **PostgreSQL**: Every SQL statement is automatically wrapped in a transaction. If you execute `INSERT INTO users VALUES (1, 'John')`, PostgreSQL automatically begins a transaction, executes the insert, and commits it—all transparently.
-- **SQLite**: In default mode, each statement is automatically committed. The statement `INSERT INTO users VALUES (1, 'John')` is automatically transactional.
-- **MySQL InnoDB**: With `autocommit=1` (the default), each statement is automatically committed as a separate transaction.
-
-**Implementation Details:**
-
-```go
-func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
-    // Automatically ensure transaction exists for crash recovery
-    wasAutoCommit := tree.ensureAutoCommitTransaction()
-    defer func() {
-        if wasAutoCommit {
-            _ = tree.commitAutoTransaction()  // Auto-commit at end
-        }
-    }()
-
-    // ... perform insert operation ...
-    // All page modifications are tracked and logged to WAL
-}
-```
-
-**Algorithm Flow:**
-
-1. **Operation Start**: Check if explicit transaction exists
-   - If no transaction: Create auto-commit transaction
-   - If transaction exists: Use existing transaction
-2. **Track Modifications**: All page changes are tracked during operation
-   - Pages are modified **in memory only** (not written to disk)
-   - Original page states are saved for potential rollback
-3. **Operation End**: If auto-commit transaction was created:
-   - **Step 1**: Write all modified pages to WAL first (with `Sync()` for durability)
-   - **Step 2**: Update page LSNs (Log Sequence Numbers)
-   - **Step 3**: Flush pages to main database file (with `Sync()` for durability)
-   - **Step 4**: Mark transaction as committed
-
-**Critical Safety Property:** All database writes happen **only during commit**, never during the operation itself. This ensures that if a crash occurs before commit, no changes are written to disk, and the tree remains unchanged.
-
-**Benefits:**
-
-- **Crash Recovery**: Every operation is recoverable, even simple inserts/updates/deletes
-- **No User Overhead**: Users don't need to explicitly manage transactions for single operations
-- **Consistency**: Matches real database behavior where every operation is transactional
-- **Durability**: All operations survive crashes via WAL replay
+- **PostgreSQL**: Every SQL statement (`INSERT`, `UPDATE`, `DELETE`) automatically wrapped in transaction. If `INSERT INTO users VALUES (1, 'John')` executes without explicit `BEGIN`, PostgreSQL creates transaction, executes, and commits transparently.
+- **SQLite**: In default mode, each statement is automatically committed. The statement `INSERT INTO users VALUES (1, 'John')` is transactional without user intervention.
+- **MySQL InnoDB**: With `autocommit=1` (default), each statement automatically committed as separate transaction.
 
 **Usage Example:**
 
 ```go
 // Create B+Tree with custom database filename
-// The PageManager is created internally and will be closed when tree.Close() is called
 tree, _ := NewBPlusTree("mydatabase.db", true)  // true = truncate existing file
 defer tree.Close()
 
@@ -1152,123 +1293,121 @@ tree.Delete(key3)  // Auto-commits internally
 // All operations are immediately durable and crash-recoverable
 ```
 
-**Note:** Users can choose any database filename. The `NewBPlusTree(filename, truncate)` function creates the PageManager internally with the specified filename. Set `truncate=true` to create a new database, or `truncate=false` to open an existing database.
+**Note:** Users can choose any database filename. The `NewBPlusTree(filename, truncate)` function creates the PageManager internally. Set `truncate=true` for new databases, `truncate=false` for existing ones.
 
-**Crash Recovery:**
-
-If the database crashes after any single operation, the WAL contains all necessary information to recover that operation:
-
-```go
-// Phase 1: Insert data (crashes before checkpoint)
-tree, _ := NewBPlusTree("mydatabase.db", true)
-tree.Insert(K(1), V("value1"))
-tree.Insert(K(2), V("value2"))
-tree.Close()
-// ... crash occurs ...
-
-// Phase 2: Recovery (reopen database)
-tree2, _ := NewBPlusTree("mydatabase.db", false)  // false = open existing file
-defer tree2.Close()
-val, _ := tree2.Search(K(1))     // Data recovered successfully from WAL
-```
+**Time Complexity:** O(1) transaction overhead per operation (transaction creation/commit is constant time). Page writes are O(k) where k is number of modified pages (typically 1-3 for single operations).
 
 ---
 
 #### 8.2. **Explicit Transactions (Multi-Operation Atomicity)**
 
-**Purpose:** Group multiple operations into a single atomic transaction. All operations either succeed together or fail together, maintaining database consistency.
+**Purpose:** Enable users to group multiple operations into a single atomic transaction. All operations either succeed together (commit) or fail together (rollback), maintaining database consistency.
 
-**How It Works:**
+**Algorithm Steps:**
 
-Users explicitly begin a transaction, perform multiple operations, and then commit or rollback:
+1. **Begin Transaction** - User calls `Begin()` to start explicit transaction
+2. **Track Operations** - All Insert/Update/Delete operations use the active transaction
+3. **Save Original States** - Original page states saved before first modification
+4. **Modify in Memory** - All operations modify pages in memory only
+5. **Commit or Rollback** - User calls `Commit()` to persist all changes, or `Rollback()` to discard all changes
 
-1. **Begin**: Start tracking all page modifications
-2. **Operations**: Perform multiple Insert/Update/Delete operations
-3. **Commit**: Write all changes to WAL and flush to database (all succeed)
-4. **Rollback**: Restore original page states (all fail)
-
-**Real-World Comparison:**
-
-- **PostgreSQL**: `BEGIN; INSERT ...; UPDATE ...; DELETE ...; COMMIT;` - All operations are atomic
-- **SQLite**: `BEGIN TRANSACTION; INSERT ...; UPDATE ...; COMMIT;` - All operations succeed or fail together
-- **MySQL InnoDB**: `START TRANSACTION; INSERT ...; UPDATE ...; COMMIT;` - Multi-statement atomicity
-
-**Implementation Details:**
-
-```go
-func (tree *BPlusTree) Begin() error {
-    // Start explicit transaction (not auto-commit)
-    _, err := tree.txManager.Begin(tree)
-    return err
-}
-
-func (tree *BPlusTree) Commit() error {
-    // Write all tracked pages to WAL, then flush to database
-    return tree.txManager.Commit()
-}
-
-func (tree *BPlusTree) Rollback() error {
-    // Restore original page states, discard all changes
-    return tree.txManager.Rollback()
-}
-```
-
-**Algorithm Flow:**
-
-**Begin:**
+**Pseudo Code:**
 
 ```
 function Begin():
     if activeTx != null:
-        error("transaction already active")
+        return error("transaction already active (nested transactions not supported)")
 
+    // Create explicit transaction (not auto-commit)
     tx = new Transaction()
+    tx.txID = nextTxID++
+    tx.state = ACTIVE
     tx.modifiedPages = {}
     tx.originalPages = {}
     tx.autoCommit = false  // Explicit transaction
     activeTx = tx
-```
 
-**Commit:**
+    return tx
 
-```
+function Insert(key, value):
+    // Check for active transaction
+    wasAutoCommit = ensureAutoCommitTransaction()
+    // If activeTx exists (explicit or auto-commit), reuse it
+
+    try:
+        // Perform insert (all modifications tracked in activeTx)
+        doInsertOperation(key, value)
+    finally:
+        // Only auto-commit if we created auto-commit transaction
+        if wasAutoCommit:
+            commitAutoTransaction()
+
 function Commit():
-    // Write-Ahead: Log all changes to WAL first
-    for each (pageID, page) in modifiedPages:
-        lsn = wal.LogPageWrite(pageID, page)
-        page.Header.LSN = lsn
+    if activeTx == null:
+        return error("no active transaction")
 
-    // Then write to main database
-    for each (pageID, page) in modifiedPages:
-        writePageToFile(pageID, page)
+    if activeTx.state != ACTIVE:
+        return error("transaction is not active")
 
+    // Step 1: Write-Ahead Logging - Write all modified pages to WAL first
+    for each (pageID, pageObj) in activeTx.modifiedPages:
+        // Determine entry type: INSERT for new pages, UPDATE for modified pages
+        entryType = (pageID in originalPages) ? UPDATE : INSERT
+        lsn = wal.LogPageWrite(pageID, pageObj, entryType)
+        pageObj.Header.LSN = lsn
+        wal.file.Sync()  // Ensure WAL durability before database writes
+
+    // Step 2: Write all modified pages to main database file
+    for each (pageID, pageObj) in activeTx.modifiedPages:
+        writePageToFile(pageID, pageObj)
+        file.Sync()  // Ensure database file durability
+
+    // Step 3: Mark transaction as committed and clear state
+    activeTx.state = COMMITTED
     activeTx = null
     autoCommit = false
-```
 
-**Rollback:**
-
-```
 function Rollback():
-    // Restore original pages
-    for each (pageID, originalPage) in originalPages:
-        pages[pageID] = originalPage
+    if activeTx == null:
+        return error("no active transaction")
 
-    // Remove new pages
-    for each pageID in modifiedPages:
-        if pageID not in originalPages:
+    if activeTx.state != ACTIVE:
+        return error("transaction is not active")
+
+    // Step 1: Restore original page states
+    for each (pageID, originalPage) in activeTx.originalPages:
+        restoredPage = clonePage(originalPage)  // Deep copy to avoid reference issues
+        pages[pageID] = restoredPage
+
+    // Step 2: Remove newly created pages (pages not in originalPages)
+    for each pageID in activeTx.modifiedPages:
+        if pageID not in activeTx.originalPages:
+            // This was a new page created during transaction, remove it
             delete pages[pageID]
 
+    // Step 3: Reload meta page to ensure tree state consistency
+    meta = readMetaPage()
+    tree.meta = meta
+
+    // Step 4: Mark transaction as rolled back and clear state
+    activeTx.state = ROLLED_BACK
     activeTx = null
     autoCommit = false
 ```
 
-**Benefits:**
+**Key Concepts:**
 
-- **Atomicity**: Multiple operations succeed or fail together
-- **Consistency**: Database remains in valid state even if some operations fail
-- **Error Handling**: Can rollback entire transaction if any operation fails
-- **Multi-Operation Queries**: Support complex operations that require multiple steps
+- **Explicit Transaction State**: User must call `Begin()` to start, then `Commit()` or `Rollback()` to finish. No automatic commit.
+- **Reusing Active Transaction**: Operations within explicit transaction reuse the active transaction (no auto-commit creation).
+- **Atomic Commit**: All modified pages written to WAL first (with sync), then to database file (with sync). If any step fails, entire transaction fails.
+- **Rollback via Original States**: Original page states (saved before first modification) are restored, discarding all in-memory changes.
+- **New Page Handling**: Newly created pages (not in originalPages) are deleted during rollback, removing them from memory and database.
+
+**Real-World Comparison:**
+
+- **PostgreSQL**: `BEGIN; INSERT ...; UPDATE ...; DELETE ...; COMMIT;` - All operations are atomic within transaction boundary.
+- **SQLite**: `BEGIN TRANSACTION; INSERT ...; UPDATE ...; COMMIT;` - All operations succeed or fail together as single unit.
+- **MySQL InnoDB**: `START TRANSACTION; INSERT ...; UPDATE ...; COMMIT;` - Multi-statement atomicity within transaction.
 
 **Usage Example:**
 
@@ -1288,9 +1427,9 @@ tree.Insert(key4, value4)
 
 // Either commit or rollback
 if allOperationsSuccessful {
-    tree.Commit()  // All 4 operations persist together
+    tree.Commit()  // All 4 operations persist together (atomic)
 } else {
-    tree.Rollback()  // All 4 operations are discarded
+    tree.Rollback()  // All 4 operations are discarded (atomic)
 }
 ```
 
@@ -1305,89 +1444,260 @@ tree.Update(key2, value2) // Uses explicit transaction (not auto-commit)
 tree.Commit()             // Commits both operations atomically
 ```
 
+**Time Complexity:** O(k) where k is number of modified pages. Both commit and rollback iterate through modified pages. Commit also writes to WAL and database file (I/O operations).
+
 ---
 
 #### 8.3. **Write-Ahead Logging (WAL) Implementation**
 
-**WAL File Format:**
+**Overview:** Write-Ahead Logging (WAL) ensures durability by logging all page modifications to a separate WAL file before writing to the main database file. This follows the ARIES recovery algorithm principle: log writes must complete (and be synced to disk) before database file writes. If a crash occurs, committed changes can be recovered by replaying WAL entries.
 
-Each WAL entry contains:
+**WAL File Structure:**
 
-- **LSN (Log Sequence Number)**: 8 bytes - Monotonically increasing sequence number
-- **Entry Type**: 1 byte - Insert, Update, Delete, or Checkpoint
+The WAL file (`<database>.wal`) stores entries sequentially. Each entry contains:
+
+```
+[LSN:8][EntryType:1][PageID:8][DataLength:4][PageData:4096]
+```
+
+- **LSN (Log Sequence Number)**: 8 bytes - Monotonically increasing sequence number, enables ordered replay during recovery
+- **Entry Type**: 1 byte - `INSERT` (new page), `UPDATE` (modified page), `DELETE` (deleted page), or `CHECKPOINT` (marker)
 - **Page ID**: 8 bytes - Identifier of the modified page
-- **Data Length**: 4 bytes - Size of page data
-- **Page Data**: Variable (padded to page size) - Complete serialized page
+- **Data Length**: 4 bytes - Size of page data (always 4096 bytes, but stored for extensibility)
+- **Page Data**: 4096 bytes - Complete serialized page snapshot (padded to page size)
 
-**What Gets Logged:**
+**Algorithm Steps (WAL Write):**
 
-The WAL stores **complete page snapshots** (physical logging), not individual operations. For example, a single `Insert()` operation that causes a split will log:
+1. **Assign LSN** - Get next LSN (monotonically increasing)
+2. **Serialize Page** - Convert page object to binary format
+3. **Pad to Page Size** - Ensure page data is exactly 4096 bytes
+4. **Write Entry Header** - Write LSN, entry type, page ID, data length to WAL file
+5. **Write Page Data** - Append serialized page data to WAL file
+6. **Sync WAL File** - Force WAL writes to disk (critical for durability)
+7. **Update Page LSN** - Store LSN in page header for consistency
 
-- Modified leaf page (left half after split)
-- New leaf page (right half after split)
-- Modified parent internal page (with new separator key)
-- Possibly new internal pages (if parent also split)
-- Meta page (if root changed)
+**Pseudo Code (WAL Write):**
 
-This approach matches how real databases log changes at the page level for efficient recovery.
+```
+function LogPageWrite(pageID, pageObj, entryType):
+    // Step 1: Assign next LSN
+    lsn = nextLSN
+    nextLSN++
 
-**Recovery Process:**
+    // Step 2: Serialize page to binary buffer
+    buf = new Buffer()
+    switch pageObj.type:
+        case MetaPage: pageObj.WriteToBuffer(buf)
+        case InternalPage: pageObj.WriteToBuffer(buf)
+        case LeafPage: pageObj.WriteToBuffer(buf)
 
-```go
-function Recover():
-    // On database open, replay WAL entries
-    for each entry in WAL:
-        if entry.Type == Checkpoint:
-            break  // Checkpoint marks end of recoverable entries
+    // Step 3: Pad buffer to page size (4096 bytes)
+    paddingSize = 4096 - buf.length
+    if paddingSize > 0:
+        buf.append(zeros(paddingSize))
 
-        // Restore page from WAL entry
-        page = deserialize(entry.PageData)
-        pages[entry.PageID] = page
+    // Step 4: Write WAL entry header
+    walFile.write(lsn, 8)              // LSN
+    walFile.write(entryType, 1)        // Entry type
+    walFile.write(pageID, 8)           // Page ID
+    walFile.write(buf.length, 4)       // Data length
 
-        // Write to main database file
-        writePageToFile(entry.PageID, page)
+    // Step 5: Write page data
+    walFile.write(buf.bytes, 4096)
+
+    // Step 6: Sync WAL file to disk (critical for durability)
+    walFile.sync()
+
+    // Step 7: Update page LSN in page header
+    pageObj.Header.LSN = lsn
+
+    return lsn
+
+function NewWALManager(dbFilename):
+    walFilename = dbFilename + ".wal"
+    file = openFile(walFilename, APPEND | CREATE)
+
+    // Recover LSN from existing WAL by scanning for highest LSN
+    nextLSN = recoverLSN(file)
+
+    return WALManager{file: file, nextLSN: nextLSN}
+
+function recoverLSN(file):
+    maxLSN = 0
+    file.seek(0)  // Start from beginning
+
+    while not file.EOF:
+        lsn = file.read(8)
+        if lsn > maxLSN:
+            maxLSN = lsn
+
+        // Skip entry type, page ID, data length, and page data
+        file.read(1)   // Entry type
+        file.read(8)   // Page ID
+        dataLen = file.read(4)
+        file.seek(dataLen, CURRENT)  // Skip page data
+
+    file.seek(0, END)  // Seek to end for appending
+    return maxLSN + 1
+```
+
+**What Gets Logged (Physical Logging):**
+
+The WAL stores **complete page snapshots** (physical logging), not individual logical operations. This matches production databases (PostgreSQL, Oracle, MySQL InnoDB) which log at the page level for efficiency.
+
+**Example:** A single `Insert(key, value)` operation that causes a leaf split logs:
+
+- **Modified leaf page** (left half after split) - `UPDATE` entry
+- **New leaf page** (right half after split) - `INSERT` entry
+- **Modified parent internal page** (with new separator key) - `UPDATE` entry
+- **Possibly new internal pages** (if parent also split) - `INSERT` entries
+- **Meta page** (if root changed) - `UPDATE` entry
+
+All these pages are logged as complete snapshots, enabling recovery by simply restoring page contents.
+
+**Algorithm Steps (WAL Recovery):**
+
+1. **Open WAL File** - Open existing WAL file for reading
+2. **Scan Entries** - Read entries sequentially from start
+3. **Check Checkpoint** - Stop if checkpoint entry encountered
+4. **Deserialize Page** - Convert page data back to page object
+5. **Restore to Memory** - Place page in page manager cache
+6. **Write to Database** - Write restored page to main database file
+7. **Continue Until Checkpoint** - Process all entries until checkpoint marker
+
+**Pseudo Code (WAL Recovery):**
+
+```
+function Recover(pageManager):
+    walFile.seek(0)  // Start from beginning
+
+    while not walFile.EOF:
+        // Read entry header
+        lsn = walFile.read(8)
+        entryType = walFile.read(1)
+
+        // Checkpoint marks end of recoverable entries
+        if entryType == CHECKPOINT:
+            break
+
+        // Read page identification
+        pageID = walFile.read(8)
+        dataLen = walFile.read(4)
+
+        // Read page data
+        pageData = walFile.read(dataLen)  // 4096 bytes
+
+        // Step 1: Deserialize page data to page object
+        reader = new Reader(pageData)
+        header = readPageHeader(reader)
+
+        switch header.PageType:
+            case MetaPage:
+                pageObj = new MetaPage()
+                pageObj.ReadFromBuffer(reader)
+            case InternalPage:
+                pageObj = new InternalPage()
+                pageObj.ReadFromBuffer(reader)
+            case LeafPage:
+                pageObj = new LeafPage()
+                pageObj.ReadFromBuffer(reader)
+
+        // Step 2: Restore page to memory cache
+        pageManager.Pages[pageID] = pageObj
+
+        // Step 3: Write restored page to main database file
+        writePageToFile(pageID, pageObj)
+
+    // Recovery complete - all committed changes restored
 ```
 
 **Checkpointing:**
 
-Periodically, create a checkpoint to truncate the WAL:
+Checkpoints mark a stable point where all changes have been written to both WAL and database file. After checkpoint, WAL can be truncated (in production, archived instead of deleted).
 
-```go
-tree.Checkpoint()  // Writes checkpoint entry, truncates WAL
+**Algorithm Steps (Checkpoint):**
+
+1. **Verify No Active Transaction** - Cannot checkpoint while transaction active
+2. **Write Checkpoint Entry** - Append checkpoint marker to WAL with next LSN
+3. **Sync WAL File** - Ensure checkpoint entry is durable
+4. **Truncate WAL** - Clear WAL file (in production, archive instead)
+5. **Reset LSN** - Reset LSN counter to 1
+
+**Pseudo Code (Checkpoint):**
+
+```
+function Checkpoint():
+    if activeTx != null:
+        return error("cannot checkpoint while transaction is active")
+
+    // Write checkpoint entry
+    lsn = nextLSN
+    nextLSN++
+
+    checkpointEntry = {
+        LSN: lsn,
+        Type: CHECKPOINT,
+        PageID: 0,
+        PageData: null
+    }
+
+    writeEntry(checkpointEntry)
+    walFile.sync()  // Ensure checkpoint is durable
+
+    // Truncate WAL (in production, archive instead)
+    walFile.truncate(0)
+    walFile.seek(0, START)
+    nextLSN = 1  // Reset LSN counter
 ```
 
-This ensures the WAL doesn't grow indefinitely. In production systems, checkpoints are typically created:
+**Checkpoint Timing (Production Systems):**
 
-- After a certain number of transactions
-- After a certain time period
-- When WAL reaches a certain size
+In production databases, checkpoints are typically created:
+
+- **After N transactions** - Every 1000-10000 transactions
+- **After time period** - Every 5-15 minutes
+- **When WAL size threshold** - When WAL reaches 64MB-1GB
+- **On clean shutdown** - Before database closes
+
+**Key Concepts:**
+
+- **Write-Ahead Principle**: WAL entries must be written and synced **before** database file writes. This ensures committed changes can survive crashes.
+- **Physical Logging**: Complete page snapshots logged, not logical operations. Enables fast recovery by simply restoring pages.
+- **LSN Ordering**: LSNs ensure entries can be replayed in correct order during recovery.
+- **Checkpoint Optimization**: Checkpoints allow WAL truncation without losing recovery capability for committed transactions.
 
 ---
 
 #### 8.4. **Transaction States and Lifecycle**
 
+**Overview:** Transactions progress through well-defined states (Active → Committed/RolledBack) with clear state transitions. The transaction manager tracks all modifications and ensures atomicity through state management.
+
 **Transaction States:**
 
-1. **Active**: Transaction is in progress, modifications are being tracked
-2. **Committed**: Transaction completed successfully, changes persisted
-3. **RolledBack**: Transaction was aborted, changes discarded
+1. **Active** (`TxStateActive`): Transaction is in progress, modifications are being tracked in memory. Pages are modified in memory only; no disk writes until commit.
+2. **Committed** (`TxStateCommitted`): Transaction completed successfully. All modifications written to WAL and database file (with sync). Changes are durable.
+3. **RolledBack** (`TxStateRolledBack`): Transaction was aborted. Original page states restored in memory; new pages removed. No disk writes (changes discarded).
 
-**Transaction Lifecycle:**
+**State Transition Diagram:**
 
 ```
 [No Transaction]
     |
     | Insert/Update/Delete (no Begin)
+    | → ensureAutoCommitTransaction()
     |
     v
-[Auto-Commit Transaction Created]
+[Auto-Commit Transaction - ACTIVE]
     |
-    | Track page modifications
+    | Track page modifications (in memory only)
+    | → TrackPageModification(pageID, pageObj)
+    |
+    | (end of operation)
+    | → commitAutoTransaction()
     |
     v
-[Auto-Commit Transaction Committed]
-    |
-    | Write to WAL → Flush to DB
+[Auto-Commit Transaction - COMMITTED]
+    | Write to WAL (sync) → Write to DB (sync)
     |
     v
 [No Transaction]
@@ -1397,21 +1707,96 @@ OR
 [No Transaction]
     |
     | Begin()
+    | → txManager.Begin()
     |
     v
-[Explicit Transaction Active]
+[Explicit Transaction - ACTIVE]
     |
     | Insert/Update/Delete operations
+    | → TrackPageModification() (reuses active transaction)
+    |
+    | Commit() OR Rollback()
     |
     v
-[Commit() OR Rollback()]
+[Explicit Transaction - COMMITTED]  OR  [Explicit Transaction - ROLLED_BACK]
+    | Write to WAL → Write to DB       |  Restore original pages
+    |                                  |  Remove new pages
     |
-    | Commit: Write to WAL → Flush to DB
-    | Rollback: Restore original pages
-    |
-    v
-[No Transaction]
+    v                                  v
+[No Transaction]                   [No Transaction]
 ```
+
+**State Transition Rules:**
+
+1. **Active → Committed**: Only via `Commit()`. All modifications must be written to WAL (synced), then to database file (synced). State becomes `COMMITTED`, then transaction cleared.
+2. **Active → RolledBack**: Only via `Rollback()`. Original page states restored; new pages removed. State becomes `ROLLED_BACK`, then transaction cleared.
+3. **Committed/RolledBack → No Transaction**: Automatic after state transition. Transaction object cleared; `activeTx = null`.
+4. **No Transaction → Active**: Via `Begin()` (explicit) or `ensureAutoCommitTransaction()` (auto-commit). New transaction created with `ACTIVE` state.
+
+**Transaction Tracking:**
+
+During `ACTIVE` state, the transaction manager maintains:
+
+- **`modifiedPages`**: Map of `pageID → pageObj` for all modified/new pages
+- **`originalPages`**: Map of `pageID → originalPage` for pages that existed before modification
+- **`txID`**: Unique transaction identifier (monotonically increasing)
+- **`autoCommit`**: Boolean flag indicating auto-commit vs explicit transaction
+
+**Pseudo Code (State Management):**
+
+```
+type TransactionState = ACTIVE | COMMITTED | ROLLED_BACK
+
+type Transaction struct:
+    txID: uint64
+    state: TransactionState
+    modifiedPages: Map[pageID → pageObj]
+    originalPages: Map[pageID → originalPage]
+    autoCommit: bool
+
+function Begin():
+    if activeTx != null:
+        error("transaction already active")
+
+    tx = Transaction{
+        txID: nextTxID++,
+        state: ACTIVE,
+        modifiedPages: {},
+        originalPages: {},
+        autoCommit: false
+    }
+    activeTx = tx
+
+function Commit():
+    if activeTx.state != ACTIVE:
+        error("transaction not active")
+
+    // Write to WAL → Write to DB
+    for each (pageID, pageObj) in activeTx.modifiedPages:
+        wal.LogPageWrite(pageID, pageObj)
+        writePageToFile(pageID, pageObj)
+
+    activeTx.state = COMMITTED
+    activeTx = null  // Transition to No Transaction
+
+function Rollback():
+    if activeTx.state != ACTIVE:
+        error("transaction not active")
+
+    // Restore original pages, remove new pages
+    restorePages(activeTx.originalPages)
+    removeNewPages(activeTx.modifiedPages, activeTx.originalPages)
+
+    activeTx.state = ROLLED_BACK
+    activeTx = null  // Transition to No Transaction
+```
+
+**Key Concepts:**
+
+- **Single Active Transaction**: Only one transaction can be active at a time (no nested transactions).
+- **State Immutability**: State transitions are unidirectional (ACTIVE → COMMITTED/ROLLED_BACK → No Transaction).
+- **Atomic State Transitions**: Commit and rollback are atomic—either fully succeed or fully fail (no partial state).
+- **Memory-Only During Active**: All modifications remain in memory during ACTIVE state; disk writes only occur at commit.
 
 ---
 

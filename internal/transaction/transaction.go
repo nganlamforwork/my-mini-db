@@ -22,22 +22,22 @@ type TreeInterface interface {
 
 // Transaction represents a database transaction
 type Transaction struct {
-	txID          uint64
-	state         TransactionState
-	tree          TreeInterface
+	txID          uint64				// Transaction ID (unique identifier for the transaction)
+	state         TransactionState		// Transaction state (Active, Committed, RolledBack)
+	tree          TreeInterface			// Tree interface (for accessing the tree)
 	modifiedPages map[uint64]interface{} // Track modified pages for rollback
 	originalPages map[uint64]interface{} // Original page state for rollback
 }
 
 // TransactionManager manages transactions
 type TransactionManager struct {
-	wal        *WALManager
-	activeTx   *Transaction
-	nextTxID   uint64
-	autoCommit bool // True if current transaction is auto-commit (single operation)
+	wal        *WALManager		// WAL manager
+	activeTx   *Transaction		// Currently active transaction
+	nextTxID   uint64			// Next transaction ID to assign
+	autoCommit bool 			// True if current transaction is auto-commit (single operation)
 }
 
-// NewTransactionManager creates a new transaction manager
+// Constructor to create a new transaction manager
 func NewTransactionManager(wal *WALManager) *TransactionManager {
 	return &TransactionManager{
 		wal:      wal,
@@ -85,17 +85,17 @@ func (tm *TransactionManager) BeginAutoCommit(tree TreeInterface) (*Transaction,
 
 	tm.nextTxID++
 	tm.activeTx = tx
-	tm.autoCommit = true // Auto-commit transaction
+	tm.autoCommit = true // Auto-commit transaction, apply for single operations
 
 	return tx, nil
 }
 
-// IsAutoCommit returns true if the current transaction is auto-commit
+// IsAutoCommit returns true if the current transaction is auto-commit (single operation)
 func (tm *TransactionManager) IsAutoCommit() bool {
 	return tm.autoCommit
 }
 
-// Commit commits the current transaction
+// Commit commits the current transaction (multi-operation)
 func (tm *TransactionManager) Commit() error {
 	if tm.activeTx == nil {
 		return fmt.Errorf("no active transaction")
@@ -129,13 +129,13 @@ func (tm *TransactionManager) Commit() error {
 		}
 	}
 
-		// Flush all modified pages to main database file
-		pager := tm.activeTx.tree.GetPager()
-		for pageID, pageObj := range tm.activeTx.modifiedPages {
-			if err := pager.WritePageToFile(pageID, pageObj); err != nil {
-				return fmt.Errorf("failed to write page %d: %w", pageID, err)
-			}
+	// Flush all modified pages to main database file
+	pager := tm.activeTx.tree.GetPager()
+	for pageID, pageObj := range tm.activeTx.modifiedPages {
+		if err := pager.WritePageToFile(pageID, pageObj); err != nil {
+			return fmt.Errorf("failed to write page %d: %w", pageID, err)
 		}
+	}
 
 	// Mark transaction as committed
 	tm.activeTx.state = TxStateCommitted

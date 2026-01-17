@@ -1,13 +1,12 @@
 package transaction
 
 import (
+	"bplustree/internal/page"
 	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
-
-	"bplustree/internal/page"
 )
 
 // WALEntryType represents the type of operation in a WAL entry
@@ -22,20 +21,20 @@ const (
 
 // WALEntry represents a single log entry in the Write-Ahead Log
 type WALEntry struct {
-	LSN      uint64      // Log Sequence Number
-	Type     WALEntryType
-	PageID   uint64
-	PageData []byte // Serialized page data
+	LSN      uint64      	// Log Sequence Number
+	Type     WALEntryType	// Insert, Update, Delete, Checkpoint
+	PageID   uint64			// Page identifier
+	PageData []byte 		// Serialized page data (page header + page body)
 }
 
 // WALManager manages the Write-Ahead Log for durability and recovery
 type WALManager struct {
-	file     *os.File
-	nextLSN  uint64
-	pageSize int
+	file     *os.File		// WAL file
+	nextLSN  uint64			// Next LSN to assign
+	pageSize int			// Page size
 }
 
-// NewWALManager creates a new WAL manager for the given database file
+// Constructor to create a new WAL manager for the given database file
 func NewWALManager(dbFilename string) (*WALManager, error) {
 	walFilename := dbFilename + ".wal"
 	
@@ -59,7 +58,7 @@ func NewWALManager(dbFilename string) (*WALManager, error) {
 	return wal, nil
 }
 
-// recoverLSN scans the WAL file to find the highest LSN
+// Function to scan the WAL file to find the highest LSN
 func (w *WALManager) recoverLSN() error {
 	// Get file size
 	stat, err := w.file.Stat()
@@ -132,6 +131,7 @@ func (w *WALManager) recoverLSN() error {
 }
 
 // LogPageWrite logs a page write operation to the WAL
+// Format: [LSN:8][EntryType:1][PageID:8][DataLength:4][PageData:4096]
 func (w *WALManager) LogPageWrite(pageID uint64, pageObj interface{}, entryType WALEntryType) (uint64, error) {
 	lsn := w.nextLSN
 	w.nextLSN++
@@ -182,6 +182,7 @@ func (w *WALManager) LogPageWrite(pageID uint64, pageObj interface{}, entryType 
 }
 
 // writeEntry writes a WAL entry to the file
+// Format: [LSN:8][EntryType:1][PageID:8][DataLength:4][PageData:4096]
 func (w *WALManager) writeEntry(entry WALEntry) error {
 	// Write LSN
 	if err := binary.Write(w.file, binary.BigEndian, entry.LSN); err != nil {
