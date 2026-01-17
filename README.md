@@ -1,253 +1,231 @@
-# MiniDB - B+Tree Database with Composite Keys
+# MiniDB
 
-A file-backed B+Tree database implementation in Go featuring **composite keys** and **structured row values**, supporting full CRUD operations with persistent storage.
+A file-backed B+Tree database implementation in Go with full CRUD operations, transaction support, and Write-Ahead Logging (WAL).
 
-## Features
+## Table of Contents
 
-### ✅ Composite Keys & Structured Records
+- [MiniDB](#minidb)
+  - [Table of Contents](#table-of-contents)
+  - [Author](#author)
+  - [Documentation](#documentation)
+  - [Project Structure](#project-structure)
+  - [Features](#features)
+    - [Core Operations](#core-operations)
+    - [Advanced Features](#advanced-features)
+    - [Architecture Highlights](#architecture-highlights)
+  - [Overview](#overview)
+  - [Quick Start](#quick-start)
+  - [Testing](#testing)
+  - [Real-World Context](#real-world-context)
+  - [Performance Characteristics](#performance-characteristics)
+  - [License](#license)
 
-- **Multi-column primary keys** - Support for composite keys like `(userID, timestamp)`
-- **Typed columns** - Int64, String, Float64, Boolean
-- **Variable-length serialization** - Efficient binary encoding
-- **Type-safe comparisons** - Lexicographic ordering for composite keys
+---
 
-### ✅ Complete B+Tree Operations
+## Author
 
-- **Insert** - O(log n) with automatic node splitting
-- **Search** - O(log n) point queries
-- **Delete** - O(log n) with borrow/merge rebalancing
-- **Update** - O(log n) smart in-place updates
-- **Range Query** - O(log n + k) using leaf-level linked list
+**Lam Le Vu Ngan**  
+**Role:** Software Engineer
 
-### ✅ Persistence & Reliability
+- **GitHub:** [nganlamforwork](https://github.com/nganlamforwork/)
+- **LinkedIn:** [Ngan Lam Le Vu](https://www.linkedin.com/in/nganlamlevu/)
 
-- **Disk-backed storage** - 4KB page-based architecture
-- **Load from disk** - Resume operations from saved state
-- **Write-back caching** - In-memory pages with FlushAll()
-- **Test coverage** - 18 comprehensive tests with 100% pass rate
+- **Email:** nganlamforwork@gmail.com
+- **Phone:** (+84) 945 29 30 31
 
-## Quick Start
+---
 
-### Basic Usage (Single-Column)
+## Documentation
 
-```go
-// Create database
-pm := NewPageManagerWithFile("test.db", true)
-defer pm.Close()
+- **[IMPLEMENTATION.md](docs/IMPLEMENTATION.md)**: Complete implementation details, algorithms, and architecture
+- **[TESTING.md](docs/TESTING.md)**: Comprehensive test suite documentation and test infrastructure
+- **[CHANGELOG.md](docs/CHANGELOG.md)**: Development history and version evolution
 
-tree := &BPlusTree{
-    pager: pm,
-    meta:  pm.ReadMeta(),
-}
+For full technical details, see [IMPLEMENTATION.md](docs/IMPLEMENTATION.md).
 
-// Insert data
-tree.Insert(K(10), V("Hello"))
-tree.Insert(K(20), V("World"))
-
-// Search
-value, err := tree.Search(K(10))
-if err == nil {
-    fmt.Println(VS(value)) // Output: Hello
-}
-
-// Range query
-keys, values, err := tree.SearchRange(K(10), K(20))
-
-// Update
-tree.Update(K(10), V("Updated"))
-
-// Delete
-tree.Delete(K(10))
-```
-
-### Advanced Usage (Composite Keys)
-
-```go
-// Composite key: (userID, timestamp)
-key := NewCompositeKey(
-    NewInt(1001),       // userID
-    NewInt(1704067200), // timestamp
-)
-
-// Structured row: (name, age, email, active)
-row := NewRecord(
-    NewString("John Doe"),
-    NewInt(30),
-    NewString("john@example.com"),
-    NewBool(true),
-)
-
-// Insert
-tree.Insert(key, row)
-
-// Search
-value, _ := tree.Search(key)
-fmt.Println(value) // {John Doe, 30, john@example.com, true}
-```
-
-## Architecture
-
-### Type System
-
-```go
-// Column types
-TypeInt    = 0  // int64
-TypeString = 1  // string
-TypeFloat  = 2  // float64
-TypeBool   = 3  // bool
-
-// Composite key
-type CompositeKey struct {
-    Values []Column
-}
-
-// Record value
-type Record struct {
-    Columns []Column
-}
-```
-
-### Page Structure
-
-- **MetaPage** (Page 1): Root pointer, configuration
-- **InternalPage**: Routing keys + child pointers
-- **LeafPage**: Data keys + row values + sibling links
-
-### Constants
-
-- `ORDER = 4` - Maximum 4 children per internal node
-- `MAX_KEYS = 3` - Maximum 3 keys per node
-- `PageSize = 4096` bytes
-- `PageHeader = 56` bytes
-
-## Data Model Examples
-
-### E-commerce Database
-
-```go
-// Product: (category, productID) -> (name, price, stock, active)
-productKey := NewCompositeKey(
-    NewString("electronics"),
-    NewInt(12345),
-)
-
-productRecord := NewRecord(
-    NewString("Laptop"),
-    NewFloat(999.99),
-    NewInt(50),
-    NewBool(true),
-)
-```
-
-### Time-Series Data
-
-```go
-// Sensor: (deviceID, timestamp) -> (temperature, humidity, battery)
-sensorKey := NewCompositeKey(
-    NewInt(sensor_001),
-    NewInt(1704067200),
-)
-
-sensorData := NewRecord(
-    NewFloat(23.5),  // temperature
-    NewFloat(65.0),  // humidity
-    NewFloat(87.5),  // battery %
-)
-```
-
-## Helper Functions (for tests)
-
-```go
-K(val int64)         // Create single-column key
-V(val string)        // Create single-column value
-KI(key KeyType)      // Extract int from key
-VS(val ValueType)    // Extract string from value
-```
-
-## Implementation Details
-
-See [IMPLEMENTATION.md](IMPLEMENTATION.md) for:
-
-- Complete algorithm descriptions
-- Page layouts and serialization formats
-- B+Tree invariants
-- Rebalancing strategies
-- Performance characteristics
-
-## Testing
-
-```bash
-# Run all tests
-go test -v
-
-# Run specific test
-go test -v -run TestInsertWithSplit
-
-# Check test output
-cat testdata/TestInsertWithSplit.db.txt
-```
-
-All 18 tests pass covering:
-
-- Insert (simple, split, complex)
-- Load from disk
-- Point queries
-- Delete (simple, borrow, merge)
-- Range queries (simple, edge cases, multi-page)
-- Update (simple, non-existent, large value, multiple)
-
-## Performance
-
-| Operation   | Complexity | Notes                    |
-| ----------- | ---------- | ------------------------ |
-| Insert      | O(log n)   | May trigger splits       |
-| Search      | O(log n)   | Single tree traversal    |
-| Delete      | O(log n)   | May trigger borrow/merge |
-| Update      | O(log n)   | In-place when possible   |
-| Range Query | O(log n+k) | k = result count         |
+---
 
 ## Project Structure
 
 ```
-.
-├── types.go           # CompositeKey and Record types
-├── node.go            # Type aliases
-├── tree.go            # B+Tree operations
-├── leaf_page.go       # Leaf serialization
-├── internal_page.go   # Internal node serialization
-├── page_manager.go    # Disk I/O and caching
-├── tree_test.go       # Test suite
-├── example_types.go   # Usage examples
-├── IMPLEMENTATION.md  # Technical documentation
-└── testdata/          # Test outputs
+MiniDB/
+├── cmd/
+│   └── minidb/                     # Main application entry point
+│       ├── main.go
+│       └── example_types.go
+├── internal/
+│   ├── btree/                      # B+Tree implementation
+│   │   ├── tree.go                 # Core B+Tree operations
+│   │   ├── tree_test.go            # B+Tree integration tests
+│   │   ├── cache_test.go           # Cache configuration & LRU cache tests
+│   │   ├── utils.go                # Utility functions (IsEmpty, etc.)
+│   │   └── testdata/               # Test artifacts (DB files, PNG diagrams)
+│   ├── page/                       # Page management
+│   │   ├── page_header.go          # Page header structure
+│   │   ├── meta_page.go            # Metadata page implementation
+│   │   ├── leaf_page.go            # Leaf page operations
+│   │   ├── internal_page.go        # Internal page operations
+│   │   ├── node.go                 # Common page types
+│   │   ├── page_manager.go         # Page allocation & caching
+│   │   ├── cache.go                # LRU cache implementation
+│   │   └── clone.go                # Page cloning utilities
+│   ├── common/                     # Shared utilities
+│   │   └── search.go               # Binary search functions
+│   ├── storage/                    # Storage types
+│   │   └── types.go                # CompositeKey & Record types
+│   └── transaction/                # Transaction & WAL
+│       ├── transaction.go          # Transaction management
+│       └── wal.go                  # Write-Ahead Logging
+├── docs/                           # Documentation
+│   ├── IMPLEMENTATION.md           # Implementation details & algorithms
+│   ├── TESTING.md                  # Test suite documentation
+│   └── CHANGELOG.md                # Development history
+├── scripts/                        # Utility scripts
+│   └── visualize_tree.py           # Tree visualization tool
+├── go.mod                          # Go module definition
+└── README.md                       # This file
 ```
 
-## Next Steps
+---
 
-See IMPLEMENTATION.md "Next Steps" section for:
+## Features
 
-**High Priority:**
+> **Note:** For complete feature documentation, see [IMPLEMENTATION.md](docs/IMPLEMENTATION.md)
 
-- Transaction support (Begin/Commit/Rollback)
-- Concurrent access with locking
+### Core Operations
 
-**Medium Priority:**
+- **Insert**: O(log n) insertion with automatic node splitting
+- **Search**: O(log n) point queries
+- **Update**: In-place updates when possible, fallback to delete+insert
+- **Delete**: Full rebalancing with borrow and merge operations
+- **Range Query**: O(log n + k) range scans using leaf-level linked list
 
-- Index statistics
-- Bulk loading optimization
-- Variable-length value optimization
+### Advanced Features
 
-**Low Priority:**
+- **Transaction Support**: Multi-operation atomicity with Begin/Commit/Rollback
+- **Write-Ahead Logging**: All changes logged before database writes
+- **Crash Recovery**: Automatic recovery by replaying WAL entries
+- **LRU Page Cache**: Configurable in-memory cache with automatic eviction (default: 100 pages, customizable at database creation)
+- **Disk Persistence**: Load tree structure from disk on startup
+- **Page Management**: 4KB page size with efficient memory management
+- **Composite Keys**: Multi-column primary keys with lexicographic ordering
+- **Structured Records**: Typed database rows (Int, String, Float, Bool)
 
-- Key compression
-- Snapshot isolation
-- Performance benchmarks
+### Architecture Highlights
+
+- **Page-Based Storage**: Fixed-size 4KB pages with page headers
+- **B+Tree Order**: 4 (max 3 keys per node, 4 children)
+- **Page Types**: Meta, Internal, Leaf
+- **LRU Cache**: Least Recently Used cache for frequently accessed pages
+- **Leaf Linking**: Doubly-linked list for efficient range scans
+- **WAL File**: Separate `.wal` file for transaction logging
+
+---
+
+## Overview
+
+MiniDB is a production-ready B+Tree database implementation demonstrating core database engine concepts. The implementation follows industry-standard patterns used by PostgreSQL, SQLite, and MySQL InnoDB, and is based on the ARIES recovery algorithm principles.
+
+---
+
+## Quick Start
+
+```go
+package main
+
+import (
+    "fmt"
+
+    "bplustree/internal/btree"
+    "bplustree/internal/storage"
+)
+
+func main() {
+    // Create B+Tree with custom database filename (default cache: 100 pages)
+    // PageManager and WAL are created internally
+    tree, err := btree.NewBPlusTree("mydb.db", true)  // true = truncate existing file
+    if err != nil {
+        panic(err)
+    }
+    defer tree.Close()
+
+    // Or create with custom cache size (e.g., 200 pages for ~800KB cache)
+    // tree, err := btree.NewBPlusTreeWithCacheSize("mydb.db", true, 200)
+
+    // Single insert - automatically transactional and crash-recoverable
+    key := storage.NewCompositeKey(storage.NewInt(10))
+    value := storage.NewRecord(storage.NewString("Hello"), storage.NewInt(42))
+    tree.Insert(key, value)  // Auto-commits internally
+
+    // Or use explicit transaction for multiple operations
+    tree.Begin()
+    tree.Insert(key, value)
+    tree.Update(key, storage.NewRecord(storage.NewString("Updated")))
+    tree.Commit()  // All operations persist together
+
+    // Search
+    result, err := tree.Search(key)
+    if err == nil {
+        fmt.Println("Found:", result)
+    }
+
+    // Check cache statistics
+    stats := tree.GetPager().GetCacheStats()
+    fmt.Printf("Cache: hits=%d, misses=%d, evictions=%d, size=%d/%d\n",
+        stats.Hits, stats.Misses, stats.Evictions,
+        stats.Size, tree.GetPager().GetMaxCacheSize())
+}
+```
+
+---
+
+## Testing
+
+Run the comprehensive test suite:
+
+```bash
+go test -v ./internal/btree/...
+```
+
+Tests generate:
+
+- Binary database files (`.db`)
+- Visual tree diagrams (`.png`)
+- Test documentation (`description.txt`)
+
+See [TESTING.md](docs/TESTING.md) for detailed test documentation.
+
+---
+
+## Real-World Context
+
+This implementation follows industry-standard patterns:
+
+- **PostgreSQL**: WAL for durability (pg_xlog/pg_wal)
+- **SQLite**: WAL mode for crash recovery
+- **MySQL InnoDB**: Redo log for durability
+- **ARIES Algorithm**: Industry-standard recovery algorithm principles
+
+---
+
+## Performance Characteristics
+
+| Operation      | Time Complexity | Notes                       |
+| -------------- | --------------- | --------------------------- |
+| Insert         | O(log n)        | May trigger O(log n) splits |
+| Search         | O(log n)        | Single path traversal       |
+| Delete         | O(log n)        | May trigger O(log n) merges |
+| Update         | O(log n)        | In-place when fits          |
+| Range Query    | O(log n + k)    | k = result count            |
+| Load from Disk | O(n)            | Must read all n pages       |
+
+---
 
 ## License
 
-Educational project - Free to use and modify.
+This project is for educational and demonstration purposes.
 
-## Author
+---
 
-Lam Le Vu Ngan  
-Date: January 13, 2026
+**Version:** 5.0 (LRU Page Cache)  
+**Last Updated:** January 2026
