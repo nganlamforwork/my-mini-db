@@ -783,20 +783,36 @@ All data operations return a `steps` array containing execution traces. Each ste
 
 ### Step Types
 
+#### Core Operation Steps
+
 | Step Type           | Description                                 |
 | ------------------- | ------------------------------------------- |
 | `TRAVERSE_NODE`     | Traversing through an internal or leaf node |
-| `INSERT_KEY`        | Inserting a key into a node                 |
+| `INSERT_KEY`        | Inserting a key into a node (legacy, use ADD_TEMP_KEY) |
 | `UPDATE_KEY`        | Updating a key-value pair                   |
 | `DELETE_KEY`        | Deleting a key from a node                  |
-| `SPLIT_NODE`        | Splitting a node due to overflow            |
-| `MERGE_NODE`        | Merging nodes due to underflow              |
-| `BORROW_FROM_LEFT`  | Borrowing a key from left sibling           |
-| `BORROW_FROM_RIGHT` | Borrowing a key from right sibling          |
-| `WAL_APPEND`        | Appending to Write-Ahead Log                |
-| `BUFFER_FLUSH`      | Flushing a page to disk                     |
 | `SEARCH_FOUND`      | Key found during search                     |
 | `SEARCH_NOT_FOUND`  | Key not found during search                 |
+
+#### Fine-Grained Operation Steps
+
+| Step Type           | Description                                 |
+| ------------------- | ------------------------------------------- |
+| `ADD_TEMP_KEY`      | Adding a key to a node (even if it causes overflow). Shows the node in an overloaded state. |
+| `CHECK_OVERFLOW`     | Explicitly checking if a node exceeds capacity (keys.length > order or payload exceeds page size). |
+| `SPLIT_NODE`        | Dividing an overflowing node into two nodes. |
+| `PROMOTE_KEY`       | Moving the middle/separator key up to the parent node after a split. |
+| `MERGE_NODE`        | Merging two nodes due to underflow (when a node has fewer than minimum keys). |
+| `BORROW_KEY`        | Borrowing a key from a sibling node to avoid merge (for delete operations). |
+| `BORROW_FROM_LEFT`  | Borrowing a key from left sibling (legacy, use BORROW_KEY) |
+| `BORROW_FROM_RIGHT` | Borrowing a key from right sibling (legacy, use BORROW_KEY) |
+
+#### System Steps
+
+| Step Type           | Description                                 |
+| ------------------- | ------------------------------------------- |
+| `WAL_APPEND`        | Appending to Write-Ahead Log                |
+| `BUFFER_FLUSH`      | Flushing a page to disk                     |
 
 ### Step Structure
 
@@ -823,18 +839,22 @@ All data operations return a `steps` array containing execution traces. Each ste
 
 **Step-Specific Fields:**
 
-- `originalNode`, `newNode`, `separatorKey`: For split/merge operations
+- `originalNode`, `newNode`, `newNodes`, `separatorKey`: For split/merge operations
+  - `newNodes`: Array of node IDs `[originalNodeId, newNodeId]` for SPLIT_NODE
+- `targetNodeId`: Target node receiving a promoted key (for PROMOTE_KEY)
+- `isOverflow`: Boolean indicating if overflow/underflow was detected (for CHECK_OVERFLOW)
+- `order`: Tree order used for overflow checking (for CHECK_OVERFLOW)
 - `lsn`: Log sequence number for WAL operations
 - `pageId`: Page identifier for buffer operations
 - `key`, `value`: For insert/update/delete operations
 
-### Example: Insert Operation Steps
+### Example: Insert Operation Steps (Simple Case - No Split)
 
 ```json
 {
   "success": true,
   "operation": "INSERT",
-  "key": {...},
+  "key": {"values": [{"type": "int", "value": 42}]},
   "steps": [
     {
       "type": "TRAVERSE_NODE",
@@ -853,9 +873,190 @@ All data operations return a `steps` array containing execution traces. Each ste
       "highlightKey": {"values": [{"type": "int", "value": 42}]}
     },
     {
-      "type": "INSERT_KEY",
+      "type": "ADD_TEMP_KEY",
       "nodeId": "page-4",
+      "keys": [
+        {"values": [{"type": "int", "value": 35}]},
+        {"values": [{"type": "int", "value": 40}]},
+        {"values": [{"type": "int", "value": 42}]}
+      ],
       "key": {"values": [{"type": "int", "value": 42}]}
+    },
+    {
+      "type": "CHECK_OVERFLOW",
+      "nodeId": "page-4",
+      "keys": [
+        {"values": [{"type": "int", "value": 35}]},
+        {"values": [{"type": "int", "value": 40}]},
+        {"values": [{"type": "int", "value": 42}]}
+      ],
+      "isOverflow": false,
+      "order": 4
+    }
+  ]
+}
+```
+
+### Example: Insert Operation Steps (With Split)
+
+```json
+{
+  "success": true,
+  "operation": "INSERT",
+  "key": {"values": [{"type": "int", "value": 7}]},
+  "steps": [
+    {
+      "type": "TRAVERSE_NODE",
+      "nodeId": "page-1",
+      "keys": [
+        {"values": [{"type": "int", "value": 3}]},
+        {"values": [{"type": "int", "value": 5}]}
+      ],
+      "highlightKey": {"values": [{"type": "int", "value": 7}]}
+    },
+    {
+      "type": "ADD_TEMP_KEY",
+      "nodeId": "page-1",
+      "keys": [
+        {"values": [{"type": "int", "value": 3}]},
+        {"values": [{"type": "int", "value": 5}]},
+        {"values": [{"type": "int", "value": 7}]},
+        {"values": [{"type": "int", "value": 9}]}
+      ],
+      "key": {"values": [{"type": "int", "value": 7}]}
+    },
+    {
+      "type": "CHECK_OVERFLOW",
+      "nodeId": "page-1",
+      "keys": [
+        {"values": [{"type": "int", "value": 3}]},
+        {"values": [{"type": "int", "value": 5}]},
+        {"values": [{"type": "int", "value": 7}]},
+        {"values": [{"type": "int", "value": 9}]}
+      ],
+      "isOverflow": true,
+      "order": 4
+    },
+    {
+      "type": "SPLIT_NODE",
+      "nodeId": "page-1",
+      "originalNode": "page-1",
+      "newNode": "page-2",
+      "newNodes": ["page-1", "page-2"],
+      "separatorKey": {"values": [{"type": "int", "value": 7}]},
+      "keys": [
+        {"values": [{"type": "int", "value": 3}]},
+        {"values": [{"type": "int", "value": 5}]}
+      ]
+    },
+    {
+      "type": "PROMOTE_KEY",
+      "key": {"values": [{"type": "int", "value": 7}]},
+      "targetNodeId": "page-3",
+      "nodeId": "page-3",
+      "keys": [
+        {"values": [{"type": "int", "value": 7}]}
+      ]
+    },
+    {
+      "type": "ADD_TEMP_KEY",
+      "nodeId": "page-3",
+      "keys": [
+        {"values": [{"type": "int", "value": 7}]}
+      ],
+      "key": {"values": [{"type": "int", "value": 7}]}
+    },
+    {
+      "type": "CHECK_OVERFLOW",
+      "nodeId": "page-3",
+      "keys": [
+        {"values": [{"type": "int", "value": 7}]}
+      ],
+      "isOverflow": false,
+      "order": 4
+    }
+  ]
+}
+```
+
+### Example: Delete Operation Steps (With Borrow)
+
+```json
+{
+  "success": true,
+  "operation": "DELETE",
+  "key": {"values": [{"type": "int", "value": 5}]},
+  "steps": [
+    {
+      "type": "TRAVERSE_NODE",
+      "nodeId": "page-1",
+      "keys": [
+        {"values": [{"type": "int", "value": 3}]},
+        {"values": [{"type": "int", "value": 5}]},
+        {"values": [{"type": "int", "value": 7}]}
+      ],
+      "highlightKey": {"values": [{"type": "int", "value": 5}]}
+    },
+    {
+      "type": "DELETE_KEY",
+      "nodeId": "page-1",
+      "keys": [
+        {"values": [{"type": "int", "value": 3}]},
+        {"values": [{"type": "int", "value": 7}]}
+      ],
+      "key": {"values": [{"type": "int", "value": 5}]}
+    },
+    {
+      "type": "CHECK_OVERFLOW",
+      "nodeId": "page-1",
+      "keys": [
+        {"values": [{"type": "int", "value": 3}]},
+        {"values": [{"type": "int", "value": 7}]}
+      ],
+      "isOverflow": true,
+      "order": 4
+    },
+    {
+      "type": "BORROW_KEY",
+      "nodeId": "page-1",
+      "key": {"values": [{"type": "int", "value": 5}]}
+    }
+  ]
+}
+```
+
+### Example: Delete Operation Steps (With Merge)
+
+```json
+{
+  "success": true,
+  "operation": "DELETE",
+  "key": {"values": [{"type": "int", "value": 3}]},
+  "steps": [
+    {
+      "type": "TRAVERSE_NODE",
+      "nodeId": "page-1",
+      "keys": [
+        {"values": [{"type": "int", "value": 3}]}
+      ],
+      "highlightKey": {"values": [{"type": "int", "value": 3}]}
+    },
+    {
+      "type": "DELETE_KEY",
+      "nodeId": "page-1",
+      "keys": [],
+      "key": {"values": [{"type": "int", "value": 3}]}
+    },
+    {
+      "type": "CHECK_OVERFLOW",
+      "nodeId": "page-1",
+      "keys": [],
+      "isOverflow": true,
+      "order": 4
+    },
+    {
+      "type": "MERGE_NODE",
+      "originalNode": "page-1"
     }
   ]
 }

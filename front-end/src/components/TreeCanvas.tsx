@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import type { TreeStructure, TreeNode } from '@/types/database';
+import type { TreeStructure, TreeNode, ExecutionStep } from '@/types/database';
 import { ZoomIn, ZoomOut, Download, RotateCcw, Info, FileImage, FileType, Image as ImageIcon } from 'lucide-react';
 import { Button } from './ui/button';
 import { NodeDetailDialog } from './NodeDetailDialog';
@@ -22,6 +22,8 @@ interface TreeCanvasProps {
   highlightColor?: string;
   highlightedNodeId?: number | null; // Currently executing step's node
   highlightedKey?: { values: Array<{ type: string; value: any }> } | null; // Key being compared/operated on
+  overflowNodeId?: number | null; // Node in overflow state (should be highlighted red)
+  currentStep?: ExecutionStep | null; // Current step being visualized
   onStepComplete?: () => void; // Callback when step animation completes
   animationSpeed?: number; // 0-100, affects animation duration
   config?: {
@@ -47,6 +49,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   highlightColor = '#3b82f6',
   highlightedNodeId = null,
   highlightedKey = null,
+  overflowNodeId = null,
+  currentStep = null,
   onStepComplete,
   animationSpeed = 50,
   config
@@ -486,6 +490,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         const isLeaf = nodeData.type === 'leaf';
         const isHighlighted = highlightedIds.includes(pos.id);
         const isStepHighlighted = highlightedNodeId === pos.id; // Currently executing step's node
+        const isOverflow = overflowNodeId === pos.id; // Node in overflow state
         
         // Prepare keys - format each key individually
         ctx.font = 'bold 14px "JetBrains Mono", monospace';
@@ -538,7 +543,13 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           const lineWidth = isRoot ? (isHighlighted ? 3 : (isHovered || isStepHighlighted ? 3 : 2)) : (isHighlighted ? 3 : (isHovered || isStepHighlighted ? 3 : 1.5));
           
           // Set shadow for step highlighting - use hover-style
-          if (isHighlighted) {
+          // Overflow state takes priority (red highlighting)
+          if (isOverflow) {
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = isDarkMode ? 'rgba(239, 68, 68, 0.8)' : 'rgba(220, 38, 38, 0.7)';
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+          } else if (isHighlighted) {
             ctx.shadowBlur = 15;
             ctx.shadowColor = highlightColor;
             ctx.shadowOffsetX = 0;
@@ -554,7 +565,11 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             ctx.shadowOffsetY = 0;
           }
           
-          ctx.strokeStyle = isHighlighted ? highlightColor : rootStroke;
+          // Overflow nodes get red border
+          const strokeColor = isOverflow 
+            ? (isDarkMode ? '#ef4444' : '#dc2626') // red-500 or red-600
+            : (isHighlighted ? highlightColor : rootStroke);
+          ctx.strokeStyle = strokeColor;
           ctx.lineWidth = lineWidth;
           ctx.beginPath();
           drawRoundedRect(ctx, nodeLeftX, nodeTop, totalKeyWidth, rectH, radius);
@@ -599,14 +614,20 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           const lineWidth = isHighlighted ? 3 : (isHovered || isStepHighlighted ? 3 : 1.5);
           
           // Set shadow only for outer border - use hover-style for step highlighting
-          if (isHighlighted) {
+          // Overflow state takes priority (red highlighting)
+          const isDarkMode = document.documentElement.classList.contains('dark');
+          if (isOverflow) {
+            ctx.shadowBlur = 20;
+            ctx.shadowColor = isDarkMode ? 'rgba(239, 68, 68, 0.8)' : 'rgba(220, 38, 38, 0.7)';
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+          } else if (isHighlighted) {
             ctx.shadowBlur = 15;
             ctx.shadowColor = highlightColor;
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 0;
           } else if (isHovered || isStepHighlighted) {
             // Enhanced hover effect with more contrast (same style for hover and step highlighting)
-            const isDarkMode = document.documentElement.classList.contains('dark');
             ctx.shadowBlur = 12; // Bigger shadow
             ctx.shadowColor = isLeaf 
               ? (isDarkMode ? 'rgba(16, 185, 129, 0.6)' : 'rgba(5, 150, 105, 0.5)') 
@@ -619,7 +640,11 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             ctx.shadowOffsetY = 0;
           }
           
-          ctx.strokeStyle = isHighlighted ? highlightColor : (isLeaf ? colors.leafStroke : colors.internalStroke);
+          // Overflow nodes get red border
+          const strokeColor = isOverflow 
+            ? (isDarkMode ? '#ef4444' : '#dc2626') // red-500 or red-600
+            : (isHighlighted ? highlightColor : (isLeaf ? colors.leafStroke : colors.internalStroke));
+          ctx.strokeStyle = strokeColor;
           ctx.lineWidth = lineWidth;
           ctx.beginPath();
           drawRoundedRect(ctx, nodeLeftX, nodeTop, totalKeyWidth, rectH, radius);
@@ -688,11 +713,11 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       cancelAnimationFrame(animationFrame);
       if (themeObserver) themeObserver.disconnect();
     };
-  }, [layout, camera, treeData, highlightedIds, highlightColor, isEmptyTree, hoveredEdge, tooltipPosition, highlightedNodeId, highlightedKey]);
+  }, [layout, camera, treeData, highlightedIds, highlightColor, isEmptyTree, hoveredEdge, tooltipPosition, highlightedNodeId, highlightedKey, overflowNodeId, currentStep]);
 
   // Handle step completion callback after animation duration
   useEffect(() => {
-    if (highlightedNodeId !== null && onStepComplete) {
+    if (currentStep && onStepComplete) {
       // Convert animation speed (0-100) to delay in ms
       // Speed 0 = 2000ms, Speed 100 = 200ms
       const delay = Math.max(200, 2000 - (animationSpeed * 18));
@@ -701,7 +726,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       }, delay);
       return () => clearTimeout(timeoutId);
     }
-  }, [highlightedNodeId, highlightedKey, onStepComplete, animationSpeed]);
+  }, [currentStep, onStepComplete, animationSpeed]);
 
   // Helper to find node at canvas coordinates
   const findNodeAtPosition = (clientX: number, clientY: number): number | null => {

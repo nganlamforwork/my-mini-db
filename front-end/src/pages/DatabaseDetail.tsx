@@ -28,12 +28,14 @@ export function DatabaseDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const [treeData, setTreeData] = useState<TreeStructure | null>(null)
+  const [visualTree, setVisualTree] = useState<TreeStructure | null>(null) // Incrementally mutated tree for visualization
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [highlighted] = useState<number[]>([])
   const [highlightedNodeId, setHighlightedNodeId] = useState<number | null>(null)
   const [highlightedKey, setHighlightedKey] = useState<{ values: Array<{ type: string; value: any }> } | null>(null)
   const [isExecutingSteps, setIsExecutingSteps] = useState(false)
-  const [pendingTreeUpdate, setPendingTreeUpdate] = useState<TreeStructure | null>(null) // Tree to apply after animation
+  const [overflowNodeId, setOverflowNodeId] = useState<number | null>(null) // Node in overflow state
+  const [currentStep, setCurrentStep] = useState<ExecutionStep | null>(null) // Current step being visualized
   const [fullLogsOpen, setFullLogsOpen] = useState(false)
   const [operationDialogOpen, setOperationDialogOpen] = useState(false)
   const [currentOperation, setCurrentOperation] = useState<'insert' | 'search' | 'update' | 'delete' | 'range' | null>(null)
@@ -93,7 +95,96 @@ export function DatabaseDetail() {
     return `(${key.values.map(v => String(v.value)).join(', ')})`;
   }
 
-  // Step sequencer: processes steps sequentially with animations
+  // Helper to apply step mutation to visual tree
+  const applyStepToVisualTree = (step: ExecutionStep, currentVisualTree: TreeStructure | null): TreeStructure | null => {
+    if (!currentVisualTree) return currentVisualTree;
+    
+    const pageId = extractPageId(step.nodeId);
+    if (!pageId) return currentVisualTree;
+
+    const updatedTree = { ...currentVisualTree };
+    updatedTree.nodes = { ...updatedTree.nodes };
+    
+    const nodeKey = pageId.toString();
+    const node = updatedTree.nodes[nodeKey];
+    if (!node) return currentVisualTree;
+
+    switch (step.type) {
+      case 'ADD_TEMP_KEY':
+        // Update node with new keys (may cause overflow)
+        if (step.keys) {
+          updatedTree.nodes[nodeKey] = {
+            ...node,
+            keys: [...step.keys]
+          };
+        }
+        break;
+        
+      case 'DELETE_KEY':
+        // Update node with keys after deletion
+        if (step.keys) {
+          updatedTree.nodes[nodeKey] = {
+            ...node,
+            keys: [...step.keys]
+          };
+        }
+        break;
+        
+      case 'UPDATE_KEY':
+        // Update node keys/values
+        if (step.keys) {
+          updatedTree.nodes[nodeKey] = {
+            ...node,
+            keys: [...step.keys]
+          };
+        }
+        break;
+        
+      case 'SPLIT_NODE':
+        // Create new node and update original
+        if (step.newNodes && step.newNodes.length >= 2) {
+          const originalNodeId = extractPageId(step.newNodes[0]);
+          const newNodeId = extractPageId(step.newNodes[1]);
+          
+          if (originalNodeId && newNodeId && step.keys) {
+            // Update original node
+            const originalKey = originalNodeId.toString();
+            if (updatedTree.nodes[originalKey]) {
+              updatedTree.nodes[originalKey] = {
+                ...updatedTree.nodes[originalKey],
+                keys: [...step.keys]
+              };
+            }
+            
+            // Create new node (will be populated from actual tree data later)
+            // For now, we'll mark it as needing update
+          }
+        }
+        break;
+        
+      case 'MERGE_NODE':
+        // Node will be removed, handled by tree structure update
+        break;
+        
+      case 'PROMOTE_KEY':
+        // Update parent node with promoted key
+        const targetPageId = extractPageId(step.targetNodeId);
+        if (targetPageId && step.keys) {
+          const targetKey = targetPageId.toString();
+          if (updatedTree.nodes[targetKey]) {
+            updatedTree.nodes[targetKey] = {
+              ...updatedTree.nodes[targetKey],
+              keys: [...step.keys]
+            };
+          }
+        }
+        break;
+    }
+    
+    return updatedTree;
+  }
+
+  // Step sequencer: processes steps sequentially with incremental visual updates
   const executeStepsSequentially = async (
     steps: ExecutionStep[],
     operation: LogEntry['operation'],
@@ -107,148 +198,156 @@ export function DatabaseDetail() {
     setIsExecutingSteps(true);
     setHighlightedNodeId(null);
     setHighlightedKey(null);
+    setOverflowNodeId(null);
+    setCurrentStep(null);
+    
+    // Initialize visual tree from current tree data
+    if (treeData) {
+      setVisualTree(JSON.parse(JSON.stringify(treeData))); // Deep clone
+    }
 
     // Add initial log entry
     addLog(initialMessage, 'info', steps, operation);
 
-    let currentStepIndex = 0;
+    // Calculate delay based on animation speed (0-100 -> 2000ms to 200ms)
+    const getStepDelay = () => Math.max(200, 2000 - (animationSpeed[0] * 18));
 
-    const processNextStep = (): Promise<void> => {
-      return new Promise((resolve) => {
-        if (currentStepIndex >= steps.length) {
-          // All steps completed
-          setIsExecutingSteps(false);
-          setHighlightedNodeId(null);
-          setHighlightedKey(null);
-          resolve();
-          return;
-        }
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      const pageId = extractPageId(step.nodeId);
+      
+      // Set current step for visualization
+      setCurrentStep(step);
+      
+      // Set highlighting for current step
+      setHighlightedNodeId(pageId);
+      setHighlightedKey(step.highlightKey || step.key || null);
+      
+      // Handle overflow state
+      if (step.type === 'CHECK_OVERFLOW' && step.isOverflow) {
+        setOverflowNodeId(pageId);
+      } else if (step.type === 'SPLIT_NODE') {
+        // Clear overflow after split
+        setOverflowNodeId(null);
+      } else {
+        // Clear overflow for other operations
+        setOverflowNodeId(null);
+      }
 
-        const step = steps[currentStepIndex];
-        const pageId = extractPageId(step.nodeId);
-        
-        // Set highlighting for current step
-        setHighlightedNodeId(pageId);
-        setHighlightedKey(step.highlightKey || step.key || null);
-
-        // Apply tree update if this is a structural change step
-        if (step.type === 'INSERT_KEY' || step.type === 'SPLIT_NODE' || step.type === 'MERGE_NODE') {
-          if (pendingTreeUpdate) {
-            setTreeData(pendingTreeUpdate);
-            setPendingTreeUpdate(null);
-          }
-        }
-
-        // Generate log message for this step
-        let stepMessage = '';
-        switch (step.type) {
-          case 'TRAVERSE_NODE':
-            if (step.highlightKey) {
-              const keyStr = formatKey(step.highlightKey);
-              stepMessage = `Traversing node ${step.nodeId || 'unknown'}, comparing with ${keyStr}...`;
-            } else {
-              stepMessage = `Traversing node ${step.nodeId || 'unknown'}...`;
-            }
-            break;
-          case 'INSERT_KEY':
-            const insertKeyStr = formatKey(step.key);
-            stepMessage = `Inserting key ${insertKeyStr} into node ${step.nodeId || 'unknown'}`;
-            break;
-          case 'UPDATE_KEY':
-            const updateKeyStr = formatKey(step.key);
-            stepMessage = `Updating key ${updateKeyStr} in node ${step.nodeId || 'unknown'}`;
-            break;
-          case 'DELETE_KEY':
-            const deleteKeyStr = formatKey(step.key);
-            stepMessage = `Deleting key ${deleteKeyStr} from node ${step.nodeId || 'unknown'}`;
-            break;
-          case 'SPLIT_NODE':
-            stepMessage = `Splitting node ${step.nodeId || 'unknown'} due to overflow`;
-            break;
-          case 'MERGE_NODE':
-            stepMessage = `Merging node ${step.nodeId || 'unknown'} due to underflow`;
-            break;
-          case 'BORROW_FROM_LEFT':
-            stepMessage = `Borrowing key from left sibling of node ${step.nodeId || 'unknown'}`;
-            break;
-          case 'BORROW_FROM_RIGHT':
-            stepMessage = `Borrowing key from right sibling of node ${step.nodeId || 'unknown'}`;
-            break;
-          case 'SEARCH_FOUND':
-            const foundKeyStr = formatKey(step.key);
-            stepMessage = `Search found key ${foundKeyStr} in node ${step.nodeId || 'unknown'}`;
-            break;
-          case 'SEARCH_NOT_FOUND':
-            const notFoundKeyStr = formatKey(step.key);
-            stepMessage = `Search did not find key ${notFoundKeyStr}`;
-            break;
-          case 'PAGE_LOAD':
-            stepMessage = `Loading page ${step.pageId || 'unknown'} from disk`;
-            break;
-          case 'PAGE_FLUSH':
-            stepMessage = `Flushing page ${step.pageId || 'unknown'} to disk`;
-            break;
-          case 'CACHE_HIT':
-            stepMessage = `Cache hit for page ${step.pageId || 'unknown'}`;
-            break;
-          case 'CACHE_MISS':
-            stepMessage = `Cache miss for page ${step.pageId || 'unknown'}`;
-            break;
-          case 'EVICT_PAGE':
-            stepMessage = `Evicting page ${step.pageId || 'unknown'} from cache`;
-            break;
-          case 'WAL_APPEND':
-            stepMessage = `Appending to WAL (LSN: ${step.lsn || 'unknown'})`;
-            break;
-          case 'BUFFER_FLUSH':
-            stepMessage = `Flushing buffer to disk`;
-            break;
-          default:
-            stepMessage = `Executing ${step.type}${step.nodeId ? ` on node ${step.nodeId}` : ''}`;
-        }
-
-        // Add step log message in real-time
-        addLog(stepMessage, 'info');
-
-        // Wait for step animation to complete
-        // The timeout will be handled by TreeCanvas's onStepComplete callback
-        // We use a ref to track the current step completion handler
-        const stepCompleteRef = { resolved: false };
-        
-        // Store the resolve function to be called by onStepComplete
-        (window as any).__currentStepResolve = () => {
-          if (!stepCompleteRef.resolved) {
-            stepCompleteRef.resolved = true;
-            currentStepIndex++;
-            resolve();
-          }
-        };
-
-        // Fallback timeout (in case onStepComplete is not called)
-        setTimeout(() => {
-          if (!stepCompleteRef.resolved) {
-            stepCompleteRef.resolved = true;
-            currentStepIndex++;
-            resolve();
-          }
-        }, 3000); // Max 3 seconds per step
+      // Apply step mutation to visual tree incrementally
+      setVisualTree(prev => {
+        if (!prev) return prev;
+        return applyStepToVisualTree(step, prev);
       });
-    };
 
-    // Process all steps sequentially
-    while (currentStepIndex < steps.length) {
-      await processNextStep();
+      // Generate log message for this step
+      let stepMessage = '';
+      switch (step.type) {
+        case 'TRAVERSE_NODE':
+          if (step.highlightKey) {
+            const keyStr = formatKey(step.highlightKey);
+            stepMessage = `Traversing node ${step.nodeId || 'unknown'}, comparing with ${keyStr}...`;
+          } else {
+            stepMessage = `Traversing node ${step.nodeId || 'unknown'}...`;
+          }
+          break;
+        case 'ADD_TEMP_KEY':
+          const addKeyStr = formatKey(step.key);
+          stepMessage = `Adding key ${addKeyStr} to node ${step.nodeId || 'unknown'}${step.isOverflow ? ' (OVERFLOW!)' : ''}`;
+          break;
+        case 'CHECK_OVERFLOW':
+          stepMessage = `Checking overflow for node ${step.nodeId || 'unknown'}: ${step.isOverflow ? 'OVERFLOW DETECTED' : 'No overflow'}`;
+          break;
+        case 'SPLIT_NODE':
+          stepMessage = `Splitting node ${step.nodeId || 'unknown'} into ${step.newNodes?.length || 2} nodes`;
+          break;
+        case 'PROMOTE_KEY':
+          const promoteKeyStr = formatKey(step.key);
+          stepMessage = `Promoting key ${promoteKeyStr} to parent node ${step.targetNodeId || 'unknown'}`;
+          break;
+        case 'INSERT_KEY':
+          const insertKeyStr = formatKey(step.key);
+          stepMessage = `Inserting key ${insertKeyStr} into node ${step.nodeId || 'unknown'}`;
+          break;
+        case 'UPDATE_KEY':
+          const updateKeyStr = formatKey(step.key);
+          stepMessage = `Updating key ${updateKeyStr} in node ${step.nodeId || 'unknown'}`;
+          break;
+        case 'DELETE_KEY':
+          const deleteKeyStr = formatKey(step.key);
+          stepMessage = `Deleting key ${deleteKeyStr} from node ${step.nodeId || 'unknown'}`;
+          break;
+        case 'MERGE_NODE':
+          stepMessage = `Merging node ${step.nodeId || 'unknown'} due to underflow`;
+          break;
+        case 'BORROW_KEY':
+        case 'BORROW_FROM_LEFT':
+          stepMessage = `Borrowing key from left sibling of node ${step.nodeId || 'unknown'}`;
+          break;
+        case 'BORROW_FROM_RIGHT':
+          stepMessage = `Borrowing key from right sibling of node ${step.nodeId || 'unknown'}`;
+          break;
+        case 'SEARCH_FOUND':
+          const foundKeyStr = formatKey(step.key);
+          stepMessage = `Search found key ${foundKeyStr} in node ${step.nodeId || 'unknown'}`;
+          break;
+        case 'SEARCH_NOT_FOUND':
+          const notFoundKeyStr = formatKey(step.key);
+          stepMessage = `Search did not find key ${notFoundKeyStr}`;
+          break;
+        case 'PAGE_LOAD':
+          stepMessage = `Loading page ${step.pageId || 'unknown'} from disk`;
+          break;
+        case 'PAGE_FLUSH':
+          stepMessage = `Flushing page ${step.pageId || 'unknown'} to disk`;
+          break;
+        case 'CACHE_HIT':
+          stepMessage = `Cache hit for page ${step.pageId || 'unknown'}`;
+          break;
+        case 'CACHE_MISS':
+          stepMessage = `Cache miss for page ${step.pageId || 'unknown'}`;
+          break;
+        case 'EVICT_PAGE':
+          stepMessage = `Evicting page ${step.pageId || 'unknown'} from cache`;
+          break;
+        case 'WAL_APPEND':
+          stepMessage = `Appending to WAL (LSN: ${step.lsn || 'unknown'})`;
+          break;
+        case 'BUFFER_FLUSH':
+          stepMessage = `Flushing buffer to disk`;
+          break;
+        default:
+          stepMessage = `Executing ${step.type}${step.nodeId ? ` on node ${step.nodeId}` : ''}`;
+      }
+
+      // Add step log message in real-time
+      addLog(stepMessage, 'info');
+
+      // Wait for step animation delay
+      await new Promise(resolve => {
+        const timeoutId = setTimeout(() => {
+          resolve(undefined);
+        }, getStepDelay());
+        
+        // Also set up callback for TreeCanvas completion
+        (window as any).__currentStepResolve = () => {
+          clearTimeout(timeoutId);
+          resolve(undefined);
+        };
+      });
+    }
+
+    // Finalize: sync visual tree with actual tree data
+    if (treeStructureData) {
+      setVisualTree(JSON.parse(JSON.stringify(treeStructureData)));
+      setTreeData(treeStructureData);
     }
 
     setIsExecutingSteps(false);
     setHighlightedNodeId(null);
     setHighlightedKey(null);
-    
-    // Apply any pending tree update at the end
-    if (pendingTreeUpdate) {
-      setTreeData(pendingTreeUpdate);
-      setPendingTreeUpdate(null);
-    }
+    setOverflowNodeId(null);
+    setCurrentStep(null);
   }
 
   const downloadLogsAsCSV = () => {
@@ -346,18 +445,18 @@ export function DatabaseDetail() {
       if (isInitialLoad) {
         // Initial load - update immediately
         setTreeData(treeStructureData)
+        setVisualTree(JSON.parse(JSON.stringify(treeStructureData))) // Deep clone for visual tree
         if (!hasLoggedInitialLoadRef.current) {
           hasLoggedInitialLoadRef.current = true
           addLog(`B+ Tree root located at Page #${treeStructureData.rootPage}`, 'success')
           addLog(`Tree height: ${treeStructureData.height}`, 'info')
         }
-      } else if (isExecutingSteps) {
-        // During step execution - store as pending update, will be applied at INSERT_KEY/SPLIT_NODE
-        setPendingTreeUpdate(treeStructureData)
-      } else {
-        // Not executing steps - update immediately (e.g., manual refresh)
+      } else if (!isExecutingSteps) {
+        // Not executing steps - update immediately (e.g., manual refresh or after operation completes)
         setTreeData(treeStructureData)
+        setVisualTree(JSON.parse(JSON.stringify(treeStructureData))) // Sync visual tree
       }
+      // During step execution, visual tree is updated incrementally by executeStepsSequentially
     }
   }, [treeStructureData, isExecutingSteps, treeData])
 
@@ -948,12 +1047,14 @@ export function DatabaseDetail() {
 
         {/* Visualization Area */}
         <main className="flex-1 relative flex flex-col bg-background">
-          {treeData ? (
+          {(visualTree || treeData) ? (
             <TreeCanvas 
-              treeData={treeData} 
+              treeData={visualTree || treeData} 
               highlightedIds={highlighted}
               highlightedNodeId={highlightedNodeId}
               highlightedKey={highlightedKey}
+              overflowNodeId={overflowNodeId}
+              currentStep={currentStep}
               onStepComplete={() => {
                 // Call the stored resolve function
                 if ((window as any).__currentStepResolve) {

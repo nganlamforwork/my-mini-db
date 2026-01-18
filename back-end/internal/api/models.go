@@ -20,6 +20,11 @@ const (
 	StepTypeBufferFlush    StepType = "BUFFER_FLUSH"
 	StepTypeSearchFound    StepType = "SEARCH_FOUND"
 	StepTypeSearchNotFound StepType = "SEARCH_NOT_FOUND"
+	// Fine-grained step types for detailed visualization
+	StepTypeAddTempKey     StepType = "ADD_TEMP_KEY"
+	StepTypeCheckOverflow  StepType = "CHECK_OVERFLOW"
+	StepTypePromoteKey     StepType = "PROMOTE_KEY"
+	StepTypeBorrowKey      StepType = "BORROW_KEY"
 )
 
 // Step represents a single execution step in an operation
@@ -31,11 +36,15 @@ type Step struct {
 	Children     []uint64                `json:"children,omitempty"`
 	OriginalNode string                  `json:"originalNode,omitempty"`
 	NewNode      string                  `json:"newNode,omitempty"`
+	NewNodes     []string                `json:"newNodes,omitempty"` // For SPLIT_NODE: [originalNodeId, newNodeId]
 	SeparatorKey *storage.CompositeKey   `json:"separatorKey,omitempty"`
 	LSN          uint64                  `json:"lsn,omitempty"`
 	PageID       string                  `json:"pageId,omitempty"`
 	Key          *storage.CompositeKey   `json:"key,omitempty"`
 	Value        *storage.Record         `json:"value,omitempty"`
+	TargetNodeID string                  `json:"targetNodeId,omitempty"` // For PROMOTE_KEY: parent node receiving the key
+	IsOverflow   bool                    `json:"isOverflow,omitempty"`   // For CHECK_OVERFLOW: true if overflow detected
+	Order        int                     `json:"order,omitempty"`         // For CHECK_OVERFLOW: tree order for comparison
 }
 
 // OperationResponse represents the response from an API operation

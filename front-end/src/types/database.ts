@@ -83,6 +83,7 @@ export type StepType =
   | 'MERGE_NODE'
   | 'BORROW_FROM_LEFT'
   | 'BORROW_FROM_RIGHT'
+  | 'BORROW_KEY'
   | 'WAL_APPEND'
   | 'BUFFER_FLUSH'
   | 'SEARCH_FOUND'
@@ -91,7 +92,10 @@ export type StepType =
   | 'PAGE_FLUSH'
   | 'CACHE_HIT'
   | 'CACHE_MISS'
-  | 'EVICT_PAGE';
+  | 'EVICT_PAGE'
+  | 'ADD_TEMP_KEY'
+  | 'CHECK_OVERFLOW'
+  | 'PROMOTE_KEY';
 
 // Execution Step from API
 export interface ExecutionStep {
@@ -102,9 +106,13 @@ export interface ExecutionStep {
   highlightKey?: CompositeKey;
   key?: CompositeKey;
   value?: Record;
-  originalNode?: TreeNode;
-  newNode?: TreeNode;
+  originalNode?: string; // nodeId string
+  newNode?: string; // nodeId string
+  newNodes?: string[]; // Array of nodeId strings for SPLIT_NODE
   separatorKey?: CompositeKey;
+  targetNodeId?: string; // For PROMOTE_KEY
+  isOverflow?: boolean; // For CHECK_OVERFLOW
+  order?: number; // For CHECK_OVERFLOW
   lsn?: number;
   pageId?: number;
 }

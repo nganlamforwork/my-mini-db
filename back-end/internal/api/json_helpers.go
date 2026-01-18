@@ -145,23 +145,31 @@ type JSONStep struct {
 	Children     []uint64                `json:"children,omitempty"`
 	OriginalNode string                  `json:"originalNode,omitempty"`
 	NewNode      string                  `json:"newNode,omitempty"`
+	NewNodes     []string                `json:"newNodes,omitempty"`
 	SeparatorKey *JSONCompositeKey       `json:"separatorKey,omitempty"`
 	LSN          uint64                  `json:"lsn,omitempty"`
 	PageID       string                  `json:"pageId,omitempty"`
 	Key          *JSONCompositeKey       `json:"key,omitempty"`
 	Value        *JSONRecord             `json:"value,omitempty"`
+	TargetNodeID string                  `json:"targetNodeId,omitempty"`
+	IsOverflow   bool                    `json:"isOverflow,omitempty"`
+	Order        int                     `json:"order,omitempty"`
 }
 
 // ToJSONStep converts a Step to JSONStep
 func ToJSONStep(step Step) JSONStep {
 	jsonStep := JSONStep{
-		Type:     string(step.Type),
-		NodeID:   step.NodeID,
-		Children: step.Children,
+		Type:         string(step.Type),
+		NodeID:       step.NodeID,
+		Children:     step.Children,
 		OriginalNode: step.OriginalNode,
 		NewNode:      step.NewNode,
+		NewNodes:     step.NewNodes,
 		LSN:          step.LSN,
 		PageID:       step.PageID,
+		TargetNodeID: step.TargetNodeID,
+		IsOverflow:   step.IsOverflow,
+		Order:        step.Order,
 	}
 
 	if step.Keys != nil {
