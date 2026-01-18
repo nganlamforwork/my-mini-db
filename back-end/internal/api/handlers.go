@@ -64,10 +64,10 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetTreeStructure(w, r, parts[1])
 	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "wal":
 		h.handleGetWALInfo(w, r, parts[1])
+	case r.Method == "GET" && len(parts) == 4 && parts[0] == "databases" && parts[2] == "cache" && parts[3] == "pages":
+		h.handleGetCachePages(w, r, parts[1])
 	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "cache":
 		h.handleGetCacheStats(w, r, parts[1])
-	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "cache/pages":
-		h.handleGetCachePages(w, r, parts[1])
 	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "io":
 		h.handleGetIOReads(w, r, parts[1])
 	default:

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 
 	"bplustree/internal/btree"
@@ -90,12 +91,19 @@ func (dm *DatabaseManager) CreateDatabase(name string, config DatabaseConfig) er
 }
 
 // ConnectDatabase opens an existing database instance (loads from disk)
+// If the database is already connected, it will close it first and then reconnect
 func (dm *DatabaseManager) ConnectDatabase(name string, config DatabaseConfig) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
-	if _, exists := dm.databases[name]; exists {
-		return fmt.Errorf("database '%s' already connected", name)
+	// If database is already connected, close it first before reconnecting
+	if existingDb, exists := dm.databases[name]; exists {
+		// Close the existing connection
+		if err := existingDb.Close(); err != nil {
+			return fmt.Errorf("failed to close existing database connection: %w", err)
+		}
+		// Remove from active databases
+		delete(dm.databases, name)
 	}
 
 	filename := dm.getDatabasePath(name)
@@ -124,7 +132,9 @@ func (dm *DatabaseManager) ConnectDatabase(name string, config DatabaseConfig) e
 	return nil
 }
 
-// CloseDatabase closes a database connection without removing from manager
+// CloseDatabase closes a database connection (keeps data on disk, does NOT delete files)
+// This removes the database from active connections in memory but preserves all files on disk.
+// The database can be reconnected later using ConnectDatabase.
 func (dm *DatabaseManager) CloseDatabase(name string) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
@@ -138,7 +148,7 @@ func (dm *DatabaseManager) CloseDatabase(name string) error {
 		return fmt.Errorf("failed to close database: %w", err)
 	}
 
-	// Remove from active databases
+	// Remove from active databases (files remain on disk)
 	delete(dm.databases, name)
 	return nil
 }
@@ -156,16 +166,42 @@ func (dm *DatabaseManager) GetDatabase(name string) (*DatabaseInstance, error) {
 	return db, nil
 }
 
-// ListDatabases returns a list of all database names
+// ListDatabases returns a list of all database names (from disk files, not just active connections)
 func (dm *DatabaseManager) ListDatabases() []string {
 	dm.mu.RLock()
 	defer dm.mu.RUnlock()
 
-	names := make([]string, 0, len(dm.databases))
-	for name := range dm.databases {
-		names = append(names, name)
+	// Scan database directory for all .db files
+	entries, err := os.ReadDir(dm.databaseDir)
+	if err != nil {
+		// If directory doesn't exist or can't be read, return empty list
+		return []string{}
 	}
 
+	// Use a map to track unique database names (in case of duplicates)
+	namesMap := make(map[string]bool)
+	
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			name := entry.Name()
+			// Check if it's a .db file
+			if len(name) > 3 && name[len(name)-3:] == ".db" {
+				// Extract database name (remove .db extension)
+				dbName := name[:len(name)-3]
+				namesMap[dbName] = true
+			}
+		}
+	}
+
+	// Convert map to slice and sort for consistent ordering
+	names := make([]string, 0, len(namesMap))
+	for name := range namesMap {
+		names = append(names, name)
+	}
+	
+	// Sort names alphabetically for consistent ordering
+	sort.Strings(names)
+	
 	return names
 }
 

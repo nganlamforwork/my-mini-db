@@ -1,15 +1,24 @@
-import { useState, useEffect } from 'react';
-import { useParams } from 'react-router-dom';
+import { useState, useEffect, useRef } from 'react';
+import { useParams, useNavigate } from 'react-router-dom';
 import { DatabaseHeader } from '@/components/DatabaseHeader';
 import { TreeCanvas } from '@/components/TreeCanvas';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { OperationDialog } from '@/components/OperationDialog';
 import { OperationHelpDialog } from '@/components/OperationHelpDialog';
 import { SystemLog } from '@/components/SystemLog';
-import { getMockTree } from '@/lib/mockData';
-import { api } from '@/lib/api';
+import { useConnectDatabase, useCloseDatabase, useTreeStructure, useCacheStats, useInsert, useUpdate, useDelete, useSearch, useRangeQuery } from '@/hooks/useDatabaseOperations';
 import type { LogEntry, TreeStructure, ExecutionStep, CacheStats } from '@/types/database';
 import { Plus, Search, Trash2, Edit, ArrowLeftRight, ExternalLink, HelpCircle, Download, RotateCcw } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
@@ -17,21 +26,44 @@ import { Label } from '@/components/ui/label';
 
 export function DatabaseDetail() {
   const { name } = useParams<{ name: string }>()
-  const [treeData] = useState<TreeStructure>(getMockTree())
+  const navigate = useNavigate()
+  const [treeData, setTreeData] = useState<TreeStructure | null>(null)
   const [logs, setLogs] = useState<LogEntry[]>([])
   const [highlighted] = useState<number[]>([])
+  const [highlightedNodeId, setHighlightedNodeId] = useState<number | null>(null)
+  const [highlightedKey, setHighlightedKey] = useState<{ values: Array<{ type: string; value: any }> } | null>(null)
+  const [isExecutingSteps, setIsExecutingSteps] = useState(false)
+  const [pendingTreeUpdate, setPendingTreeUpdate] = useState<TreeStructure | null>(null) // Tree to apply after animation
   const [fullLogsOpen, setFullLogsOpen] = useState(false)
   const [operationDialogOpen, setOperationDialogOpen] = useState(false)
   const [currentOperation, setCurrentOperation] = useState<'insert' | 'search' | 'update' | 'delete' | 'range' | null>(null)
   const [helpDialogOpen, setHelpDialogOpen] = useState(false)
   const [helpOperation, setHelpOperation] = useState<'insert' | 'search' | 'update' | 'delete' | 'range' | null>(null)
   const [animationSpeed, setAnimationSpeed] = useState([50]) // 0-100, default 50
+  const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
+  const [isNavigating, setIsNavigating] = useState(false)
+  const isConnectedRef = useRef(false)
+  const hasLoggedInitialLoadRef = useRef(false)
+  
+  // Hooks for database operations
+  const connectMutation = useConnectDatabase()
+  const closeMutation = useCloseDatabase()
+  const { data: treeStructureData, error: treeError, isLoading: treeLoading } = useTreeStructure(name)
+  const { data: cacheStatsData, refetch: refetchCacheStats } = useCacheStats(name)
+  
+  // Operation hooks
+  const insertMutation = useInsert()
+  const updateMutation = useUpdate()
+  const deleteMutation = useDelete()
+  const searchMutation = useSearch()
+  const rangeQueryMutation = useRangeQuery()
+  
   const [cacheStats, setCacheStats] = useState<CacheStats>({
-    size: 45,
+    size: 0,
     maxSize: 100,
-    hits: 1234,
-    misses: 56,
-    evictions: 12
+    hits: 0,
+    misses: 0,
+    evictions: 0
   })
 
   const addLog = (message: string, type: LogEntry['type'] = 'info', steps?: ExecutionStep[], operation?: LogEntry['operation']) => {
@@ -43,6 +75,180 @@ export function DatabaseDetail() {
       steps,
       operation
     }, ...prev].slice(0, 50))
+  }
+
+  // Helper to extract page ID from nodeId string (e.g., "page-9" -> 9)
+  const extractPageId = (nodeId?: string): number | null => {
+    if (!nodeId) return null;
+    const match = nodeId.match(/page-(\d+)/);
+    return match ? parseInt(match[1], 10) : null;
+  }
+
+  // Helper to format key for display
+  const formatKey = (key?: { values: Array<{ type: string; value: any }> }): string => {
+    if (!key || !key.values || key.values.length === 0) return '';
+    if (key.values.length === 1) {
+      return String(key.values[0].value);
+    }
+    return `(${key.values.map(v => String(v.value)).join(', ')})`;
+  }
+
+  // Step sequencer: processes steps sequentially with animations
+  const executeStepsSequentially = async (
+    steps: ExecutionStep[],
+    operation: LogEntry['operation'],
+    initialMessage: string
+  ) => {
+    if (isExecutingSteps) {
+      console.warn('Step execution already in progress, skipping');
+      return;
+    }
+
+    setIsExecutingSteps(true);
+    setHighlightedNodeId(null);
+    setHighlightedKey(null);
+
+    // Add initial log entry
+    addLog(initialMessage, 'info', steps, operation);
+
+    let currentStepIndex = 0;
+
+    const processNextStep = (): Promise<void> => {
+      return new Promise((resolve) => {
+        if (currentStepIndex >= steps.length) {
+          // All steps completed
+          setIsExecutingSteps(false);
+          setHighlightedNodeId(null);
+          setHighlightedKey(null);
+          resolve();
+          return;
+        }
+
+        const step = steps[currentStepIndex];
+        const pageId = extractPageId(step.nodeId);
+        
+        // Set highlighting for current step
+        setHighlightedNodeId(pageId);
+        setHighlightedKey(step.highlightKey || step.key || null);
+
+        // Apply tree update if this is a structural change step
+        if (step.type === 'INSERT_KEY' || step.type === 'SPLIT_NODE' || step.type === 'MERGE_NODE') {
+          if (pendingTreeUpdate) {
+            setTreeData(pendingTreeUpdate);
+            setPendingTreeUpdate(null);
+          }
+        }
+
+        // Generate log message for this step
+        let stepMessage = '';
+        switch (step.type) {
+          case 'TRAVERSE_NODE':
+            if (step.highlightKey) {
+              const keyStr = formatKey(step.highlightKey);
+              stepMessage = `Traversing node ${step.nodeId || 'unknown'}, comparing with ${keyStr}...`;
+            } else {
+              stepMessage = `Traversing node ${step.nodeId || 'unknown'}...`;
+            }
+            break;
+          case 'INSERT_KEY':
+            const insertKeyStr = formatKey(step.key);
+            stepMessage = `Inserting key ${insertKeyStr} into node ${step.nodeId || 'unknown'}`;
+            break;
+          case 'UPDATE_KEY':
+            const updateKeyStr = formatKey(step.key);
+            stepMessage = `Updating key ${updateKeyStr} in node ${step.nodeId || 'unknown'}`;
+            break;
+          case 'DELETE_KEY':
+            const deleteKeyStr = formatKey(step.key);
+            stepMessage = `Deleting key ${deleteKeyStr} from node ${step.nodeId || 'unknown'}`;
+            break;
+          case 'SPLIT_NODE':
+            stepMessage = `Splitting node ${step.nodeId || 'unknown'} due to overflow`;
+            break;
+          case 'MERGE_NODE':
+            stepMessage = `Merging node ${step.nodeId || 'unknown'} due to underflow`;
+            break;
+          case 'BORROW_FROM_LEFT':
+            stepMessage = `Borrowing key from left sibling of node ${step.nodeId || 'unknown'}`;
+            break;
+          case 'BORROW_FROM_RIGHT':
+            stepMessage = `Borrowing key from right sibling of node ${step.nodeId || 'unknown'}`;
+            break;
+          case 'SEARCH_FOUND':
+            const foundKeyStr = formatKey(step.key);
+            stepMessage = `Search found key ${foundKeyStr} in node ${step.nodeId || 'unknown'}`;
+            break;
+          case 'SEARCH_NOT_FOUND':
+            const notFoundKeyStr = formatKey(step.key);
+            stepMessage = `Search did not find key ${notFoundKeyStr}`;
+            break;
+          case 'PAGE_LOAD':
+            stepMessage = `Loading page ${step.pageId || 'unknown'} from disk`;
+            break;
+          case 'PAGE_FLUSH':
+            stepMessage = `Flushing page ${step.pageId || 'unknown'} to disk`;
+            break;
+          case 'CACHE_HIT':
+            stepMessage = `Cache hit for page ${step.pageId || 'unknown'}`;
+            break;
+          case 'CACHE_MISS':
+            stepMessage = `Cache miss for page ${step.pageId || 'unknown'}`;
+            break;
+          case 'EVICT_PAGE':
+            stepMessage = `Evicting page ${step.pageId || 'unknown'} from cache`;
+            break;
+          case 'WAL_APPEND':
+            stepMessage = `Appending to WAL (LSN: ${step.lsn || 'unknown'})`;
+            break;
+          case 'BUFFER_FLUSH':
+            stepMessage = `Flushing buffer to disk`;
+            break;
+          default:
+            stepMessage = `Executing ${step.type}${step.nodeId ? ` on node ${step.nodeId}` : ''}`;
+        }
+
+        // Add step log message in real-time
+        addLog(stepMessage, 'info');
+
+        // Wait for step animation to complete
+        // The timeout will be handled by TreeCanvas's onStepComplete callback
+        // We use a ref to track the current step completion handler
+        const stepCompleteRef = { resolved: false };
+        
+        // Store the resolve function to be called by onStepComplete
+        (window as any).__currentStepResolve = () => {
+          if (!stepCompleteRef.resolved) {
+            stepCompleteRef.resolved = true;
+            currentStepIndex++;
+            resolve();
+          }
+        };
+
+        // Fallback timeout (in case onStepComplete is not called)
+        setTimeout(() => {
+          if (!stepCompleteRef.resolved) {
+            stepCompleteRef.resolved = true;
+            currentStepIndex++;
+            resolve();
+          }
+        }, 3000); // Max 3 seconds per step
+      });
+    };
+
+    // Process all steps sequentially
+    while (currentStepIndex < steps.length) {
+      await processNextStep();
+    }
+
+    setIsExecutingSteps(false);
+    setHighlightedNodeId(null);
+    setHighlightedKey(null);
+    
+    // Apply any pending tree update at the end
+    if (pendingTreeUpdate) {
+      setTreeData(pendingTreeUpdate);
+      setPendingTreeUpdate(null);
+    }
   }
 
   const downloadLogsAsCSV = () => {
@@ -108,149 +314,114 @@ export function DatabaseDetail() {
   //   }
   // }
 
+  // Auto-connect to database on mount (reset ref when name changes)
   useEffect(() => {
+    // Reset connection ref, initial load flag, and tree data when database name changes
+    isConnectedRef.current = false
+    hasLoggedInitialLoadRef.current = false
+    setTreeData(null) // Clear tree data when switching databases
+    
     if (name) {
-      // Load cache stats
-      const loadCacheStats = async () => {
-        try {
-          const stats = await api.getCacheStats(name);
-          setCacheStats(stats);
-        } catch (error) {
-          console.error('Failed to load cache stats:', error);
+      connectMutation.mutate(
+        { name, config: { cacheSize: 100 } },
+        {
+          onSuccess: () => {
+            isConnectedRef.current = true
+            addLog(`Database "${name}" connected successfully.`, 'success')
+          },
+          onError: (error: Error) => {
+            isConnectedRef.current = false
+            addLog(`Failed to connect to database: ${error.message}`, 'error')
+          },
         }
-      };
-      loadCacheStats();
-
-      // Initial database setup logs
-      addLog(`Database "${name}" initialized successfully.`)
-      addLog(`B+ Tree root located at Page #${treeData.rootPage}`, 'success')
-      addLog(`Tree height: ${treeData.height}`, 'info')
-      
-      // Mock diverse operation logs with steps
-      setTimeout(() => {
-        addLog(
-          'INSERT operation completed successfully',
-          'success',
-          [
-            { type: 'TRAVERSE_NODE', nodeId: 'page-2', keys: [{ values: [{ type: 'int', value: 30 }] }], highlightKey: { values: [{ type: 'int', value: 42 }] } },
-            { type: 'TRAVERSE_NODE', nodeId: 'page-4', keys: [{ values: [{ type: 'int', value: 40 }] }, { values: [{ type: 'int', value: 50 }] }], highlightKey: { values: [{ type: 'int', value: 42 }] } },
-            { type: 'INSERT_KEY', nodeId: 'page-4', key: { values: [{ type: 'int', value: 42 }] } }
-          ],
-          'INSERT'
-        )
-      }, 500)
-
-      setTimeout(() => {
-        addLog(
-          'SEARCH operation completed successfully',
-          'success',
-          [
-            { type: 'TRAVERSE_NODE', nodeId: 'page-2', keys: [{ values: [{ type: 'int', value: 30 }] }], highlightKey: { values: [{ type: 'int', value: 25 }] } },
-            { type: 'TRAVERSE_NODE', nodeId: 'page-3', keys: [{ values: [{ type: 'int', value: 20 }] }, { values: [{ type: 'int', value: 25 }] }], highlightKey: { values: [{ type: 'int', value: 25 }] } },
-            { type: 'CACHE_HIT', pageId: 3 }
-          ],
-          'SEARCH'
-        )
-      }, 1000)
-
-      setTimeout(() => {
-        addLog(
-          'UPDATE operation completed successfully',
-          'success',
-          [
-            { type: 'TRAVERSE_NODE', nodeId: 'page-2', keys: [{ values: [{ type: 'int', value: 30 }] }], highlightKey: { values: [{ type: 'int', value: 42 }] } },
-            { type: 'TRAVERSE_NODE', nodeId: 'page-4', keys: [{ values: [{ type: 'int', value: 40 }] }, { values: [{ type: 'int', value: 42 }] }], highlightKey: { values: [{ type: 'int', value: 42 }] } },
-            { type: 'UPDATE_KEY', nodeId: 'page-4', key: { values: [{ type: 'int', value: 42 }] } },
-            { type: 'WAL_APPEND', lsn: 1234 }
-          ],
-          'UPDATE'
-        )
-      }, 1500)
-
-      setTimeout(() => {
-        addLog(
-          'DELETE operation completed successfully',
-          'success',
-          [
-            { type: 'TRAVERSE_NODE', nodeId: 'page-2', keys: [{ values: [{ type: 'int', value: 30 }] }], highlightKey: { values: [{ type: 'int', value: 20 }] } },
-            { type: 'TRAVERSE_NODE', nodeId: 'page-3', keys: [{ values: [{ type: 'int', value: 20 }] }, { values: [{ type: 'int', value: 25 }] }], highlightKey: { values: [{ type: 'int', value: 20 }] } },
-            { type: 'DELETE_KEY', nodeId: 'page-3', key: { values: [{ type: 'int', value: 20 }] } },
-            { type: 'BORROW_FROM_RIGHT', nodeId: 'page-3' }
-          ],
-          'DELETE'
-        )
-      }, 2000)
-
-      setTimeout(() => {
-        addLog(
-          'RANGE_QUERY operation completed successfully',
-          'success',
-          [
-            { type: 'TRAVERSE_NODE', nodeId: 'page-2', keys: [{ values: [{ type: 'int', value: 30 }] }], highlightKey: { values: [{ type: 'int', value: 10 }] } },
-            { type: 'TRAVERSE_NODE', nodeId: 'page-3', keys: [{ values: [{ type: 'int', value: 20 }] }, { values: [{ type: 'int', value: 25 }] }], highlightKey: { values: [{ type: 'int', value: 10 }] } },
-            { type: 'PAGE_LOAD', pageId: 3 },
-            { type: 'PAGE_LOAD', pageId: 4 }
-          ],
-          'RANGE_QUERY'
-        )
-      }, 2500)
-
-      setTimeout(() => {
-        addLog(
-          'INSERT operation failed: Duplicate key',
-          'error',
-          [
-            { type: 'TRAVERSE_NODE', nodeId: 'page-2', keys: [{ values: [{ type: 'int', value: 30 }] }], highlightKey: { values: [{ type: 'int', value: 42 }] } },
-            { type: 'TRAVERSE_NODE', nodeId: 'page-4', keys: [{ values: [{ type: 'int', value: 40 }] }, { values: [{ type: 'int', value: 42 }] }], highlightKey: { values: [{ type: 'int', value: 42 }] } },
-            { type: 'CACHE_HIT', pageId: 4 }
-          ],
-          'INSERT'
-        )
-      }, 3000)
-
-      setTimeout(() => {
-        addLog(
-          'Warning: Cache size at 90% capacity',
-          'warning',
-          [
-            { type: 'CACHE_MISS', pageId: 5 },
-            { type: 'EVICT_PAGE', pageId: 1 }
-          ]
-        )
-      }, 3500)
-
-      setTimeout(() => {
-        addLog(
-          'SPLIT operation triggered due to node overflow',
-          'info',
-          [
-            { type: 'INSERT_KEY', nodeId: 'page-5', key: { values: [{ type: 'int', value: 55 }] } },
-            { type: 'SPLIT_NODE', nodeId: 'page-5' },
-            { type: 'WAL_APPEND', lsn: 1235 },
-            { type: 'PAGE_FLUSH', pageId: 5 }
-          ]
-        )
-      }, 4000)
-
-      setTimeout(() => {
-        addLog(
-          'MERGE operation triggered due to node underflow',
-          'info',
-          [
-            { type: 'DELETE_KEY', nodeId: 'page-6', key: { values: [{ type: 'int', value: 60 }] } },
-            { type: 'BORROW_FROM_LEFT', nodeId: 'page-6' },
-            { type: 'MERGE_NODE', nodeId: 'page-6' },
-            { type: 'PAGE_FLUSH', pageId: 6 }
-          ]
-        )
-      }, 4500)
+      )
     }
-  }, [name, treeData.rootPage, treeData.height])
+  }, [name])
+
+  // Load tree structure from API - update when data changes (on load or after operations)
+  useEffect(() => {
+    if (treeStructureData) {
+      const isInitialLoad = !treeData
+      
+      if (isInitialLoad) {
+        // Initial load - update immediately
+        setTreeData(treeStructureData)
+        if (!hasLoggedInitialLoadRef.current) {
+          hasLoggedInitialLoadRef.current = true
+          addLog(`B+ Tree root located at Page #${treeStructureData.rootPage}`, 'success')
+          addLog(`Tree height: ${treeStructureData.height}`, 'info')
+        }
+      } else if (isExecutingSteps) {
+        // During step execution - store as pending update, will be applied at INSERT_KEY/SPLIT_NODE
+        setPendingTreeUpdate(treeStructureData)
+      } else {
+        // Not executing steps - update immediately (e.g., manual refresh)
+        setTreeData(treeStructureData)
+      }
+    }
+  }, [treeStructureData, isExecutingSteps, treeData])
+
+  useEffect(() => {
+    if (cacheStatsData) {
+      // Only update if values actually changed to prevent unnecessary re-renders
+      setCacheStats(prev => {
+        if (prev.size === cacheStatsData.size && 
+            prev.hits === cacheStatsData.hits && 
+            prev.misses === cacheStatsData.misses && 
+            prev.evictions === cacheStatsData.evictions) {
+          return prev // No change, return previous value
+        }
+        return cacheStatsData
+      })
+    }
+  }, [cacheStatsData])
+
+  // Handle closing database on unmount (if not navigating)
+  useEffect(() => {
+    return () => {
+      if (name && isConnectedRef.current && !isNavigating) {
+        // Only close if we're not navigating (handled by navigate handler)
+        // Use a silent close - don't navigate or show logs
+        closeMutation.mutate(name, { onSettled: () => {} })
+      }
+    }
+  }, [name, isNavigating])
+
+  // Mock logs removed - now using real API step execution
+
+  // Handle navigation with confirmation
+  const handleNavigateAway = () => {
+    // Always show confirmation dialog when navigating away
+    // This allows proper cleanup of the database connection
+    setCloseConfirmOpen(true)
+  }
+
+  // Handle closing database and navigating
+  const handleCloseAndNavigate = async () => {
+    if (!name) {
+      navigate('/')
+      return
+    }
+    
+    setIsNavigating(true)
+    setCloseConfirmOpen(false)
+    
+    try {
+      await closeMutation.mutateAsync(name)
+      addLog(`Database "${name}" closed successfully.`, 'info')
+    } catch (error) {
+      addLog(`Failed to close database: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
+    } finally {
+      setIsNavigating(false)
+      // Always navigate, regardless of close success/failure
+      navigate('/')
+    }
+  }
 
   if (!name) {
     return (
       <div className="h-screen flex flex-col bg-background">
-        <DatabaseHeader databaseName="Unknown" />
+        <DatabaseHeader databaseName="Unknown" onBackClick={handleNavigateAway} />
         <main className="flex-1 flex items-center justify-center">
           <p className="text-muted-foreground">Database not found</p>
         </main>
@@ -258,9 +429,48 @@ export function DatabaseDetail() {
     )
   }
 
+  if (!treeData) {
+    return (
+      <div className="h-screen flex flex-col bg-background">
+        <DatabaseHeader databaseName={name} onBackClick={handleNavigateAway} />
+        <main className="flex-1 flex items-center justify-center">
+          <p className="text-muted-foreground">
+            {connectMutation.isPending ? 'Connecting to database...' : 'Loading database...'}
+          </p>
+        </main>
+      </div>
+    )
+  }
+
   return (
     <div className="h-screen flex flex-col bg-background text-foreground">
-      <DatabaseHeader databaseName={name} />
+      <AlertDialog open={closeConfirmOpen} onOpenChange={setCloseConfirmOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close Database?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to close the database connection? This will free up memory but keep the data on disk.
+              You can reconnect later.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={closeMutation.isPending || isNavigating}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={(e) => {
+                e.preventDefault()
+                handleCloseAndNavigate()
+              }}
+              disabled={closeMutation.isPending || isNavigating}
+            >
+              {closeMutation.isPending || isNavigating ? 'Closing...' : 'Close & Go Back'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <DatabaseHeader databaseName={name} onBackClick={handleNavigateAway} />
       
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
@@ -417,9 +627,11 @@ export function DatabaseDetail() {
                     if (!name) return;
                     try {
                       // Refresh cache stats
-                      const updatedStats = await api.getCacheStats(name);
-                      setCacheStats(updatedStats);
-                      addLog('Cache statistics refreshed', 'success');
+                      const result = await refetchCacheStats();
+                      if (result.data) {
+                        setCacheStats(result.data);
+                        addLog('Cache statistics refreshed', 'success');
+                      }
                     } catch (error) {
                       addLog(`Failed to refresh cache stats: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error');
                     }
@@ -500,31 +712,207 @@ export function DatabaseDetail() {
               open={operationDialogOpen}
               onOpenChange={setOperationDialogOpen}
               operation={currentOperation}
-              onSubmit={(key, _value) => {
-                // TODO: Call actual API and handle response
-                // For now, create mock steps based on operation
-                const mockSteps: ExecutionStep[] = [
-                  {
-                    type: 'TRAVERSE_NODE',
-                    nodeId: `page-${treeData.rootPage}`,
-                    keys: treeData.nodes[treeData.rootPage.toString()]?.keys || [],
-                    highlightKey: key
-                  },
-                  {
-                    type: currentOperation === 'insert' ? 'INSERT_KEY' : 
-                          currentOperation === 'update' ? 'UPDATE_KEY' :
-                          currentOperation === 'delete' ? 'DELETE_KEY' : 'TRAVERSE_NODE',
-                    nodeId: `page-${treeData.rootPage}`,
-                    key: key
+              onSubmit={(key, value, endKey) => {
+                if (!name) return;
+
+                const handleOperationSuccess = async (response: any, operation: string) => {
+                  if (response.success) {
+                    // Execute steps sequentially with animations
+                    if (response.steps && response.steps.length > 0) {
+                      await executeStepsSequentially(
+                        response.steps,
+                        operation as LogEntry['operation'],
+                        `${operation} operation started`
+                      );
+                      addLog(
+                        `${operation} operation completed successfully`,
+                        'success',
+                        response.steps,
+                        operation as LogEntry['operation']
+                      );
+                    } else {
+                      addLog(
+                        `${operation} operation completed successfully`,
+                        'success',
+                        [],
+                        operation as LogEntry['operation']
+                      );
+                    }
+                    // Tree will automatically refetch due to query invalidation in hooks
+                  } else {
+                    // Even on failure, show steps if available
+                    if (response.steps && response.steps.length > 0) {
+                      await executeStepsSequentially(
+                        response.steps,
+                        operation as LogEntry['operation'],
+                        `${operation} operation started`
+                      );
+                    }
+                    addLog(
+                      `${operation} operation failed: ${response.error || 'Unknown error'}`,
+                      'error',
+                      response.steps || [],
+                      operation as LogEntry['operation']
+                    );
                   }
-                ];
-                
-                addLog(
-                  `${currentOperation.toUpperCase()} operation initiated`,
-                  'info',
-                  mockSteps,
-                  currentOperation.toUpperCase() as LogEntry['operation']
-                );
+                };
+
+                const handleOperationError = (error: Error, operation: string) => {
+                  addLog(
+                    `${operation} operation failed: ${error.message}`,
+                    'error',
+                    [],
+                    operation as LogEntry['operation']
+                  );
+                };
+
+                switch (currentOperation) {
+                  case 'insert':
+                    if (!value) {
+                      addLog('Insert operation requires both key and value', 'error');
+                      return;
+                    }
+                    insertMutation.mutate(
+                      { name, key, value },
+                      {
+                        onSuccess: (response) => handleOperationSuccess(response, 'INSERT'),
+                        onError: (error) => handleOperationError(error as Error, 'INSERT'),
+                      }
+                    );
+                    break;
+
+                  case 'update':
+                    if (!value) {
+                      addLog('Update operation requires both key and value', 'error');
+                      return;
+                    }
+                    updateMutation.mutate(
+                      { name, key, value },
+                      {
+                        onSuccess: (response) => handleOperationSuccess(response, 'UPDATE'),
+                        onError: (error) => handleOperationError(error as Error, 'UPDATE'),
+                      }
+                    );
+                    break;
+
+                  case 'delete':
+                    deleteMutation.mutate(
+                      { name, key },
+                      {
+                        onSuccess: (response) => handleOperationSuccess(response, 'DELETE'),
+                        onError: (error) => handleOperationError(error as Error, 'DELETE'),
+                      }
+                    );
+                    break;
+
+                  case 'search':
+                    searchMutation.mutate(
+                      { name, key },
+                      {
+                        onSuccess: async (response) => {
+                          if (response.success && response.value) {
+                            if (response.steps && response.steps.length > 0) {
+                              await executeStepsSequentially(
+                                response.steps,
+                                'SEARCH',
+                                'Search operation started'
+                              );
+                            }
+                            addLog(
+                              `Search operation found value for key`,
+                              'success',
+                              response.steps,
+                              'SEARCH'
+                            );
+                          } else {
+                            if (response.steps && response.steps.length > 0) {
+                              await executeStepsSequentially(
+                                response.steps,
+                                'SEARCH',
+                                'Search operation started'
+                              );
+                            }
+                            addLog(
+                              `Search operation: key not found`,
+                              'warning',
+                              response.steps || [],
+                              'SEARCH'
+                            );
+                          }
+                        },
+                        onError: (error) => handleOperationError(error as Error, 'SEARCH'),
+                      }
+                    );
+                    break;
+
+                  case 'range':
+                    // For range queries, endKey is passed separately
+                    if (!endKey || !endKey.values || endKey.values.length === 0) {
+                      // Try to extract from value if endKey not provided (legacy format)
+                      if (value && value.columns && value.columns.length > 0) {
+                        const extractedEndKey = { values: value.columns };
+                        rangeQueryMutation.mutate(
+                          { name, startKey: key, endKey: extractedEndKey },
+                          {
+                          onSuccess: async (response) => {
+                            if (response.success) {
+                              if (response.steps && response.steps.length > 0) {
+                                await executeStepsSequentially(
+                                  response.steps,
+                                  'RANGE_QUERY',
+                                  'Range query operation started'
+                                );
+                              }
+                              const keyCount = response.keys?.length || 0;
+                              addLog(
+                                `Range query found ${keyCount} key-value pair(s)`,
+                                'success',
+                                response.steps,
+                                'RANGE_QUERY'
+                              );
+                            } else {
+                              await handleOperationSuccess(response, 'RANGE_QUERY');
+                            }
+                          },
+                            onError: (error) => handleOperationError(error as Error, 'RANGE_QUERY'),
+                          }
+                        );
+                      } else {
+                        addLog('Range query operation requires both startKey and endKey', 'error');
+                      }
+                    } else {
+                      rangeQueryMutation.mutate(
+                        { name, startKey: key, endKey },
+                        {
+                          onSuccess: async (response) => {
+                            if (response.success) {
+                              if (response.steps && response.steps.length > 0) {
+                                await executeStepsSequentially(
+                                  response.steps,
+                                  'RANGE_QUERY',
+                                  'Range query operation started'
+                                );
+                              }
+                              const keyCount = response.keys?.length || 0;
+                              addLog(
+                                `Range query found ${keyCount} key-value pair(s)`,
+                                'success',
+                                response.steps,
+                                'RANGE_QUERY'
+                              );
+                            } else {
+                              await handleOperationSuccess(response, 'RANGE_QUERY');
+                            }
+                          },
+                          onError: (error) => handleOperationError(error as Error, 'RANGE_QUERY'),
+                        }
+                      );
+                    }
+                    break;
+
+                  default:
+                    addLog(`Unknown operation: ${currentOperation}`, 'error');
+                }
               }}
             />
           )}
@@ -560,16 +948,32 @@ export function DatabaseDetail() {
 
         {/* Visualization Area */}
         <main className="flex-1 relative flex flex-col bg-background">
-          <TreeCanvas 
-            treeData={treeData} 
-            highlightedIds={highlighted}
-            config={{
-              order: 3,
-              pageSize: 4096,
-              cacheSize: 8,
-              walEnabled: true
-            }}
-          />
+          {treeData ? (
+            <TreeCanvas 
+              treeData={treeData} 
+              highlightedIds={highlighted}
+              highlightedNodeId={highlightedNodeId}
+              highlightedKey={highlightedKey}
+              onStepComplete={() => {
+                // Call the stored resolve function
+                if ((window as any).__currentStepResolve) {
+                  (window as any).__currentStepResolve();
+                  (window as any).__currentStepResolve = null;
+                }
+              }}
+              animationSpeed={animationSpeed[0]}
+              config={{
+                order: 3,
+                pageSize: 4096,
+                cacheSize: 8,
+                walEnabled: true
+              }}
+            />
+          ) : (
+            <div className="flex items-center justify-center h-full text-muted-foreground">
+              {connectMutation.isPending ? 'Connecting to database...' : treeLoading ? 'Loading tree structure...' : treeError ? `Error loading tree: ${treeError.message}` : 'Waiting for tree data...'}
+            </div>
+          )}
         </main>
       </div>
     </div>

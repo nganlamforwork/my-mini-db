@@ -3,7 +3,11 @@ import type {
   TreeStructure, 
   CacheStats, 
   CachePages, 
-  IOReadInfo 
+  IOReadInfo,
+  CompositeKey,
+  Record,
+  OperationResponse,
+  WALInfo
 } from '@/types/database'
 
 const API_BASE_URL = 'http://localhost:8080/api'
@@ -73,8 +77,23 @@ export const api = {
     })
     
     if (!response.ok) {
-      throw new Error('Failed to drop database')
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to drop database')
     }
+  },
+
+  // Delete all databases
+  async deleteAllDatabases(): Promise<{ success: boolean; message: string }> {
+    const response = await fetch(`${API_BASE_URL}/databases`, {
+      method: 'DELETE',
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to delete all databases')
+    }
+    
+    return await response.json()
   },
 
   // Get tree structure
@@ -113,13 +132,137 @@ export const api = {
     return await response.json()
   },
 
-  // Reset cache statistics
-  async resetCacheStats(name: string): Promise<void> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/cache`, {
-      method: 'DELETE',
+  // Connect to an existing database (loads from disk)
+  async connectDatabase(request: CreateDatabaseRequest): Promise<{ success: boolean; name: string; message: string }> {
+    const response = await fetch(`${API_BASE_URL}/databases/connect`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
     })
+    
     if (!response.ok) {
-      throw new Error(`Failed to reset cache stats: ${name}`)
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to connect database')
     }
+    
+    return await response.json()
+  },
+
+  // Close a database connection (keeps data on disk)
+  async closeDatabase(name: string): Promise<{ success: boolean; message: string }> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/close`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to close database')
+    }
+    
+    return await response.json()
+  },
+
+  // Insert a key-value pair
+  async insert(name: string, key: CompositeKey, value: Record): Promise<OperationResponse> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/insert`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ key, value }),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to insert')
+    }
+    
+    return await response.json()
+  },
+
+  // Update a key-value pair
+  async update(name: string, key: CompositeKey, value: Record): Promise<OperationResponse> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/update`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ key, value }),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to update')
+    }
+    
+    return await response.json()
+  },
+
+  // Delete a key-value pair
+  async delete(name: string, key: CompositeKey): Promise<OperationResponse> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/delete`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ key }),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to delete')
+    }
+    
+    return await response.json()
+  },
+
+  // Search for a key
+  async search(name: string, key: CompositeKey): Promise<OperationResponse> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/search`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ key }),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to search')
+    }
+    
+    return await response.json()
+  },
+
+  // Range query
+  async rangeQuery(name: string, startKey: CompositeKey, endKey: CompositeKey): Promise<OperationResponse> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/range`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ startKey, endKey }),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to perform range query')
+    }
+    
+    return await response.json()
+  },
+
+  // Get WAL info
+  async getWALInfo(name: string): Promise<WALInfo> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/wal`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch WAL info: ${name}`)
+    }
+    return await response.json()
   },
 }

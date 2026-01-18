@@ -9,11 +9,21 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from './ui/tooltip';
 
 interface TreeCanvasProps {
   treeData: TreeStructure;
   highlightedIds?: number[];
   highlightColor?: string;
+  highlightedNodeId?: number | null; // Currently executing step's node
+  highlightedKey?: { values: Array<{ type: string; value: any }> } | null; // Key being compared/operated on
+  onStepComplete?: () => void; // Callback when step animation completes
+  animationSpeed?: number; // 0-100, affects animation duration
   config?: {
     order?: number;
     pageSize?: number;
@@ -35,6 +45,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   treeData, 
   highlightedIds = [], 
   highlightColor = '#3b82f6',
+  highlightedNodeId = null,
+  highlightedKey = null,
+  onStepComplete,
+  animationSpeed = 50,
   config
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -46,12 +60,104 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const hoveredNodeRef = useRef<number | null>(null);
+  const [hoveredEdge, setHoveredEdge] = useState<{ parentId: number; childIndex: number; tooltipText: string } | null>(null);
+  const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+
+  // Helper to draw rounded rectangle with selective corner rounding
+  const drawRoundedRect = (
+    ctx: CanvasRenderingContext2D,
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    radius: number,
+    corners: { topLeft?: boolean; topRight?: boolean; bottomLeft?: boolean; bottomRight?: boolean } = {}
+  ) => {
+    const { topLeft = true, topRight = true, bottomLeft = true, bottomRight = true } = corners;
+    
+    ctx.beginPath();
+    ctx.moveTo(x + (topLeft ? radius : 0), y);
+    ctx.lineTo(x + width - (topRight ? radius : 0), y);
+    if (topRight) {
+      ctx.arcTo(x + width, y, x + width, y + radius, radius);
+    }
+    ctx.lineTo(x + width, y + height - (bottomRight ? radius : 0));
+    if (bottomRight) {
+      ctx.arcTo(x + width, y + height, x + width - radius, y + height, radius);
+    }
+    ctx.lineTo(x + (bottomLeft ? radius : 0), y + height);
+    if (bottomLeft) {
+      ctx.arcTo(x, y + height, x, y + height - radius, radius);
+    }
+    ctx.lineTo(x, y + (topLeft ? radius : 0));
+    if (topLeft) {
+      ctx.arcTo(x, y, x + radius, y, radius);
+    }
+    ctx.closePath();
+  };
+
+  // Generate tooltip text for an edge based on parent keys and child index
+  const generateEdgeTooltipText = (
+    parentKeys: Array<{ values: Array<{ type: string; value: any }> }>,
+    childIndex: number,
+    numChildren: number
+  ): string => {
+    if (!parentKeys || parentKeys.length === 0) {
+      return '';
+    }
+
+    // Extract key values (handle single values and tuples)
+    const keyValues = parentKeys.map(key => {
+      if (key.values.length === 1) {
+        return String(key.values[0].value);
+      }
+      return `(${key.values.map(v => String(v.value)).join(', ')})`;
+    });
+
+    if (childIndex === 0) {
+      // Leftmost edge: Keys < [First Parent Key]
+      return `Keys < ${keyValues[0]}`;
+    } else if (childIndex === numChildren - 1) {
+      // Rightmost edge: Keys >= [Last Parent Key]
+      return `Keys >= ${keyValues[keyValues.length - 1]}`;
+    } else {
+      // Inner edge: [Left Key] <= Keys < [Right Key]
+      const leftKey = keyValues[childIndex - 1];
+      const rightKey = keyValues[childIndex];
+      return `${leftKey} <= Keys < ${rightKey}`;
+    }
+  };
+
+  // Check if tree is empty
+  const isEmptyTree = useMemo(() => {
+    if (!treeData || !treeData.nodes || typeof treeData.nodes !== 'object') {
+      return true;
+    }
+    const nodeCount = Object.keys(treeData.nodes).length;
+    return (
+      treeData.height === 0 ||
+      nodeCount === 0 ||
+      treeData.rootPage === 0 ||
+      treeData.rootPage === undefined ||
+      treeData.rootPage === null ||
+      !treeData.nodes[treeData.rootPage.toString()]
+    );
+  }, [treeData]);
 
   // Layout algorithm (Hierarchical) - improved to prevent overlaps
   const layout = useMemo(() => {
+    if (isEmptyTree) {
+      return [];
+    }
+
     const nodes: { id: number; x: number; y: number; parentId: number | null; width: number }[] = [];
     const LEVEL_SPACING = 150;
-    const MIN_NODE_SPACING = 20; // Minimum spacing between nodes
+    const MIN_LEAF_SPACING = 80; // Minimum spacing between leaf nodes (larger to prevent edge overlap)
+
+    const rootNode = treeData.nodes[treeData.rootPage.toString()];
+    if (!rootNode) {
+      return [];
+    }
 
     // Helper to calculate node width based on keys
     const calculateNodeWidth = (node: any): number => {
@@ -77,7 +183,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     const nodeWidths = new Map<number, number>();
     const collectNodes = (nodeId: number): void => {
       const node = treeData.nodes[nodeId.toString()];
-      if (!node) return;
+      if (!node) {
+        return;
+      }
 
       const width = calculateNodeWidth(node);
       nodeWidths.set(nodeId, width);
@@ -89,9 +197,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       }
     };
 
-    if (treeData.rootPage) {
-      collectNodes(treeData.rootPage);
-    }
+    // Collect nodes starting from root
+    collectNodes(treeData.rootPage);
 
     // Second pass: position nodes with proper spacing
     let leafX = 0;
@@ -104,9 +211,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       const nodeWidth = nodeWidths.get(nodeId) || 100;
 
       if (node.type === 'leaf') {
-        // Position leaf nodes with spacing based on their width
+        // Position leaf nodes with increased spacing to prevent edge overlap
         const x = leafX + nodeWidth / 2;
-        leafX += nodeWidth + MIN_NODE_SPACING;
+        leafX += nodeWidth + MIN_LEAF_SPACING;
         leafNodes.push(nodeId);
         
         nodes.push({ id: nodeId, x, y: level * LEVEL_SPACING, parentId, width: nodeWidth });
@@ -131,9 +238,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       }
     };
 
-    if (treeData.rootPage) {
-      traverse(treeData.rootPage, 0, null);
-    }
+    // Second pass: traverse and position nodes (rootPage already validated above)
+    traverse(treeData.rootPage, 0, null);
     
     // Center the layout
     const root = nodes.find(n => n.id === treeData.rootPage);
@@ -206,17 +312,19 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       ctx.strokeStyle = isDark ? '#10b981' : '#059669'; // green-500 or green-600
       ctx.setLineDash([5, 5]); // Dashed line pattern
       
-      // Helper to calculate node width
+      // Helper to calculate node width (sum of all key group widths, no gaps)
       const calculateNodeWidth = (nodeData: any): number => {
-        if (!nodeData) return 100;
-        const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
+        if (!nodeData || !nodeData.keys || nodeData.keys.length === 0) return 100;
+        ctx.font = 'bold 14px "JetBrains Mono", monospace';
+        const keyTexts = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
           if (k.values.length === 1) {
             return String(k.values[0].value);
           }
           return `(${k.values.map(v => String(v.value)).join(', ')})`;
-        }).join(' | ');
-        ctx.font = 'bold 14px "JetBrains Mono", monospace';
-        return Math.max(100, ctx.measureText(keys).width + 40);
+        });
+        const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
+        const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+        return Math.max(100, totalKeyWidth);
       };
       
       layout.forEach(node => {
@@ -287,81 +395,75 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         
         // Calculate anchor point based on key positions
         // For N keys, we have N+1 children, so we need N+1 anchor points
+        if (!parentNodeData.keys || !Array.isArray(parentNodeData.keys)) return;
         const numKeys = parentNodeData.keys.length;
         const numChildren = parentChildren.length;
         
-        // Calculate node width and key positions
-        const keys = parentNodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-          if (k.values.length === 1) {
-            return String(k.values[0].value);
-          }
-          return `(${k.values.map(v => String(v.value)).join(', ')})`;
-        }).join(' | ');
-        
+        // Calculate node width using key groups (same as rendering)
         ctx.font = 'bold 14px "JetBrains Mono", monospace';
-        const nodeWidth = Math.max(100, ctx.measureText(keys).width + 40);
+        
+        // Prepare key texts for width calculation
+        const keyTexts = parentNodeData.keys.map((key: { values: Array<{ type: string; value: any }> }) => {
+          if (key.values.length === 1) {
+            return String(key.values[0].value);
+          }
+          return `(${key.values.map(v => String(v.value)).join(', ')})`;
+        });
+        
+        const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
+        const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+        const nodeWidth = Math.max(100, totalKeyWidth);
         const nodeLeft = parentPos.x - nodeWidth / 2;
         const nodeRight = parentPos.x + nodeWidth / 2;
-        const padding = 20; // Horizontal padding inside node
+        // Use same padding calculation as node rendering: center keys in node
+        const padding = (nodeWidth - totalKeyWidth) / 2;
+        const contentStartX = nodeLeft + padding;
         
-        // Calculate anchor points based on key positions
-        // Anchor points correspond to gaps: before key[0], between keys, after last key
+        // Calculate anchor points: left edge, dividers, right edge
         let anchorX: number;
         if (numKeys === 0) {
-          // No keys: center
-          anchorX = parentPos.x;
+          // No keys: distribute children evenly across parent width
+          const childSpacing = nodeWidth / (numChildren + 1);
+          anchorX = nodeLeft + childSpacing * (childIndex + 1);
         } else if (numKeys === 1) {
-          // Single key: two anchor points (left and right of key)
+          // Single key: two anchor points (left and right edges of key group)
+          const keyW = keyWidths[0];
+          const keyLeft = contentStartX;
+          const keyRight = keyLeft + keyW;
           if (childIndex === 0) {
-            anchorX = nodeLeft + padding / 2; // Left of key
+            anchorX = keyLeft; // Left edge of key group
           } else {
-            anchorX = nodeRight - padding / 2; // Right of key
+            anchorX = keyRight; // Right edge of key group
           }
         } else {
-          // Multiple keys: calculate positions based on key boundaries
-          // Measure individual key widths to position anchors accurately
-          const keyWidths: number[] = [];
-          let totalKeyWidth = 0;
-          parentNodeData.keys.forEach((key: { values: Array<{ type: string; value: any }> }) => {
-            const keyText = key.values.length === 1 
-              ? String(key.values[0].value)
-              : `(${key.values.map(v => String(v.value)).join(', ')})`;
-            const keyWidth = ctx.measureText(keyText).width;
-            keyWidths.push(keyWidth);
-            totalKeyWidth += keyWidth;
-          });
-          
-          // Calculate spacing between keys (accounting for separators " | ")
-          const separatorWidth = ctx.measureText(' | ').width;
-          const totalSeparatorWidth = separatorWidth * (numKeys - 1);
-          const totalContentWidth = totalKeyWidth + totalSeparatorWidth;
-          const contentStartX = nodeLeft + padding;
-          
-          // Calculate cumulative positions of keys
+          // Multiple keys: calculate positions based on key group boundaries
+          // Calculate divider positions (edges between key groups)
+          // For N keys, there are N-1 dividers between them
+          const dividerPositions: number[] = [];
           let currentX = contentStartX;
-          const keyPositions: number[] = [];
           keyWidths.forEach((keyWidth, idx) => {
-            keyPositions.push(currentX + keyWidth / 2); // Center of key
-            currentX += keyWidth;
+            currentX += keyWidth; // Move past the key group
             if (idx < numKeys - 1) {
-              currentX += separatorWidth; // Add separator
+              // Divider is at the right edge of this key group
+              dividerPositions.push(currentX);
             }
           });
           
-          // Calculate anchor points: before first key, between keys, after last key
+          // Calculate anchor points: left edge, at dividers, right edge
           if (childIndex === 0) {
-            // Leftmost child: before first key
+            // Leftmost child: left edge of first key group
             anchorX = contentStartX;
           } else if (childIndex === numChildren - 1) {
-            // Rightmost child: after last key
-            anchorX = contentStartX + totalContentWidth;
+            // Rightmost child: right edge of last key group
+            anchorX = contentStartX + totalKeyWidth;
           } else {
-            // Middle children: between keys
-            // childIndex 1 is between key[0] and key[1], etc.
-            const keyIdx = childIndex - 1;
-            if (keyIdx < numKeys - 1) {
-              // Between two keys: midpoint between key centers
-              anchorX = (keyPositions[keyIdx] + keyPositions[keyIdx + 1]) / 2;
+            // Middle children: at divider positions
+            // childIndex 1 corresponds to divider between key[0] and key[1]
+            // childIndex 2 corresponds to divider between key[1] and key[2], etc.
+            const dividerIdx = childIndex - 1;
+            if (dividerIdx < dividerPositions.length) {
+              // Use exact divider position (edge between key groups)
+              anchorX = dividerPositions[dividerIdx];
             } else {
               // Fallback
               anchorX = nodeRight - padding / 2;
@@ -383,17 +485,26 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
         const isLeaf = nodeData.type === 'leaf';
         const isHighlighted = highlightedIds.includes(pos.id);
-        // Format composite keys - show all values in key as (val1, val2)
-        const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
+        const isStepHighlighted = highlightedNodeId === pos.id; // Currently executing step's node
+        
+        // Prepare keys - format each key individually
+        ctx.font = 'bold 14px "JetBrains Mono", monospace';
+        const keyTexts = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
           if (k.values.length === 1) {
             return String(k.values[0].value);
           }
           return `(${k.values.map(v => String(v.value)).join(', ')})`;
-        }).join(' | ');
+        });
         
-        ctx.font = 'bold 14px "JetBrains Mono", monospace';
-        const rectW = Math.max(100, ctx.measureText(keys).width + 40);
+        // Note: We're using hover-style highlighting (border/shadow) for step highlighting
+        // No need to track individual key indices since we highlight the entire node
+        
+        // Calculate width for each key group
+        const keyWidths = keyTexts.map(keyText => Math.max(60, ctx.measureText(keyText).width + 20));
+        const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+        const rectW = Math.max(100, totalKeyWidth);
         const rectH = 50;
+        const padding = (rectW - totalKeyWidth) / 2; // Center keys in node
 
         ctx.globalAlpha = pos.alpha;
         
@@ -401,50 +512,101 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         const isHovered = hoveredNodeRef.current === pos.id;
         const isRoot = pos.id === treeData.rootPage;
         
+        // Calculate position of first key group
+        const nodeLeft = pos.x - rectW / 2;
+        let currentKeyX = nodeLeft + padding;
+        
         // Root node gets special amber/gold colors
         if (isRoot) {
           const isDarkMode = document.documentElement.classList.contains('dark');
-          ctx.fillStyle = isDarkMode ? '#78350f' : '#fef3c7'; // amber-900/50 or amber-100
+          const rootFill = isDarkMode ? '#78350f' : '#fef3c7'; // amber-900/50 or amber-100
           const rootStroke = isDarkMode ? '#f59e0b' : '#d97706'; // amber-500 or amber-600
           
+          // Draw all key groups filled first (no borders yet)
+          keyTexts.forEach((_keyText, idx) => {
+            const keyW = keyWidths[idx];
+            ctx.fillStyle = rootFill;
+            ctx.fillRect(currentKeyX, pos.y - rectH/2, keyW, rectH);
+            currentKeyX += keyW;
+          });
+          
+          // Draw outer border with rounded corners (only on outside)
+          const nodeTop = pos.y - rectH/2;
+          const nodeBottom = pos.y + rectH/2;
+          const nodeLeftX = nodeLeft + padding;
+          const radius = 6;
+          const lineWidth = isRoot ? (isHighlighted ? 3 : (isHovered || isStepHighlighted ? 3 : 2)) : (isHighlighted ? 3 : (isHovered || isStepHighlighted ? 3 : 1.5));
+          
+          // Set shadow for step highlighting - use hover-style
           if (isHighlighted) {
-            ctx.strokeStyle = highlightColor;
-            ctx.lineWidth = 3;
             ctx.shadowBlur = 15;
             ctx.shadowColor = highlightColor;
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 0;
-          } else if (isHovered) {
-            ctx.strokeStyle = rootStroke;
-            ctx.lineWidth = 3;
+          } else if (isHovered || isStepHighlighted) {
             ctx.shadowBlur = 12;
             ctx.shadowColor = isDarkMode ? 'rgba(245, 158, 11, 0.6)' : 'rgba(217, 119, 6, 0.5)';
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 2;
           } else {
-            ctx.strokeStyle = rootStroke;
-            ctx.lineWidth = 2;
             ctx.shadowBlur = 0;
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 0;
           }
+          
+          ctx.strokeStyle = isHighlighted ? highlightColor : rootStroke;
+          ctx.lineWidth = lineWidth;
+          ctx.beginPath();
+          drawRoundedRect(ctx, nodeLeftX, nodeTop, totalKeyWidth, rectH, radius);
+          ctx.stroke();
+          
+          // Reset shadow before drawing divider lines to keep them sharp
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 0;
+          
+          // Draw divider lines between key groups (inner separators, no rounded corners)
+          currentKeyX = nodeLeft + padding;
+          keyTexts.forEach((_keyText, idx) => {
+            const keyW = keyWidths[idx];
+            if (idx < keyTexts.length - 1) {
+              ctx.beginPath();
+              ctx.moveTo(currentKeyX + keyW, nodeTop);
+              ctx.lineTo(currentKeyX + keyW, nodeBottom);
+              ctx.strokeStyle = rootStroke;
+              ctx.lineWidth = 1;
+              ctx.stroke();
+            }
+            currentKeyX += keyW;
+          });
         } else {
           // Node Body - use theme colors for non-root nodes
-          ctx.fillStyle = isLeaf ? colors.leafFill : colors.internalFill;
+          const nodeFill = isLeaf ? colors.leafFill : colors.internalFill;
           
+          // Draw all key groups filled first (no borders yet)
+          keyTexts.forEach((_keyText, idx) => {
+            const keyW = keyWidths[idx];
+            ctx.fillStyle = nodeFill;
+            ctx.fillRect(currentKeyX, pos.y - rectH/2, keyW, rectH);
+            currentKeyX += keyW;
+          });
+          
+          // Draw outer border with rounded corners (only on outside)
+          const nodeTop = pos.y - rectH/2;
+          const nodeBottom = pos.y + rectH/2;
+          const nodeLeftX = nodeLeft + padding;
+          const radius = 6;
+          const lineWidth = isHighlighted ? 3 : (isHovered || isStepHighlighted ? 3 : 1.5);
+          
+          // Set shadow only for outer border - use hover-style for step highlighting
           if (isHighlighted) {
-            ctx.strokeStyle = highlightColor;
-            ctx.lineWidth = 3;
             ctx.shadowBlur = 15;
             ctx.shadowColor = highlightColor;
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 0;
-          } else if (isHovered) {
-            // Enhanced hover effect with more contrast
+          } else if (isHovered || isStepHighlighted) {
+            // Enhanced hover effect with more contrast (same style for hover and step highlighting)
             const isDarkMode = document.documentElement.classList.contains('dark');
-            const baseStroke = isLeaf ? colors.leafStroke : colors.internalStroke;
-            ctx.strokeStyle = baseStroke;
-            ctx.lineWidth = 3; // Thicker border
             ctx.shadowBlur = 12; // Bigger shadow
             ctx.shadowColor = isLeaf 
               ? (isDarkMode ? 'rgba(16, 185, 129, 0.6)' : 'rgba(5, 150, 105, 0.5)') 
@@ -452,34 +614,58 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 2; // Slight shadow offset for depth
           } else {
-            ctx.strokeStyle = isLeaf ? colors.leafStroke : colors.internalStroke;
-            ctx.lineWidth = 1.5;
             ctx.shadowBlur = 0;
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 0;
           }
+          
+          ctx.strokeStyle = isHighlighted ? highlightColor : (isLeaf ? colors.leafStroke : colors.internalStroke);
+          ctx.lineWidth = lineWidth;
+          ctx.beginPath();
+          drawRoundedRect(ctx, nodeLeftX, nodeTop, totalKeyWidth, rectH, radius);
+          ctx.stroke();
+          
+          // Reset shadow before drawing divider lines to keep them sharp
+          ctx.shadowBlur = 0;
+          ctx.shadowOffsetX = 0;
+          ctx.shadowOffsetY = 0;
+          
+          // Draw divider lines between key groups (inner separators, no rounded corners)
+          currentKeyX = nodeLeft + padding;
+          keyTexts.forEach((_keyText, idx) => {
+            const keyW = keyWidths[idx];
+            if (idx < keyTexts.length - 1) {
+              ctx.beginPath();
+              ctx.moveTo(currentKeyX + keyW, nodeTop);
+              ctx.lineTo(currentKeyX + keyW, nodeBottom);
+              ctx.strokeStyle = isLeaf ? colors.leafStroke : colors.internalStroke;
+              ctx.lineWidth = 1;
+              ctx.stroke();
+            }
+            currentKeyX += keyW;
+          });
         }
-
-        ctx.beginPath();
-        ctx.roundRect(pos.x - rectW/2, pos.y - rectH/2, rectW, rectH, 8);
-        ctx.fill();
-        ctx.stroke();
         
         // Reset shadow after drawing
         ctx.shadowBlur = 0;
         ctx.shadowOffsetX = 0;
         ctx.shadowOffsetY = 0;
 
-        // Text
+        // Draw key text in each group
         ctx.fillStyle = colors.textPrimary;
         ctx.textAlign = 'center';
         ctx.textBaseline = 'middle';
-        ctx.fillText(keys, pos.x, pos.y);
+        currentKeyX = nodeLeft + padding;
+        keyTexts.forEach((keyText, idx) => {
+          const keyW = keyWidths[idx];
+          ctx.fillText(keyText, currentKeyX + keyW / 2, pos.y);
+          currentKeyX += keyW;
+        });
 
         // Page ID
         ctx.fillStyle = colors.textSecondary;
         ctx.font = '10px sans-serif';
-        ctx.fillText(`P${pos.id}`, pos.x - rectW/2 + 15, pos.y - rectH/2 - 8);
+        ctx.fillText(`P${pos.id}`, nodeLeft + 15, pos.y - rectH/2 - 8);
       });
 
       ctx.restore();
@@ -495,12 +681,27 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       attributeFilter: ['class']
     });
 
-    animationFrame = requestAnimationFrame(render);
+    if (!isEmptyTree) {
+      animationFrame = requestAnimationFrame(render);
+    }
     return () => {
       cancelAnimationFrame(animationFrame);
       if (themeObserver) themeObserver.disconnect();
     };
-  }, [layout, camera, treeData, highlightedIds, highlightColor]);
+  }, [layout, camera, treeData, highlightedIds, highlightColor, isEmptyTree, hoveredEdge, tooltipPosition, highlightedNodeId, highlightedKey]);
+
+  // Handle step completion callback after animation duration
+  useEffect(() => {
+    if (highlightedNodeId !== null && onStepComplete) {
+      // Convert animation speed (0-100) to delay in ms
+      // Speed 0 = 2000ms, Speed 100 = 200ms
+      const delay = Math.max(200, 2000 - (animationSpeed * 18));
+      const timeoutId = setTimeout(() => {
+        onStepComplete();
+      }, delay);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [highlightedNodeId, highlightedKey, onStepComplete, animationSpeed]);
 
   // Helper to find node at canvas coordinates
   const findNodeAtPosition = (clientX: number, clientY: number): number | null => {
@@ -518,13 +719,20 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     for (const [nodeId, pos] of positionsRef.current) {
       const nodeData = treeData.nodes[nodeId.toString()];
       if (!nodeData) continue;
+      if (!nodeData.keys || !Array.isArray(nodeData.keys) || nodeData.keys.length === 0) continue;
 
-      const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-        if (k.values.length === 1) {
-          return String(k.values[0].value);
-        }
-        return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).join(' | ');
+      const keys = nodeData.keys
+        .map((k: { values?: Array<{ type: string; value: any }> }) => {
+          if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
+          if (k.values.length === 1) {
+            return String(k.values[0].value);
+          }
+          return `(${k.values.map(v => String(v.value)).join(', ')})`;
+        })
+        .filter(Boolean)
+        .join(' | ');
+      
+      if (!keys || keys.length === 0) continue;
 
       const tempCtx = document.createElement('canvas').getContext('2d');
       if (!tempCtx) continue;
@@ -546,6 +754,136 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     return null;
   };
 
+  // Helper to find edge at canvas coordinates
+  const findEdgeAtPosition = (clientX: number, clientY: number): { parentId: number; childIndex: number; tooltipText: string } | null => {
+    if (!containerRef.current || !canvasRef.current) return null;
+
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = clientX - rect.left;
+    const y = clientY - rect.top;
+
+    // Transform to tree coordinates
+    const treeX = (x - containerRef.current.clientWidth / 2 - camera.x) / camera.zoom;
+    const treeY = (y - 100 - camera.y) / camera.zoom;
+
+    // Build parent-children map
+    const parentChildrenMap = new Map<number, number[]>();
+    layout.forEach(node => {
+      if (node.parentId !== null) {
+        if (!parentChildrenMap.has(node.parentId)) {
+          parentChildrenMap.set(node.parentId, []);
+        }
+        parentChildrenMap.get(node.parentId)!.push(node.id);
+      }
+    });
+
+    // Check each edge
+    const EDGE_HOVER_THRESHOLD = 8; // pixels
+
+    for (const node of layout) {
+      if (!node.parentId) continue;
+      
+      const pos = positionsRef.current.get(node.id);
+      const parentPos = positionsRef.current.get(node.parentId);
+      if (!pos || !parentPos) continue;
+
+      const parentNodeData = treeData.nodes[node.parentId.toString()];
+      if (!parentNodeData || parentNodeData.type !== 'internal') continue;
+
+      const parentChildren = parentChildrenMap.get(node.parentId) || [];
+      const childIndex = parentChildren.indexOf(node.id);
+      if (childIndex === -1) continue;
+
+      if (!parentNodeData.keys || !Array.isArray(parentNodeData.keys)) continue;
+
+      // Calculate anchor point (same logic as rendering)
+      const numKeys = parentNodeData.keys.length;
+      const numChildren = parentChildren.length;
+
+      // Create temporary context for measurements
+      const tempCanvas = document.createElement('canvas');
+      const tempCtx = tempCanvas.getContext('2d');
+      if (!tempCtx) continue;
+      tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
+
+      const keyTexts = parentNodeData.keys.map((key: { values: Array<{ type: string; value: any }> }) => {
+        if (key.values.length === 1) {
+          return String(key.values[0].value);
+        }
+        return `(${key.values.map(v => String(v.value)).join(', ')})`;
+      });
+
+      const keyWidths = keyTexts.map((keyText: string) => Math.max(60, tempCtx.measureText(keyText).width + 20));
+      const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+      const nodeWidth = Math.max(100, totalKeyWidth);
+      const nodeLeft = parentPos.x - nodeWidth / 2;
+      const padding = (nodeWidth - totalKeyWidth) / 2;
+      const contentStartX = nodeLeft + padding;
+
+      let anchorX: number;
+      if (numKeys === 0) {
+        const childSpacing = nodeWidth / (numChildren + 1);
+        anchorX = nodeLeft + childSpacing * (childIndex + 1);
+      } else if (numKeys === 1) {
+        const keyW = keyWidths[0];
+        const keyLeft = contentStartX;
+        const keyRight = keyLeft + keyW;
+        anchorX = childIndex === 0 ? keyLeft : keyRight;
+      } else {
+        const dividerPositions: number[] = [];
+        let currentX = contentStartX;
+        keyWidths.forEach((keyWidth, idx) => {
+          currentX += keyWidth;
+          if (idx < numKeys - 1) {
+            dividerPositions.push(currentX);
+          }
+        });
+
+        if (childIndex === 0) {
+          anchorX = contentStartX;
+        } else if (childIndex === numChildren - 1) {
+          anchorX = contentStartX + totalKeyWidth;
+        } else {
+          const dividerIdx = childIndex - 1;
+          anchorX = dividerIdx < dividerPositions.length ? dividerPositions[dividerIdx] : nodeLeft + nodeWidth - padding / 2;
+        }
+      }
+
+      // Check if point is near the bezier curve
+      // Sample points along the curve and check distance
+      const startX = anchorX;
+      const startY = parentPos.y + 25;
+      const endX = pos.x;
+      const endY = pos.y - 25;
+      const control1X = anchorX;
+      const control1Y = parentPos.y + 70;
+      const control2X = pos.x;
+      const control2Y = pos.y - 70;
+
+      // Sample points along the bezier curve
+      for (let t = 0; t <= 1; t += 0.05) {
+        const bezierX = 
+          Math.pow(1 - t, 3) * startX +
+          3 * Math.pow(1 - t, 2) * t * control1X +
+          3 * (1 - t) * Math.pow(t, 2) * control2X +
+          Math.pow(t, 3) * endX;
+        const bezierY = 
+          Math.pow(1 - t, 3) * startY +
+          3 * Math.pow(1 - t, 2) * t * control1Y +
+          3 * (1 - t) * Math.pow(t, 2) * control2Y +
+          Math.pow(t, 3) * endY;
+
+        const distance = Math.sqrt(Math.pow(treeX - bezierX, 2) + Math.pow(treeY - bezierY, 2));
+        if (distance < EDGE_HOVER_THRESHOLD) {
+          const tooltipText = generateEdgeTooltipText(parentNodeData.keys, childIndex, numChildren);
+          return { parentId: node.parentId, childIndex, tooltipText };
+        }
+      }
+    }
+
+    return null;
+  };
+
   // Interaction Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
     const clickedNodeId = findNodeAtPosition(e.clientX, e.clientY);
@@ -554,12 +892,16 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       if (node) {
         setSelectedNode(node);
         setDialogOpen(true);
+        setHoveredEdge(null);
+        setTooltipPosition(null);
         return;
       }
     }
     
     isDragging.current = true;
     lastMouse.current = { x: e.clientX, y: e.clientY };
+    setHoveredEdge(null);
+    setTooltipPosition(null);
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
@@ -576,6 +918,33 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       if (containerRef.current) {
         containerRef.current.style.cursor = hoveredNodeId !== null ? 'pointer' : (isDragging.current ? 'grabbing' : 'grab');
         containerRef.current.style.transition = 'cursor 0.2s ease';
+      }
+    }
+
+    // Check for edge hover (only if not dragging and not hovering over a node)
+    if (!isDragging.current && hoveredNodeId === null) {
+      const edge = findEdgeAtPosition(e.clientX, e.clientY);
+      if (edge && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        setHoveredEdge(edge);
+        setTooltipPosition({ 
+          x: e.clientX - rect.left, 
+          y: e.clientY - rect.top 
+        });
+        containerRef.current.style.cursor = 'help';
+      } else {
+        if (hoveredEdge) {
+          setHoveredEdge(null);
+          setTooltipPosition(null);
+        }
+        if (containerRef.current && hoveredNodeId === null) {
+          containerRef.current.style.cursor = isDragging.current ? 'grabbing' : 'grab';
+        }
+      }
+    } else {
+      if (hoveredEdge) {
+        setHoveredEdge(null);
+        setTooltipPosition(null);
       }
     }
 
@@ -655,15 +1024,17 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   // Helper to calculate bounding box
   const calculateBoundingBox = () => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    layout.forEach(node => {
-      const pos = positionsRef.current.get(node.id);
-      if (pos) {
-        const nodeData = treeData.nodes[node.id.toString()];
-        if (nodeData) {
-          const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-            if (k.values.length === 1) {
-              return String(k.values[0].value);
-            }
+      layout.forEach(node => {
+        const pos = positionsRef.current.get(node.id);
+        if (pos) {
+          const nodeData = treeData.nodes[node.id.toString()];
+          if (nodeData && nodeData.keys && Array.isArray(nodeData.keys) && nodeData.keys.length > 0) {
+            const keys = nodeData.keys
+              .map((k: { values?: Array<{ type: string; value: any }> }) => {
+                if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
+                if (k.values.length === 1) {
+                  return String(k.values[0].value);
+                }
             return `(${k.values.map(v => String(v.value)).join(', ')})`;
           }).join(' | ');
           const tempCtx = document.createElement('canvas').getContext('2d');
@@ -800,66 +1171,74 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         return;
       }
       
+      if (!parentNodeData.keys || !Array.isArray(parentNodeData.keys)) return;
       const numKeys = parentNodeData.keys.length;
       const numChildren = parentChildren.length;
       
-      const keys = parentNodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-        if (k.values.length === 1) {
-          return String(k.values[0].value);
-        }
-        return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).join(' | ');
-      
+      // Calculate node width using key groups (same as rendering)
       ctx.font = 'bold 14px "JetBrains Mono", monospace';
-      const nodeWidth = Math.max(100, ctx.measureText(keys).width + 40);
+      
+      // Prepare key texts for width calculation
+      const keyTexts = parentNodeData.keys.map((key: { values: Array<{ type: string; value: any }> }) => {
+        if (key.values.length === 1) {
+          return String(key.values[0].value);
+        }
+        return `(${key.values.map(v => String(v.value)).join(', ')})`;
+      });
+      
+      const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
+      const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+      const nodeWidth = Math.max(100, totalKeyWidth);
       const nodeLeft = parentPos.x - nodeWidth / 2;
       const nodeRight = parentPos.x + nodeWidth / 2;
-      const padding = 20;
+      // Use same padding calculation as node rendering: center keys in node
+      const padding = (nodeWidth - totalKeyWidth) / 2;
+      const contentStartX = nodeLeft + padding;
       
+      // Calculate anchor points: left edge, dividers, right edge
       let anchorX: number;
       if (numKeys === 0) {
-        anchorX = parentPos.x;
+        // No keys: distribute children evenly across parent width
+        const childSpacing = nodeWidth / (numChildren + 1);
+        anchorX = nodeLeft + childSpacing * (childIndex + 1);
       } else if (numKeys === 1) {
+        // Single key: two anchor points (left and right edges of key group)
+        const keyW = keyWidths[0];
+        const keyLeft = contentStartX;
+        const keyRight = keyLeft + keyW;
         if (childIndex === 0) {
-          anchorX = nodeLeft + padding / 2;
+          anchorX = keyLeft; // Left edge of key group
         } else {
-          anchorX = nodeRight - padding / 2;
+          anchorX = keyRight; // Right edge of key group
         }
       } else {
-        const keyWidths: number[] = [];
-        parentNodeData.keys.forEach((key: { values: Array<{ type: string; value: any }> }) => {
-          const keyText = key.values.length === 1 
-            ? String(key.values[0].value)
-            : `(${key.values.map(v => String(v.value)).join(', ')})`;
-          const keyWidth = ctx.measureText(keyText).width;
-          keyWidths.push(keyWidth);
-        });
-        
-        const separatorWidth = ctx.measureText(' | ').width;
-        const totalKeyWidth = keyWidths.reduce((sum, w) => sum + w, 0);
-        const totalSeparatorWidth = separatorWidth * (numKeys - 1);
-        const totalContentWidth = totalKeyWidth + totalSeparatorWidth;
-        const contentStartX = nodeLeft + padding;
-        
+        // Multiple keys: calculate positions based on key group boundaries
+        // Calculate divider positions (edges between key groups)
+        const dividerPositions: number[] = [];
         let currentX = contentStartX;
-        const keyPositions: number[] = [];
         keyWidths.forEach((keyWidth, idx) => {
-          keyPositions.push(currentX + keyWidth / 2);
-          currentX += keyWidth;
+          currentX += keyWidth; // Move past the key group
           if (idx < numKeys - 1) {
-            currentX += separatorWidth;
+            // Divider is at the right edge of this key group
+            dividerPositions.push(currentX);
           }
         });
         
+        // Calculate anchor points: left edge, at dividers, right edge
         if (childIndex === 0) {
+          // Leftmost child: left edge of first key group
           anchorX = contentStartX;
         } else if (childIndex === numChildren - 1) {
-          anchorX = contentStartX + totalContentWidth;
+          // Rightmost child: right edge of last key group
+          anchorX = contentStartX + totalKeyWidth;
         } else {
-          const keyIdx = childIndex - 1;
-          if (keyIdx < numKeys - 1) {
-            anchorX = (keyPositions[keyIdx] + keyPositions[keyIdx + 1]) / 2;
+          // Middle children: at divider positions
+          const dividerIdx = childIndex - 1;
+          if (dividerIdx < dividerPositions.length) {
+            // Use exact divider position (edge between key groups)
+            anchorX = dividerPositions[dividerIdx];
           } else {
+            // Fallback
             anchorX = nodeRight - padding / 2;
           }
         }
@@ -875,36 +1254,83 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     positionsRef.current.forEach(pos => {
       const nodeData = treeData.nodes[pos.id.toString()];
       if (!nodeData) return;
+      if (!nodeData.keys || !Array.isArray(nodeData.keys) || nodeData.keys.length === 0) return;
 
       const isLeaf = nodeData.type === 'leaf';
-      const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
+      
+      // Prepare keys - format each key individually
+      ctx.font = 'bold 14px "JetBrains Mono", monospace';
+      const keyTexts = nodeData.keys.map((k: { values?: Array<{ type: string; value: any }> }) => {
+        if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
         if (k.values.length === 1) {
           return String(k.values[0].value);
         }
         return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).join(' | ');
+      }).filter(Boolean);
+      if (keyTexts.length === 0) return;
 
-      ctx.font = 'bold 14px "JetBrains Mono", monospace';
-      const rectW = Math.max(100, ctx.measureText(keys).width + 40);
+      // Calculate width for each key group
+      const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
+      const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+      const rectW = Math.max(100, totalKeyWidth);
       const rectH = 50;
+      const padding = (rectW - totalKeyWidth) / 2; // Center keys in node
+
+      const nodeLeft = pos.x - rectW / 2;
+      let currentKeyX = nodeLeft + padding;
 
       ctx.fillStyle = isLeaf ? colors.leafFill : colors.internalFill;
       ctx.strokeStyle = isLeaf ? colors.leafStroke : colors.internalStroke;
       ctx.lineWidth = 1.5;
 
-      ctx.beginPath();
-      ctx.roundRect(pos.x - rectW/2, pos.y - rectH/2, rectW, rectH, 8);
-      ctx.fill();
-      ctx.stroke();
+      // Draw each key group as connected rectangles (button group style)
+      keyTexts.forEach((_keyText, idx) => {
+        const keyW = keyWidths[idx];
+        const isFirst = idx === 0;
+        const isLast = idx === keyTexts.length - 1;
+        const radius = 6;
+        
+        // Only round corners on first and last key groups
+        if (isFirst && isLast) {
+          drawRoundedRect(ctx, currentKeyX, pos.y - rectH/2, keyW, rectH, radius);
+        } else if (isFirst) {
+          drawRoundedRect(ctx, currentKeyX, pos.y - rectH/2, keyW, rectH, radius, { topLeft: true, bottomLeft: true });
+        } else if (isLast) {
+          drawRoundedRect(ctx, currentKeyX, pos.y - rectH/2, keyW, rectH, radius, { topRight: true, bottomRight: true });
+        } else {
+          drawRoundedRect(ctx, currentKeyX, pos.y - rectH/2, keyW, rectH, 0);
+        }
+        
+        ctx.fill();
+        ctx.stroke();
+        
+        // Draw divider line between key groups (except after last)
+        if (!isLast) {
+          ctx.beginPath();
+          ctx.moveTo(currentKeyX + keyW, pos.y - rectH/2);
+          ctx.lineTo(currentKeyX + keyW, pos.y + rectH/2);
+          ctx.strokeStyle = isLeaf ? colors.leafStroke : colors.internalStroke;
+          ctx.lineWidth = 1;
+          ctx.stroke();
+        }
+        
+        currentKeyX += keyW;
+      });
 
+      // Draw key text in each group
       ctx.fillStyle = colors.textPrimary;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillText(keys, pos.x, pos.y);
+      currentKeyX = nodeLeft + padding;
+      keyTexts.forEach((keyText, idx) => {
+        const keyW = keyWidths[idx];
+        ctx.fillText(keyText, currentKeyX + keyW / 2, pos.y);
+        currentKeyX += keyW;
+      });
 
       ctx.fillStyle = colors.textSecondary;
       ctx.font = '10px sans-serif';
-      ctx.fillText(`P${pos.id}`, pos.x - rectW/2 + 15, pos.y - rectH/2 - 8);
+      ctx.fillText(`P${pos.id}`, nodeLeft + 15, pos.y - rectH/2 - 8);
     });
 
     ctx.restore();
@@ -998,29 +1424,74 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       
       // Calculate anchor point (simplified for SVG)
       const numKeys = parentNodeData.keys.length;
-      const keys = parentNodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-        if (k.values.length === 1) {
-          return String(k.values[0].value);
-        }
-        return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).join(' | ');
-      
+      // Calculate node width using key groups (same as rendering)
       const tempCtx = document.createElement('canvas').getContext('2d');
       if (!tempCtx) return;
       tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
-      const nodeWidth = Math.max(100, tempCtx.measureText(keys).width + 40);
+      
+      // Prepare key texts for width calculation
+      const keyTexts = parentNodeData.keys.map((key: { values: Array<{ type: string; value: any }> }) => {
+        if (key.values.length === 1) {
+          return String(key.values[0].value);
+        }
+        return `(${key.values.map(v => String(v.value)).join(', ')})`;
+      });
+      
+      const keyWidths = keyTexts.map((keyText: string) => Math.max(60, tempCtx.measureText(keyText).width + 20));
+      const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+      const nodeWidth = Math.max(100, totalKeyWidth);
       const nodeLeft = parentPos.x - nodeWidth / 2;
       const nodeRight = parentPos.x + nodeWidth / 2;
-      const nodePadding = 20;
+      // Use same padding calculation as node rendering: center keys in node
+      const nodePadding = (nodeWidth - totalKeyWidth) / 2;
+      const contentStartX = nodeLeft + nodePadding;
       
-      let anchorX = parentPos.x;
-      if (numKeys > 0) {
+      // Calculate anchor points: left edge, dividers, right edge
+      let anchorX: number;
+      if (numKeys === 0) {
+        // No keys: distribute children evenly across parent width
+        const childSpacing = nodeWidth / (parentChildren.length + 1);
+        anchorX = nodeLeft + childSpacing * (childIndex + 1);
+      } else if (numKeys === 1) {
+        // Single key: two anchor points (left and right edges of key group)
+        const keyW = keyWidths[0];
+        const keyLeft = contentStartX;
+        const keyRight = keyLeft + keyW;
         if (childIndex === 0) {
-          anchorX = nodeLeft + nodePadding / 2;
-        } else if (childIndex === parentChildren.length - 1) {
-          anchorX = nodeRight - nodePadding / 2;
+          anchorX = keyLeft; // Left edge of key group
         } else {
-          anchorX = parentPos.x;
+          anchorX = keyRight; // Right edge of key group
+        }
+      } else {
+        // Multiple keys: calculate positions based on key group boundaries
+        // Calculate divider positions (edges between key groups)
+        const dividerPositions: number[] = [];
+        let currentX = contentStartX;
+        keyWidths.forEach((keyWidth, idx) => {
+          currentX += keyWidth; // Move past the key group
+          if (idx < numKeys - 1) {
+            // Divider is at the right edge of this key group
+            dividerPositions.push(currentX);
+          }
+        });
+        
+        // Calculate anchor points: left edge, at dividers, right edge
+        if (childIndex === 0) {
+          // Leftmost child: left edge of first key group
+          anchorX = contentStartX;
+        } else if (childIndex === parentChildren.length - 1) {
+          // Rightmost child: right edge of last key group
+          anchorX = contentStartX + totalKeyWidth;
+        } else {
+          // Middle children: at divider positions
+          const dividerIdx = childIndex - 1;
+          if (dividerIdx < dividerPositions.length) {
+            // Use exact divider position (edge between key groups)
+            anchorX = dividerPositions[dividerIdx];
+          } else {
+            // Fallback
+            anchorX = nodeRight - nodePadding / 2;
+          }
         }
       }
       
@@ -1047,14 +1518,26 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       
       const tempCtx = document.createElement('canvas').getContext('2d');
       if (!tempCtx) return;
-      const keys1 = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-        if (k.values.length === 1) return String(k.values[0].value);
-        return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).join(' | ');
-      const keys2 = nextNodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-        if (k.values.length === 1) return String(k.values[0].value);
-        return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).join(' | ');
+      if (!nodeData.keys || !Array.isArray(nodeData.keys) || nodeData.keys.length === 0) return;
+      if (!nextNodeData.keys || !Array.isArray(nextNodeData.keys) || nextNodeData.keys.length === 0) return;
+      
+      const keys1 = nodeData.keys
+        .map((k: { values?: Array<{ type: string; value: any }> }) => {
+          if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
+          if (k.values.length === 1) return String(k.values[0].value);
+          return `(${k.values.map(v => String(v.value)).join(', ')})`;
+        })
+        .filter(Boolean)
+        .join(' | ');
+      const keys2 = nextNodeData.keys
+        .map((k: { values?: Array<{ type: string; value: any }> }) => {
+          if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
+          if (k.values.length === 1) return String(k.values[0].value);
+          return `(${k.values.map(v => String(v.value)).join(', ')})`;
+        })
+        .filter(Boolean)
+        .join(' | ');
+      if (!keys1 || keys1.length === 0 || !keys2 || keys2.length === 0) return;
       
       tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
       const nodeWidth1 = Math.max(100, tempCtx.measureText(keys1).width + 40);
@@ -1072,28 +1555,88 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     positionsRef.current.forEach(pos => {
       const nodeData = treeData.nodes[pos.id.toString()];
       if (!nodeData) return;
+      if (!nodeData.keys || !Array.isArray(nodeData.keys) || nodeData.keys.length === 0) return;
 
       const isLeaf = nodeData.type === 'leaf';
-      const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
+      
+      // Prepare keys - format each key individually
+      const keyTexts = nodeData.keys.map((k: { values?: Array<{ type: string; value: any }> }) => {
+        if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
         if (k.values.length === 1) {
           return String(k.values[0].value);
         }
         return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).join(' | ');
+      }).filter(Boolean);
+      if (keyTexts.length === 0) return;
 
       const tempCtx = document.createElement('canvas').getContext('2d');
       if (!tempCtx) return;
       tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
-      const rectW = Math.max(100, tempCtx.measureText(keys).width + 40);
+      
+      // Calculate width for each key group
+      const keyWidths = keyTexts.map((keyText: string) => Math.max(60, tempCtx.measureText(keyText).width + 20));
+      const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+      const rectW = Math.max(100, totalKeyWidth);
       const rectH = 50;
+      const nodePadding = (rectW - totalKeyWidth) / 2; // Center keys in node
 
-      const x = padding - minX + pos.x;
-      const y = padding - minY + pos.y;
-      const rx = 8;
+      const nodeX = padding - minX + pos.x;
+      const nodeY = padding - minY + pos.y;
+      const nodeLeft = nodeX - rectW / 2;
+      let currentKeyX = nodeLeft + nodePadding;
+      const rx = 6;
 
-      svg += `<rect x="${x - rectW/2}" y="${y - rectH/2}" width="${rectW}" height="${rectH}" rx="${rx}" fill="${isLeaf ? colors.leafFill : colors.internalFill}" stroke="${isLeaf ? colors.leafStroke : colors.internalStroke}" stroke-width="1.5"/>`;
-      svg += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-family="JetBrains Mono, monospace" font-size="14" font-weight="bold" fill="${colors.textPrimary}">${keys.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</text>`;
-      svg += `<text x="${x - rectW/2 + 15}" y="${y - rectH/2 - 8}" font-family="sans-serif" font-size="10" fill="${colors.textSecondary}">P${pos.id}</text>`;
+      // Draw each key group as connected rectangles (button group style)
+      keyTexts.forEach((keyText, idx) => {
+        const keyW = keyWidths[idx];
+        const keyX = currentKeyX;
+        const isFirst = idx === 0;
+        const isLast = idx === keyTexts.length - 1;
+        const escapedKeyText = keyText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        
+        // Only round corners on first and last key groups
+        let rxLeft = 0, rxRight = 0;
+        if (isFirst && isLast) {
+          rxLeft = rx;
+          rxRight = rx;
+        } else if (isFirst) {
+          rxLeft = rx;
+        } else if (isLast) {
+          rxRight = rx;
+        }
+        
+        // Create path for rounded rectangle with selective corners
+        const yTop = nodeY - rectH/2;
+        const yBottom = nodeY + rectH/2;
+        let path = '';
+        
+        if (rxLeft > 0 && rxRight > 0) {
+          // All corners rounded
+          path = `M ${keyX + rxLeft} ${yTop} L ${keyX + keyW - rxRight} ${yTop} Q ${keyX + keyW} ${yTop} ${keyX + keyW} ${yTop + rxRight} L ${keyX + keyW} ${yBottom - rxRight} Q ${keyX + keyW} ${yBottom} ${keyX + keyW - rxRight} ${yBottom} L ${keyX + rxLeft} ${yBottom} Q ${keyX} ${yBottom} ${keyX} ${yBottom - rxLeft} L ${keyX} ${yTop + rxLeft} Q ${keyX} ${yTop} ${keyX + rxLeft} ${yTop} Z`;
+        } else if (rxLeft > 0) {
+          // Only left corners rounded
+          path = `M ${keyX + rxLeft} ${yTop} L ${keyX + keyW} ${yTop} L ${keyX + keyW} ${yBottom} L ${keyX + rxLeft} ${yBottom} Q ${keyX} ${yBottom} ${keyX} ${yBottom - rxLeft} L ${keyX} ${yTop + rxLeft} Q ${keyX} ${yTop} ${keyX + rxLeft} ${yTop} Z`;
+        } else if (rxRight > 0) {
+          // Only right corners rounded
+          path = `M ${keyX} ${yTop} L ${keyX + keyW - rxRight} ${yTop} Q ${keyX + keyW} ${yTop} ${keyX + keyW} ${yTop + rxRight} L ${keyX + keyW} ${yBottom - rxRight} Q ${keyX + keyW} ${yBottom} ${keyX + keyW - rxRight} ${yBottom} L ${keyX} ${yBottom} Z`;
+        } else {
+          // No rounded corners
+          path = `M ${keyX} ${yTop} L ${keyX + keyW} ${yTop} L ${keyX + keyW} ${yBottom} L ${keyX} ${yBottom} Z`;
+        }
+        
+        svg += `<path d="${path}" fill="${isLeaf ? colors.leafFill : colors.internalFill}" stroke="${isLeaf ? colors.leafStroke : colors.internalStroke}" stroke-width="1.5"/>`;
+        svg += `<text x="${keyX + keyW/2}" y="${nodeY}" text-anchor="middle" dominant-baseline="middle" font-family="JetBrains Mono, monospace" font-size="14" font-weight="bold" fill="${colors.textPrimary}">${escapedKeyText}</text>`;
+        
+        // Draw divider line between key groups (except after last)
+        if (!isLast) {
+          svg += `<line x1="${keyX + keyW}" y1="${yTop}" x2="${keyX + keyW}" y2="${yBottom}" stroke="${isLeaf ? colors.leafStroke : colors.internalStroke}" stroke-width="1"/>`;
+        }
+        
+        currentKeyX += keyW;
+      });
+
+      // Page ID
+      svg += `<text x="${nodeLeft + 15}" y="${nodeY - rectH/2 - 8}" font-family="sans-serif" font-size="10" fill="${colors.textSecondary}">P${pos.id}</text>`;
     });
 
     svg += '</svg>';
@@ -1130,17 +1673,55 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   }, [])
 
   return (
-    <div 
-      ref={containerRef} 
-      className="w-full h-full bg-background overflow-hidden cursor-grab active:cursor-grabbing relative"
-      onMouseDown={handleMouseDown}
-      onMouseMove={handleMouseMove}
-      onMouseUp={() => isDragging.current = false}
-      onMouseLeave={() => isDragging.current = false}
-      onWheel={handleWheel}
-      style={{ backgroundImage: `radial-gradient(${patternColor} 1px, transparent 1px)`, backgroundSize: '24px 24px' }}
-    >
-      <canvas ref={canvasRef} className="absolute inset-0" />
+    <TooltipProvider>
+      <div 
+        ref={containerRef} 
+        className="w-full h-full bg-background overflow-hidden cursor-grab active:cursor-grabbing relative"
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={() => isDragging.current = false}
+        onMouseLeave={() => {
+          isDragging.current = false;
+          setHoveredEdge(null);
+          setTooltipPosition(null);
+        }}
+        onWheel={handleWheel}
+        style={{ backgroundImage: `radial-gradient(${patternColor} 1px, transparent 1px)`, backgroundSize: '24px 24px' }}
+      >
+      {isEmptyTree ? (
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-center space-y-2 p-8">
+            <div className="text-lg font-semibold text-muted-foreground">Empty Tree</div>
+            <div className="text-sm text-muted-foreground">This tree has no nodes yet. Add some nodes to see the tree.</div>
+          </div>
+        </div>
+      ) : (
+        <>
+          <canvas ref={canvasRef} className="absolute inset-0" />
+          {/* Edge tooltip */}
+          {hoveredEdge && tooltipPosition && (
+            <Tooltip open={true}>
+              <TooltipTrigger asChild>
+                <div
+                  className="absolute pointer-events-none"
+                  style={{
+                    left: tooltipPosition.x,
+                    top: tooltipPosition.y,
+                    width: 1,
+                    height: 1,
+                  }}
+                />
+              </TooltipTrigger>
+              <TooltipContent
+                side="top"
+                className="font-mono text-xs"
+              >
+                {hoveredEdge.tooltipText}
+              </TooltipContent>
+            </Tooltip>
+          )}
+        </>
+      )}
       
       {/* Tree Configuration */}
       {config && (
@@ -1274,6 +1855,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           {Math.round(camera.zoom * 100)}%
         </div>
       </div>
-    </div>
+      </div>
+    </TooltipProvider>
   );
 };

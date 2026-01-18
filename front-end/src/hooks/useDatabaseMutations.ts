@@ -2,25 +2,23 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { useDatabaseStore } from '@/store/databaseStore'
+import type { CreateDatabaseInput } from '@/lib/validations'
 
 export function useCreateDatabase() {
   const queryClient = useQueryClient()
   const { addDatabase } = useDatabaseStore()
 
   return useMutation({
-    mutationFn: (name: string) =>
+    mutationFn: (data: CreateDatabaseInput) =>
       api.createDatabase({
-        name,
-        config: {
-          cacheSize: 100,
-          walEnabled: true,
-        },
+        name: data.name,
+        config: data.config,
       }),
-    onSuccess: (_, name) => {
+    onSuccess: (_, data) => {
       queryClient.invalidateQueries({ queryKey: ['databases'] })
-      addDatabase(name)
+      addDatabase(data.name)
       toast.success('Database created successfully', {
-        description: `${name} has been created.`,
+        description: `${data.name} has been created.`,
       })
     },
     onError: (error: Error) => {
@@ -54,14 +52,13 @@ export function useDeleteDatabase() {
 
 export function useClearAllDatabases() {
   const queryClient = useQueryClient()
+  const { clearDatabases } = useDatabaseStore()
 
   return useMutation({
-    mutationFn: async () => {
-      const allDbs = await api.listDatabases()
-      await Promise.all(allDbs.map((name) => api.dropDatabase(name)))
-    },
+    mutationFn: () => api.deleteAllDatabases(),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['databases'] })
+      clearDatabases()
       toast.success('All databases cleared', {
         description: 'All databases have been deleted.',
       })

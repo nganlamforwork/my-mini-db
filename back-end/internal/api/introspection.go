@@ -5,7 +5,6 @@ import (
 
 	"bplustree/internal/btree"
 	"bplustree/internal/page"
-	"bplustree/internal/storage"
 )
 
 // GetTreeStructure builds the full tree structure for visualization
@@ -49,8 +48,10 @@ func GetTreeStructure(tree *btree.BPlusTree) (*TreeStructure, error) {
 
 		switch p := pg.(type) {
 		case *page.InternalPage:
-			keys := make([]storage.CompositeKey, len(p.Keys))
-			copy(keys, p.Keys)
+			keys := make([]JSONCompositeKey, len(p.Keys))
+			for i, k := range p.Keys {
+				keys[i] = ToJSONCompositeKey(k)
+			}
 			children := make([]uint64, len(p.Children))
 			copy(children, p.Children)
 
@@ -69,10 +70,14 @@ func GetTreeStructure(tree *btree.BPlusTree) (*TreeStructure, error) {
 			}
 
 		case *page.LeafPage:
-			keys := make([]storage.CompositeKey, len(p.Keys))
-			copy(keys, p.Keys)
-			values := make([]storage.Record, len(p.Values))
-			copy(values, p.Values)
+			keys := make([]JSONCompositeKey, len(p.Keys))
+			for i, k := range p.Keys {
+				keys[i] = ToJSONCompositeKey(k)
+			}
+			values := make([]JSONRecord, len(p.Values))
+			for i, v := range p.Values {
+				values[i] = ToJSONRecord(v)
+			}
 
 			var nextPage *uint64
 			if p.Header.NextPage != 0 {

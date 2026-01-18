@@ -10,6 +10,7 @@ interface DatabaseStore {
   setDatabaseInfo: (name: string, info: DatabaseInfo) => void
   addDatabase: (name: string) => void
   removeDatabase: (name: string) => void
+  clearDatabases: () => void
 }
 
 export const useDatabaseStore = create<DatabaseStore>((set) => ({
@@ -35,5 +36,11 @@ export const useDatabaseStore = create<DatabaseStore>((set) => ({
         selectedDatabase:
           state.selectedDatabase === name ? null : state.selectedDatabase,
       }
+    }),
+  clearDatabases: () =>
+    set({
+      databases: [],
+      databaseInfo: {},
+      selectedDatabase: null,
     }),
 }))

@@ -11,7 +11,7 @@ interface OperationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   operation: 'insert' | 'search' | 'update' | 'delete' | 'range';
-  onSubmit: (key: { values: Array<{ type: ColumnType; value: any }> }, value?: { columns: Array<{ type: ColumnType; value: any }> }) => void;
+  onSubmit: (key: { values: Array<{ type: ColumnType; value: any }> }, value?: { columns: Array<{ type: ColumnType; value: any }> }, endKey?: { values: Array<{ type: ColumnType; value: any }> }) => void;
 }
 
 export const OperationDialog: React.FC<OperationDialogProps> = ({ open, onOpenChange, operation, onSubmit }) => {
@@ -27,8 +27,8 @@ export const OperationDialog: React.FC<OperationDialogProps> = ({ open, onOpenCh
     startKey: { values: Array<{ type: ColumnType; value: any }> },
     endKey: { values: Array<{ type: ColumnType; value: any }> }
   ) => {
-    // For range queries, submit start key as main key and end key as value structure
-    onSubmit(startKey, { columns: endKey.values });
+    // For range queries, pass startKey, undefined value, and endKey
+    onSubmit(startKey, undefined, endKey);
     onOpenChange(false);
   };
 

@@ -70,13 +70,13 @@ type DatabaseInfo struct {
 
 // TreeNode represents a node in the B+Tree for visualization
 type TreeNode struct {
-	PageID    uint64                  `json:"pageId"`
-	Type      string                  `json:"type"` // "internal" or "leaf"
-	Keys      []storage.CompositeKey  `json:"keys"`
-	Children  []uint64                `json:"children,omitempty"` // For internal nodes
-	Values    []storage.Record        `json:"values,omitempty"`   // For leaf nodes
-	NextPage  *uint64                 `json:"nextPage,omitempty"` // For leaf nodes
-	PrevPage  *uint64                 `json:"prevPage,omitempty"` // For leaf nodes
+	PageID    uint64            `json:"pageId"`
+	Type      string            `json:"type"` // "internal" or "leaf"
+	Keys      []JSONCompositeKey `json:"keys"`
+	Children  []uint64          `json:"children,omitempty"` // For internal nodes
+	Values    []JSONRecord      `json:"values,omitempty"`   // For leaf nodes
+	NextPage  *uint64           `json:"nextPage,omitempty"` // For leaf nodes
+	PrevPage  *uint64           `json:"prevPage,omitempty"` // For leaf nodes
 }
 
 // TreeStructure represents the full tree structure for visualization

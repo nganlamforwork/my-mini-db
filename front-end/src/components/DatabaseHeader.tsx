@@ -15,9 +15,10 @@ function getInitialTheme(): 'light' | 'dark' {
 
 interface DatabaseHeaderProps {
   databaseName: string
+  onBackClick?: () => void
 }
 
-export function DatabaseHeader({ databaseName }: DatabaseHeaderProps) {
+export function DatabaseHeader({ databaseName, onBackClick }: DatabaseHeaderProps) {
   const [theme, setTheme] = useState<'light' | 'dark'>(getInitialTheme)
   const navigate = useNavigate()
 
@@ -31,6 +32,14 @@ export function DatabaseHeader({ databaseName }: DatabaseHeaderProps) {
     localStorage.setItem('theme', theme)
   }, [theme])
 
+  const handleBackClick = () => {
+    if (onBackClick) {
+      onBackClick()
+    } else {
+      navigate('/')
+    }
+  }
+
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="flex h-14 items-center justify-between px-4">
@@ -38,7 +47,7 @@ export function DatabaseHeader({ databaseName }: DatabaseHeaderProps) {
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => navigate('/')}
+            onClick={handleBackClick}
             className="h-8 w-8"
           >
             <ArrowLeft className="h-4 w-4" />

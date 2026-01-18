@@ -84,6 +84,9 @@ export type StepType =
   | 'BORROW_FROM_LEFT'
   | 'BORROW_FROM_RIGHT'
   | 'WAL_APPEND'
+  | 'BUFFER_FLUSH'
+  | 'SEARCH_FOUND'
+  | 'SEARCH_NOT_FOUND'
   | 'PAGE_LOAD'
   | 'PAGE_FLUSH'
   | 'CACHE_HIT'
@@ -116,6 +119,19 @@ export interface OperationResponse {
   values?: Record[];
   steps: ExecutionStep[];
   error?: string;
+}
+
+// WAL Info
+export interface WALEntryInfo {
+  lsn: number;
+  type: string; // "insert", "update", "delete", "checkpoint"
+  pageId: number;
+}
+
+export interface WALInfo {
+  nextLSN: number;
+  entries?: WALEntryInfo[];
+  checkpoint?: number;
 }
 
 // Log Entry for system log
