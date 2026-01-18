@@ -73,10 +73,57 @@ export interface IOReadInfo {
   details: IOReadEntry[];
 }
 
+// Step types from API
+export type StepType = 
+  | 'TRAVERSE_NODE'
+  | 'INSERT_KEY'
+  | 'UPDATE_KEY'
+  | 'DELETE_KEY'
+  | 'SPLIT_NODE'
+  | 'MERGE_NODE'
+  | 'BORROW_FROM_LEFT'
+  | 'BORROW_FROM_RIGHT'
+  | 'WAL_APPEND'
+  | 'PAGE_LOAD'
+  | 'PAGE_FLUSH'
+  | 'CACHE_HIT'
+  | 'CACHE_MISS'
+  | 'EVICT_PAGE';
+
+// Execution Step from API
+export interface ExecutionStep {
+  type: StepType;
+  nodeId?: string;
+  keys?: CompositeKey[];
+  children?: number[];
+  highlightKey?: CompositeKey;
+  key?: CompositeKey;
+  value?: Record;
+  originalNode?: TreeNode;
+  newNode?: TreeNode;
+  separatorKey?: CompositeKey;
+  lsn?: number;
+  pageId?: number;
+}
+
+// Operation Response from API
+export interface OperationResponse {
+  success: boolean;
+  operation: 'INSERT' | 'UPDATE' | 'DELETE' | 'SEARCH' | 'RANGE_QUERY';
+  key?: CompositeKey;
+  value?: Record;
+  keys?: CompositeKey[];
+  values?: Record[];
+  steps: ExecutionStep[];
+  error?: string;
+}
+
 // Log Entry for system log
 export interface LogEntry {
   id: string;
   timestamp: Date;
   message: string;
   type: 'info' | 'success' | 'error' | 'warning';
+  steps?: ExecutionStep[]; // Steps from API operation
+  operation?: 'INSERT' | 'UPDATE' | 'DELETE' | 'SEARCH' | 'RANGE_QUERY';
 }

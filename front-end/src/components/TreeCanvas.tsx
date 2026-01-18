@@ -1,13 +1,25 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import type { TreeStructure, TreeNode } from '@/types/database';
-import { ZoomIn, ZoomOut, Download, RotateCcw, Info } from 'lucide-react';
+import { ZoomIn, ZoomOut, Download, RotateCcw, Info, FileImage, FileType, Image as ImageIcon } from 'lucide-react';
 import { Button } from './ui/button';
 import { NodeDetailDialog } from './NodeDetailDialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
 
 interface TreeCanvasProps {
   treeData: TreeStructure;
   highlightedIds?: number[];
   highlightColor?: string;
+  config?: {
+    order?: number;
+    pageSize?: number;
+    cacheSize?: number;
+    walEnabled?: boolean;
+  };
 }
 
 interface NodePosition {
@@ -22,7 +34,8 @@ interface NodePosition {
 export const TreeCanvas: React.FC<TreeCanvasProps> = ({ 
   treeData, 
   highlightedIds = [], 
-  highlightColor = '#3b82f6' 
+  highlightColor = '#3b82f6',
+  config
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -399,35 +412,51 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             ctx.lineWidth = 3;
             ctx.shadowBlur = 15;
             ctx.shadowColor = highlightColor;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
           } else if (isHovered) {
             ctx.strokeStyle = rootStroke;
-            ctx.lineWidth = 2;
-            ctx.shadowBlur = 0;
+            ctx.lineWidth = 3;
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = isDarkMode ? 'rgba(245, 158, 11, 0.6)' : 'rgba(217, 119, 6, 0.5)';
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 2;
           } else {
             ctx.strokeStyle = rootStroke;
             ctx.lineWidth = 2;
             ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
           }
         } else {
           // Node Body - use theme colors for non-root nodes
           ctx.fillStyle = isLeaf ? colors.leafFill : colors.internalFill;
           
-          // Very subtle hover effect - minimal contrast
           if (isHighlighted) {
             ctx.strokeStyle = highlightColor;
             ctx.lineWidth = 3;
             ctx.shadowBlur = 15;
             ctx.shadowColor = highlightColor;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
           } else if (isHovered) {
-            // Minimal hover effect - just slightly brighter stroke
+            // Enhanced hover effect with more contrast
+            const isDarkMode = document.documentElement.classList.contains('dark');
             const baseStroke = isLeaf ? colors.leafStroke : colors.internalStroke;
             ctx.strokeStyle = baseStroke;
-            ctx.lineWidth = 1.8; // Very slight increase from 1.5
-            ctx.shadowBlur = 0; // No shadow for subtlety
+            ctx.lineWidth = 3; // Thicker border
+            ctx.shadowBlur = 12; // Bigger shadow
+            ctx.shadowColor = isLeaf 
+              ? (isDarkMode ? 'rgba(16, 185, 129, 0.6)' : 'rgba(5, 150, 105, 0.5)') 
+              : (isDarkMode ? 'rgba(100, 116, 139, 0.6)' : 'rgba(71, 85, 105, 0.5)');
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 2; // Slight shadow offset for depth
           } else {
             ctx.strokeStyle = isLeaf ? colors.leafStroke : colors.internalStroke;
             ctx.lineWidth = 1.5;
             ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
           }
         }
 
@@ -435,7 +464,11 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         ctx.roundRect(pos.x - rectW/2, pos.y - rectH/2, rectW, rectH, 8);
         ctx.fill();
         ctx.stroke();
+        
+        // Reset shadow after drawing
         ctx.shadowBlur = 0;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0;
 
         // Text
         ctx.fillStyle = colors.textPrimary;
@@ -530,10 +563,14 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    // Update hover state with smooth transition
+    // Update hover state - triggers re-render for smooth visual transition
     const hoveredNodeId = findNodeAtPosition(e.clientX, e.clientY);
     if (hoveredNodeId !== hoveredNodeRef.current) {
       hoveredNodeRef.current = hoveredNodeId;
+      // Force re-render to show hover effect smoothly via requestAnimationFrame
+      if (canvasRef.current) {
+        // Re-render will happen automatically on next frame
+      }
       
       // Update cursor with transition
       if (containerRef.current) {
@@ -615,15 +652,12 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     setCamera({ x, y, zoom });
   };
 
-  const handleDownloadImage = () => {
-    if (layout.length === 0) return;
-
-    // Calculate bounding box of all nodes
+  // Helper to calculate bounding box
+  const calculateBoundingBox = () => {
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     layout.forEach(node => {
       const pos = positionsRef.current.get(node.id);
       if (pos) {
-        // Account for node size
         const nodeData = treeData.nodes[node.id.toString()];
         if (nodeData) {
           const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
@@ -645,25 +679,13 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         }
       }
     });
+    return { minX, maxX, minY, maxY };
+  };
 
-    // Add minimal padding
-    const padding = 40;
-    const treeWidth = maxX - minX + padding * 2;
-    const treeHeight = maxY - minY + padding * 2;
-
-    // Create canvas with calculated dimensions
-    const scale = 2; // 2x resolution for better quality
-    const tempCanvas = document.createElement('canvas');
-    const ctx = tempCanvas.getContext('2d');
-    if (!ctx) return;
-
-    tempCanvas.width = treeWidth * scale;
-    tempCanvas.height = treeHeight * scale;
-    ctx.scale(scale, scale);
-
-    // Get colors based on theme
+  // Helper to get colors
+  const getColors = () => {
     const isDark = document.documentElement.classList.contains('dark');
-    const colors = {
+    return {
       connectionLine: isDark ? '#475569' : '#94a3b8',
       internalFill: isDark ? '#1e293b' : '#f1f5f9',
       internalStroke: isDark ? '#64748b' : '#475569',
@@ -671,20 +693,29 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       leafStroke: isDark ? '#10b981' : '#059669',
       textPrimary: isDark ? '#f8fafc' : '#0f172a',
       textSecondary: isDark ? '#94a3b8' : '#64748b',
-      bgPattern: isDark ? '#1e293b' : '#e2e8f0'
+      bgPattern: isDark ? '#1e293b' : '#e2e8f0',
+      bg: isDark ? '#0f172a' : '#ffffff'
     };
+  };
 
-    // Background
-    ctx.fillStyle = isDark ? '#0f172a' : '#ffffff';
-    ctx.fillRect(0, 0, treeWidth, treeHeight);
+  // Helper to draw tree on canvas
+  const drawTreeOnCanvas = (ctx: CanvasRenderingContext2D, padding: number, minX: number, minY: number, withBackground: boolean) => {
+    const colors = getColors();
+    const isDark = document.documentElement.classList.contains('dark');
 
-    // Draw pattern
-    for (let x = 0; x < treeWidth; x += 24) {
-      for (let y = 0; y < treeHeight; y += 24) {
-        ctx.fillStyle = colors.bgPattern;
-        ctx.beginPath();
-        ctx.arc(x, y, 1, 0, Math.PI * 2);
-        ctx.fill();
+    if (withBackground) {
+      // Background
+      ctx.fillStyle = colors.bg;
+      ctx.fillRect(0, 0, ctx.canvas.width / 2, ctx.canvas.height / 2);
+
+      // Draw pattern
+      for (let x = 0; x < ctx.canvas.width / 2; x += 24) {
+        for (let y = 0; y < ctx.canvas.height / 2; y += 24) {
+          ctx.fillStyle = colors.bgPattern;
+          ctx.beginPath();
+          ctx.arc(x, y, 1, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
 
@@ -695,8 +726,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     // Draw Leaf Node Sibling Links (dashed green lines)
     ctx.save();
     ctx.lineWidth = 2;
-    ctx.strokeStyle = isDark ? '#10b981' : '#059669'; // green-500 or green-600
-    ctx.setLineDash([5, 5]); // Dashed line pattern
+    ctx.strokeStyle = isDark ? '#10b981' : '#059669';
+    ctx.setLineDash([5, 5]);
     
     const calculateNodeWidthForDownload = (nodeData: any): number => {
       if (!nodeData) return 100;
@@ -729,12 +760,11 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     });
     ctx.restore();
 
-    // Draw connections with key-aligned anchor points (same logic as main render)
+    // Draw connections with key-aligned anchor points
     ctx.lineWidth = 2;
     ctx.strokeStyle = colors.connectionLine;
-    ctx.setLineDash([]); // Solid lines for parent-child connections
+    ctx.setLineDash([]);
     
-    // Build a map of parent -> children for efficient lookup
     const parentChildrenMap = new Map<number, number[]>();
     layout.forEach(node => {
       if (node.parentId !== null) {
@@ -751,10 +781,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       const parentPos = positionsRef.current.get(node.parentId);
       if (!parentPos) return;
       
-      // Get parent node data to calculate key positions
       const parentNodeData = treeData.nodes[node.parentId.toString()];
       if (!parentNodeData || parentNodeData.type !== 'internal') {
-        // Fallback for non-internal or missing parent
         ctx.beginPath();
         ctx.moveTo(parentPos.x, parentPos.y + 25);
         ctx.bezierCurveTo(parentPos.x, parentPos.y + 70, pos.x, pos.y - 70, pos.x, pos.y - 25);
@@ -762,11 +790,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         return;
       }
       
-      // Find child index in parent's children array
       const parentChildren = parentChildrenMap.get(node.parentId) || [];
       const childIndex = parentChildren.indexOf(node.id);
       if (childIndex === -1) {
-        // Fallback if child not found
         ctx.beginPath();
         ctx.moveTo(parentPos.x, parentPos.y + 25);
         ctx.bezierCurveTo(parentPos.x, parentPos.y + 70, pos.x, pos.y - 70, pos.x, pos.y - 25);
@@ -774,7 +800,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         return;
       }
       
-      // Calculate anchor point (same logic as main render)
       const numKeys = parentNodeData.keys.length;
       const numChildren = parentChildren.length;
       
@@ -852,7 +877,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       if (!nodeData) return;
 
       const isLeaf = nodeData.type === 'leaf';
-      // Format composite keys - show all values in key as (val1, val2)
       const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
         if (k.values.length === 1) {
           return String(k.values[0].value);
@@ -884,19 +908,206 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     });
 
     ctx.restore();
+  };
+
+  const handleDownloadImage = (format: 'jpg' | 'png' | 'svg') => {
+    if (layout.length === 0) return;
+
+    const { minX, maxX, minY, maxY } = calculateBoundingBox();
+    const padding = 40;
+    const treeWidth = maxX - minX + padding * 2;
+    const treeHeight = maxY - minY + padding * 2;
+
+    if (format === 'svg') {
+      handleDownloadSVG(minX, minY, treeWidth, treeHeight, padding);
+      return;
+    }
+
+    // For JPG and PNG
+    const scale = 2;
+    const tempCanvas = document.createElement('canvas');
+    const ctx = tempCanvas.getContext('2d');
+    if (!ctx) return;
+
+    tempCanvas.width = treeWidth * scale;
+    tempCanvas.height = treeHeight * scale;
+    ctx.scale(scale, scale);
+
+    const withBackground = format === 'jpg';
+    
+    drawTreeOnCanvas(ctx, padding, minX, minY, withBackground);
 
     // Download
+    const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
+    const quality = format === 'jpg' ? 0.92 : undefined;
+    
     tempCanvas.toBlob((blob) => {
       if (!blob) return;
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `tree-visualization-${new Date().toISOString().slice(0, 10)}.png`;
+      a.download = `tree-visualization-${new Date().toISOString().slice(0, 10)}.${format}`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    }, mimeType, quality);
+  };
+
+  const handleDownloadSVG = (minX: number, minY: number, treeWidth: number, treeHeight: number, padding: number) => {
+    const colors = getColors();
+    const isDark = document.documentElement.classList.contains('dark');
+    
+    let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${treeWidth}" height="${treeHeight}" viewBox="0 0 ${treeWidth} ${treeHeight}">`;
+    
+    // Draw connections first (so they appear behind nodes)
+    const parentChildrenMap = new Map<number, number[]>();
+    layout.forEach(node => {
+      if (node.parentId !== null) {
+        if (!parentChildrenMap.has(node.parentId)) {
+          parentChildrenMap.set(node.parentId, []);
+        }
+        parentChildrenMap.get(node.parentId)!.push(node.id);
+      }
     });
+
+    // Draw parent-child connections
+    layout.forEach(node => {
+      const pos = positionsRef.current.get(node.id);
+      if (!pos || !node.parentId) return;
+      const parentPos = positionsRef.current.get(node.parentId);
+      if (!parentPos) return;
+      
+      const parentNodeData = treeData.nodes[node.parentId.toString()];
+      if (!parentNodeData || parentNodeData.type !== 'internal') {
+        const x1 = padding - minX + parentPos.x;
+        const y1 = padding - minY + parentPos.y + 25;
+        const x2 = padding - minX + pos.x;
+        const y2 = padding - minY + pos.y - 25;
+        const cx1 = x1;
+        const cy1 = y1 + 45;
+        const cx2 = x2;
+        const cy2 = y2 - 45;
+        svg += `<path d="M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}" stroke="${colors.connectionLine}" stroke-width="2" fill="none"/>`;
+        return;
+      }
+      
+      const parentChildren = parentChildrenMap.get(node.parentId) || [];
+      const childIndex = parentChildren.indexOf(node.id);
+      if (childIndex === -1) return;
+      
+      // Calculate anchor point (simplified for SVG)
+      const numKeys = parentNodeData.keys.length;
+      const keys = parentNodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
+        if (k.values.length === 1) {
+          return String(k.values[0].value);
+        }
+        return `(${k.values.map(v => String(v.value)).join(', ')})`;
+      }).join(' | ');
+      
+      const tempCtx = document.createElement('canvas').getContext('2d');
+      if (!tempCtx) return;
+      tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
+      const nodeWidth = Math.max(100, tempCtx.measureText(keys).width + 40);
+      const nodeLeft = parentPos.x - nodeWidth / 2;
+      const nodeRight = parentPos.x + nodeWidth / 2;
+      const nodePadding = 20;
+      
+      let anchorX = parentPos.x;
+      if (numKeys > 0) {
+        if (childIndex === 0) {
+          anchorX = nodeLeft + nodePadding / 2;
+        } else if (childIndex === parentChildren.length - 1) {
+          anchorX = nodeRight - nodePadding / 2;
+        } else {
+          anchorX = parentPos.x;
+        }
+      }
+      
+      const x1 = padding - minX + anchorX;
+      const y1 = padding - minY + parentPos.y + 25;
+      const x2 = padding - minX + pos.x;
+      const y2 = padding - minY + pos.y - 25;
+      const cx1 = x1;
+      const cy1 = y1 + 45;
+      const cx2 = x2;
+      const cy2 = y2 - 45;
+      svg += `<path d="M ${x1} ${y1} C ${cx1} ${cy1}, ${cx2} ${cy2}, ${x2} ${y2}" stroke="${colors.connectionLine}" stroke-width="2" fill="none"/>`;
+    });
+
+    // Draw leaf sibling links
+    layout.forEach(node => {
+      const nodeData = treeData.nodes[node.id.toString()];
+      if (!nodeData || nodeData.type !== 'leaf' || !nodeData.nextPage) return;
+      
+      const pos = positionsRef.current.get(node.id);
+      const nextNodeData = treeData.nodes[nodeData.nextPage.toString()];
+      const nextPos = positionsRef.current.get(nodeData.nextPage);
+      if (!pos || !nextPos || !nextNodeData) return;
+      
+      const tempCtx = document.createElement('canvas').getContext('2d');
+      if (!tempCtx) return;
+      const keys1 = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
+        if (k.values.length === 1) return String(k.values[0].value);
+        return `(${k.values.map(v => String(v.value)).join(', ')})`;
+      }).join(' | ');
+      const keys2 = nextNodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
+        if (k.values.length === 1) return String(k.values[0].value);
+        return `(${k.values.map(v => String(v.value)).join(', ')})`;
+      }).join(' | ');
+      
+      tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
+      const nodeWidth1 = Math.max(100, tempCtx.measureText(keys1).width + 40);
+      const nodeWidth2 = Math.max(100, tempCtx.measureText(keys2).width + 40);
+      
+      const x1 = padding - minX + pos.x + nodeWidth1 / 2;
+      const y1 = padding - minY + pos.y;
+      const x2 = padding - minX + nextPos.x - nodeWidth2 / 2;
+      const y2 = padding - minY + nextPos.y;
+      
+      svg += `<path d="M ${x1} ${y1} L ${x2} ${y2}" stroke="${isDark ? '#10b981' : '#059669'}" stroke-width="2" stroke-dasharray="5,5" fill="none"/>`;
+    });
+
+    // Draw nodes
+    positionsRef.current.forEach(pos => {
+      const nodeData = treeData.nodes[pos.id.toString()];
+      if (!nodeData) return;
+
+      const isLeaf = nodeData.type === 'leaf';
+      const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
+        if (k.values.length === 1) {
+          return String(k.values[0].value);
+        }
+        return `(${k.values.map(v => String(v.value)).join(', ')})`;
+      }).join(' | ');
+
+      const tempCtx = document.createElement('canvas').getContext('2d');
+      if (!tempCtx) return;
+      tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
+      const rectW = Math.max(100, tempCtx.measureText(keys).width + 40);
+      const rectH = 50;
+
+      const x = padding - minX + pos.x;
+      const y = padding - minY + pos.y;
+      const rx = 8;
+
+      svg += `<rect x="${x - rectW/2}" y="${y - rectH/2}" width="${rectW}" height="${rectH}" rx="${rx}" fill="${isLeaf ? colors.leafFill : colors.internalFill}" stroke="${isLeaf ? colors.leafStroke : colors.internalStroke}" stroke-width="1.5"/>`;
+      svg += `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" font-family="JetBrains Mono, monospace" font-size="14" font-weight="bold" fill="${colors.textPrimary}">${keys.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</text>`;
+      svg += `<text x="${x - rectW/2 + 15}" y="${y - rectH/2 - 8}" font-family="sans-serif" font-size="10" fill="${colors.textSecondary}">P${pos.id}</text>`;
+    });
+
+    svg += '</svg>';
+
+    // Download SVG
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tree-visualization-${new Date().toISOString().slice(0, 10)}.svg`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
   };
 
   // Get pattern color based on theme
@@ -931,6 +1142,49 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     >
       <canvas ref={canvasRef} className="absolute inset-0" />
       
+      {/* Tree Configuration */}
+      {config && (
+        <div className="absolute top-6 left-6 border border-border p-3 rounded-xl backdrop-blur-md pointer-events-none select-none bg-card/80 z-10">
+          <div className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest mb-2">Tree Configuration</div>
+          <div className="space-y-1.5 text-xs">
+            {config.order !== undefined && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Order:</span>
+                <span className="font-mono font-semibold text-foreground">{config.order}</span>
+              </div>
+            )}
+            {config.pageSize !== undefined && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Page Size:</span>
+                <span className="font-mono font-semibold text-foreground">{config.pageSize} bytes</span>
+              </div>
+            )}
+            {config.cacheSize !== undefined && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">Cache Size:</span>
+                <span className="font-mono font-semibold text-foreground">{config.cacheSize} pages</span>
+              </div>
+            )}
+            {config.walEnabled !== undefined && (
+              <div className="flex items-center justify-between gap-4">
+                <span className="text-muted-foreground">WAL:</span>
+                <span className={`font-semibold ${config.walEnabled ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}>
+                  {config.walEnabled ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+            )}
+            <div className="flex items-center justify-between gap-4 pt-1 border-t border-border">
+              <span className="text-muted-foreground">Root Page:</span>
+              <span className="font-mono font-semibold text-foreground">#{treeData.rootPage}</span>
+            </div>
+            <div className="flex items-center justify-between gap-4">
+              <span className="text-muted-foreground">Height:</span>
+              <span className="font-mono font-semibold text-foreground">{treeData.height}</span>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Legend */}
       <div className="absolute bottom-6 left-6 border border-border p-3 rounded-xl backdrop-blur-md pointer-events-none flex flex-col gap-2">
         <div className="flex items-center gap-3 text-xs mb-2">
@@ -989,15 +1243,32 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         >
           <RotateCcw className="h-4 w-4" />
         </Button>
-        <Button
-          variant="ghost"
-          size="icon"
-          onClick={handleDownloadImage}
-          className="h-8 w-8"
-          title="Download Image"
-        >
-          <Download className="h-4 w-4" />
-        </Button>
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-8 w-8"
+              title="Download Image"
+            >
+              <Download className="h-4 w-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end">
+            <DropdownMenuItem onClick={() => handleDownloadImage('jpg')}>
+              <ImageIcon className="mr-2 h-4 w-4" />
+              <span>JPG (with background)</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleDownloadImage('png')}>
+              <FileImage className="mr-2 h-4 w-4" />
+              <span>PNG (transparent)</span>
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => handleDownloadImage('svg')}>
+              <FileType className="mr-2 h-4 w-4" />
+              <span>SVG (vector)</span>
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
         <div className="w-full h-px bg-border my-1" />
         <div className="text-[10px] text-muted-foreground text-center px-2 py-1">
           {Math.round(camera.zoom * 100)}%
