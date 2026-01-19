@@ -105,6 +105,19 @@ type DatabaseInfo struct {
 	CacheSize int    `json:"cacheSize"`
 	RootPage  uint64 `json:"rootPage"`
 	Height    int    `json:"height"`
+	Schema    *SchemaInfo `json:"schema,omitempty"` // Schema info (Version 7.0)
+}
+
+// SchemaInfo represents schema information for API responses
+type SchemaInfo struct {
+	Columns          []ColumnInfo `json:"columns"`
+	PrimaryKeyColumns []string     `json:"primaryKey"`
+}
+
+// ColumnInfo represents column information for API responses
+type ColumnInfo struct {
+	Name string `json:"name"`
+	Type string `json:"type"` // "INT", "STRING", "FLOAT", "BOOL"
 }
 
 // TreeNode represents a node in the B+Tree for visualization

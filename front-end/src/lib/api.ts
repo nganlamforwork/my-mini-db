@@ -8,7 +8,8 @@ import type {
   Record,
   OperationResponse,
   WALInfo,
-  TreeConfig
+  TreeConfig,
+  Schema
 } from '@/types/database'
 
 const API_BASE_URL = 'http://localhost:8080/api'
@@ -23,6 +24,16 @@ export interface CreateDatabaseRequest {
     order?: number
     pageSize?: number
     walEnabled?: boolean
+    cacheSize?: number
+  }
+  columns: Array<{ name: string; type: 'INT' | 'STRING' | 'FLOAT' | 'BOOL' }>
+  primaryKey: string[]
+}
+
+// ConnectDatabaseRequest is for connecting to existing databases (schema is loaded from disk)
+export interface ConnectDatabaseRequest {
+  name: string
+  config?: {
     cacheSize?: number
   }
 }
@@ -134,7 +145,7 @@ export const api = {
   },
 
   // Connect to an existing database (loads from disk)
-  async connectDatabase(request: CreateDatabaseRequest): Promise<{ success: boolean; name: string; message: string }> {
+  async connectDatabase(request: ConnectDatabaseRequest): Promise<{ success: boolean; name: string; message: string }> {
     const response = await fetch(`${API_BASE_URL}/databases/connect`, {
       method: 'POST',
       headers: {
@@ -298,6 +309,141 @@ export const api = {
     if (!response.ok) {
       throw new Error(`Failed to fetch tree config: ${name}`)
     }
+    return await response.json()
+  },
+
+  // Get database schema (Version 7.0)
+  async getSchema(name: string): Promise<Schema | null> {
+    try {
+      const info = await this.getDatabaseInfo(name)
+      if (info.schema) {
+        // Convert API schema format to frontend Schema format
+        return {
+          columns: info.schema.columns.map(col => ({
+            name: col.name,
+            type: col.type as 'INT' | 'STRING' | 'FLOAT' | 'BOOL',
+          })),
+          primaryKey: info.schema.primaryKey,
+        }
+      }
+      return null
+    } catch {
+      return null
+    }
+  },
+
+  // Insert row data (schema-based, Version 7.0)
+  async insertRow(name: string, rowData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/insert`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(rowData),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to insert')
+    }
+    
+    return await response.json()
+  },
+
+  // Update row data (schema-based, Version 7.0)
+  async updateRow(name: string, rowData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/update`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(rowData),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to update')
+    }
+    
+    return await response.json()
+  },
+
+  // Delete by key components (schema-based, Version 7.0)
+  async deleteByKey(name: string, keyData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/delete`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(keyData),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to delete')
+    }
+    
+    return await response.json()
+  },
+
+  // Search by key components (schema-based, Version 7.0)
+  async searchByKey(name: string, keyData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/search`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(keyData),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to search')
+    }
+    
+    return await response.json()
+  },
+
+  // Range query by key components (schema-based, Version 7.0)
+  async rangeQueryByKeys(name: string, startKeyData: { [key: string]: any }, endKeyData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/range`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ startKey: startKeyData, endKey: endKeyData }),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to range query')
+    }
+    
     return await response.json()
   },
 }

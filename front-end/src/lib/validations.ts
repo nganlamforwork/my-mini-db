@@ -43,6 +43,25 @@ export const createDatabaseSchema = z.object({
         .optional(),
     })
     .optional(),
-})
+  // Schema fields (Version 7.0) - Mandatory (1 Database = 1 Table = 1 B+ Tree)
+  columns: z.array(z.object({
+    name: z.string().min(1, 'Column name is required'),
+    type: z.enum(['INT', 'STRING', 'FLOAT', 'BOOL']),
+  })).min(1, 'At least one column is required'),
+  primaryKey: z.array(z.string()).min(1, 'At least one primary key column is required'),
+}).refine(
+  (data) => {
+    // All primary key columns must exist in columns
+    if (data.columns && data.primaryKey) {
+      const columnNames = new Set(data.columns.map(col => col.name));
+      return data.primaryKey.every(pk => columnNames.has(pk));
+    }
+    return true;
+  },
+  {
+    message: 'All primary key columns must exist in the columns list',
+    path: ['primaryKey'],
+  }
+)
 
 export type CreateDatabaseInput = z.infer<typeof createDatabaseSchema>

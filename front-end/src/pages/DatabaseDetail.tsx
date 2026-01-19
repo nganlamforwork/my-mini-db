@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { toast } from 'sonner';
 import { DatabaseHeader } from '@/components/DatabaseHeader';
 import { TreeCanvas } from '@/components/TreeCanvas';
 import { Button } from '@/components/ui/button';
@@ -20,11 +21,12 @@ import { OperationDialog } from '@/components/OperationDialog';
 import { OperationHelpDialog } from '@/components/OperationHelpDialog';
 import { SystemLog } from '@/components/SystemLog';
 import { QueryResultPanel, type QueryResult } from '@/components/QueryResultPanel';
-import { useConnectDatabase, useCloseDatabase, useTreeStructure, useCacheStats, useInsert, useUpdate, useDelete, useSearch, useRangeQuery } from '@/hooks/useDatabaseOperations';
+import { useConnectDatabase, useCloseDatabase, useTreeStructure, useCacheStats } from '@/hooks/useDatabaseOperations';
 import { useBTreeStepAnimator } from '@/hooks/useBTreeStepAnimator';
 import { useLocalStorage } from '@/hooks/useLocalStorage';
-import type { LogEntry, TreeStructure, ExecutionStep, CacheStats, TreeConfig } from '@/types/database';
+import type { LogEntry, TreeStructure, ExecutionStep, CacheStats, TreeConfig, Schema } from '@/types/database';
 import { api } from '@/lib/api';
+import { formatKey } from '@/lib/keyUtils';
 import { Plus, Search, Trash2, Edit, ArrowLeftRight, ExternalLink, HelpCircle, Download, RotateCcw, Info } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
@@ -56,18 +58,17 @@ export function DatabaseDetail() {
   // Tree configuration state
   const [treeConfig, setTreeConfig] = useState<TreeConfig | null>(null)
   
+  // Schema state (Version 7.0)
+  // null = not loaded yet, undefined = checked and doesn't exist (shouldn't happen in v7.0)
+  const [schema, setSchema] = useState<Schema | null | undefined>(undefined)
+  
   // Hooks for database operations
   const connectMutation = useConnectDatabase()
   const closeMutation = useCloseDatabase()
-  const { data: treeStructureData, error: treeError, isLoading: treeLoading } = useTreeStructure(name)
+  const { data: treeStructureData, error: treeError, isLoading: treeLoading, refetch: refetchTreeStructure } = useTreeStructure(name)
   const { data: cacheStatsData, refetch: refetchCacheStats } = useCacheStats(name)
   
-  // Operation hooks - recreate when enableSteps changes to update enable_steps parameter
-  const insertMutation = useInsert(enableSteps)
-  const updateMutation = useUpdate(enableSteps)
-  const deleteMutation = useDelete(enableSteps)
-  const searchMutation = useSearch(enableSteps)
-  const rangeQueryMutation = useRangeQuery(enableSteps)
+  // Note: Operation hooks are no longer used directly - we use api methods instead for schema-based operations
   
   // Step animator hook
   const stepAnimator = useBTreeStepAnimator({
@@ -136,11 +137,24 @@ export function DatabaseDetail() {
         await stepAnimator.executeSteps(response.steps, treeData);
 
         // Wait for tree structure to refetch after query invalidation
-        // Then sync visual tree with final state
-        await new Promise(resolve => setTimeout(resolve, 200));
-        if (treeStructureData) {
-          stepAnimator.syncVisualTree(treeStructureData);
-          setTreeData(treeStructureData);
+        // Explicitly refetch and wait for completion to ensure we have the latest tree data
+        try {
+          const { data: updatedTreeData } = await refetchTreeStructure();
+          if (updatedTreeData) {
+            stepAnimator.syncVisualTree(updatedTreeData);
+            setTreeData(updatedTreeData);
+          } else if (treeStructureData) {
+            // Fallback to existing data if refetch didn't return new data
+            stepAnimator.syncVisualTree(treeStructureData);
+            setTreeData(treeStructureData);
+          }
+        } catch (error) {
+          console.error('Failed to refetch tree structure after operation:', error);
+          // Fallback to existing data on error
+          if (treeStructureData) {
+            stepAnimator.syncVisualTree(treeStructureData);
+            setTreeData(treeStructureData);
+          }
         }
       }
 
@@ -207,9 +221,21 @@ export function DatabaseDetail() {
         }
         await stepAnimator.executeSteps(response.steps, treeData);
         // Sync tree even on failure to show current state
-        await new Promise(resolve => setTimeout(resolve, 200));
-        if (treeStructureData) {
-          stepAnimator.syncVisualTree(treeStructureData);
+        try {
+          const { data: updatedTreeData } = await refetchTreeStructure();
+          if (updatedTreeData) {
+            stepAnimator.syncVisualTree(updatedTreeData);
+            setTreeData(updatedTreeData);
+          } else if (treeStructureData) {
+            stepAnimator.syncVisualTree(treeStructureData);
+            setTreeData(treeStructureData);
+          }
+        } catch (error) {
+          console.error('Failed to refetch tree structure after failed operation:', error);
+          if (treeStructureData) {
+            stepAnimator.syncVisualTree(treeStructureData);
+            setTreeData(treeStructureData);
+          }
         }
       }
       
@@ -249,8 +275,11 @@ export function DatabaseDetail() {
         if (step.target_id) stepStr += ` → target: ${step.target_id}`
         const key = step.key || step.highlightKey
         if (key) {
-          const keyStr = key.values.map((v: any) => String(v.value)).join(', ')
-          stepStr += ` | Key: ${keyStr}`
+          // Use formatKey utility to handle all key formats safely
+          const keyStr = formatKey(key)
+          if (keyStr) {
+            stepStr += ` | Key: ${keyStr}`
+          }
         }
         if (step.metadata && Object.keys(step.metadata).length > 0) {
           const metaStr = Object.entries(step.metadata)
@@ -305,14 +334,40 @@ export function DatabaseDetail() {
     isConnectedRef.current = false
     hasLoggedInitialLoadRef.current = false
     setTreeData(null) // Clear tree data when switching databases
+    setSchema(undefined) // Reset schema to "not loaded" state when switching databases
+    setTreeConfig(null) // Clear tree config when switching databases
     
     if (name) {
       connectMutation.mutate(
         { name, config: { cacheSize: 100 } },
         {
-          onSuccess: () => {
+          onSuccess: async () => {
             isConnectedRef.current = true
             addLog(`Database "${name}" connected successfully.`, 'success')
+            
+            // Fetch schema and config immediately after successful connection
+            try {
+              const schemaData = await api.getSchema(name)
+              setSchema(schemaData)
+            } catch (error) {
+              console.error('Failed to fetch schema:', error)
+              setSchema(null)
+            }
+            
+            try {
+              const config = await api.getTreeConfig(name)
+              setTreeConfig(config)
+            } catch (error) {
+              console.error('Failed to fetch tree config:', error)
+              setTreeConfig({
+                order: 4,
+                pageSize: 4096,
+                cacheSize: 100,
+                walEnabled: true,
+                rootPageId: 0,
+                height: 0
+              })
+            }
           },
           onError: (error: Error) => {
             isConnectedRef.current = false
@@ -367,30 +422,52 @@ export function DatabaseDetail() {
     }
   }, [cacheStatsData])
 
-  // Fetch tree configuration when database is connected
+  // Note: Schema and tree config are primarily fetched in the connection success callback
+  // This useEffect serves as a fallback/refresh mechanism when name changes
+  // Note: We can't use isConnectedRef.current in dependencies (refs don't trigger re-renders)
+  // Instead, schema/config are fetched immediately when connection succeeds
   useEffect(() => {
-    if (!name || !isConnectedRef.current) return
+    if (!name) return
 
+    // Only fetch if not already loaded (fallback mechanism)
     const fetchTreeConfig = async () => {
+      if (treeConfig) return // Already loaded
       try {
         const config = await api.getTreeConfig(name)
         setTreeConfig(config)
       } catch (error) {
         console.error('Failed to fetch tree config:', error)
-        // Set default config on error
-        setTreeConfig({
-          order: 4,
-          pageSize: 4096,
-          cacheSize: 100,
-          walEnabled: true,
-          rootPageId: 0,
-          height: 0
-        })
+        if (!treeConfig) {
+          setTreeConfig({
+            order: 4,
+            pageSize: 4096,
+            cacheSize: 100,
+            walEnabled: true,
+            rootPageId: 0,
+            height: 0
+          })
+        }
       }
     }
 
-    fetchTreeConfig()
-  }, [name])
+    const fetchSchema = async () => {
+      // Only fetch if schema hasn't been loaded yet (undefined = not loaded, null = loaded but doesn't exist)
+      if (schema !== undefined) return
+      try {
+        const schemaData = await api.getSchema(name)
+        setSchema(schemaData) // Will be null if no schema exists, or Schema object if it exists
+      } catch (error) {
+        console.error('Failed to fetch schema:', error)
+        setSchema(null) // Mark as checked but doesn't exist
+      }
+    }
+
+    // Only fetch if connected (check ref, but don't include in deps)
+    if (isConnectedRef.current) {
+      fetchTreeConfig()
+      fetchSchema()
+    }
+  }, [name]) // Only depend on name - connection state is handled in success callback
 
   // Handle closing database on unmount (if not navigating)
   useEffect(() => {
@@ -578,9 +655,22 @@ export function DatabaseDetail() {
                         size="sm" 
                         className="text-xs relative"
                         onClick={() => {
+                          if (schema === undefined) {
+                            toast.error('Schema not loaded', {
+                              description: 'Please wait for the database schema to load before performing operations.',
+                            })
+                            return
+                          }
+                          if (schema === null) {
+                            toast.error('Schema not found', {
+                              description: 'This database does not have a schema. Schema is required for operations.',
+                            })
+                            return
+                          }
                           setCurrentOperation('insert');
                           setOperationDialogOpen(true);
                         }}
+                        disabled={schema === undefined || schema === null || connectMutation.isPending}
                       >
                         <Plus size={12} className="mr-1.5" /> Insert
                       </Button>
@@ -597,9 +687,22 @@ export function DatabaseDetail() {
                         size="sm" 
                         className="text-xs relative"
                         onClick={() => {
+                          if (schema === undefined) {
+                            toast.error('Schema not loaded', {
+                              description: 'Please wait for the database schema to load before performing operations.',
+                            })
+                            return
+                          }
+                          if (schema === null) {
+                            toast.error('Schema not found', {
+                              description: 'This database does not have a schema. Schema is required for operations.',
+                            })
+                            return
+                          }
                           setCurrentOperation('search');
                           setOperationDialogOpen(true);
                         }}
+                        disabled={schema === undefined || schema === null || connectMutation.isPending}
                       >
                         <Search size={12} className="mr-1.5" /> Search
                       </Button>
@@ -616,9 +719,22 @@ export function DatabaseDetail() {
                         size="sm" 
                         className="text-xs relative"
                         onClick={() => {
+                          if (schema === undefined) {
+                            toast.error('Schema not loaded', {
+                              description: 'Please wait for the database schema to load before performing operations.',
+                            })
+                            return
+                          }
+                          if (schema === null) {
+                            toast.error('Schema not found', {
+                              description: 'This database does not have a schema. Schema is required for operations.',
+                            })
+                            return
+                          }
                           setCurrentOperation('update');
                           setOperationDialogOpen(true);
                         }}
+                        disabled={schema === undefined || schema === null || connectMutation.isPending}
                       >
                         <Edit size={12} className="mr-1.5" /> Update
                       </Button>
@@ -635,9 +751,22 @@ export function DatabaseDetail() {
                         size="sm" 
                         className="text-xs relative"
                         onClick={() => {
+                          if (schema === undefined) {
+                            toast.error('Schema not loaded', {
+                              description: 'Please wait for the database schema to load before performing operations.',
+                            })
+                            return
+                          }
+                          if (schema === null) {
+                            toast.error('Schema not found', {
+                              description: 'This database does not have a schema. Schema is required for operations.',
+                            })
+                            return
+                          }
                           setCurrentOperation('delete');
                           setOperationDialogOpen(true);
                         }}
+                        disabled={schema === undefined || schema === null || connectMutation.isPending}
                       >
                         <Trash2 size={12} className="mr-1.5" /> Delete
                       </Button>
@@ -655,9 +784,22 @@ export function DatabaseDetail() {
                       size="sm" 
                       className="text-xs relative"
                       onClick={() => {
+                        if (schema === undefined) {
+                          toast.error('Schema not loaded', {
+                            description: 'Please wait for the database schema to load before performing operations.',
+                          })
+                          return
+                        }
+                        if (schema === null) {
+                          toast.error('Schema not found', {
+                            description: 'This database does not have a schema. Schema is required for operations.',
+                          })
+                          return
+                        }
                         setCurrentOperation('range');
                         setOperationDialogOpen(true);
                       }}
+                      disabled={schema === undefined || schema === null || connectMutation.isPending}
                     >
                       <ArrowLeftRight size={12} className="mr-1.5" /> Range Query
                     </Button>
@@ -830,7 +972,8 @@ export function DatabaseDetail() {
               open={operationDialogOpen}
               onOpenChange={setOperationDialogOpen}
               operation={currentOperation}
-              onSubmit={(key, value, endKey) => {
+              schema={schema}
+              onSubmit={(rowData, startKeyData, endKeyData) => {
                 if (!name) return;
 
                 const handleOperationError = (error: Error, operation: string) => {
@@ -842,125 +985,89 @@ export function DatabaseDetail() {
                   );
                 };
 
+                // Schema-based operations (Version 7.0)
                 switch (currentOperation) {
                   case 'insert':
-                    if (!value) {
-                      addLog('Insert operation requires both key and value', 'error');
+                    if (!rowData) {
+                      addLog('Insert operation requires row data', 'error');
                       return;
                     }
                     const insertStartTime = Date.now();
-                    insertMutation.mutate(
-                      { name, key, value },
-                      {
-                        onSuccess: (response) => handleOperationResponse(response, 'INSERT', insertStartTime),
-                        onError: (error) => handleOperationError(error as Error, 'INSERT'),
-                      }
-                    );
+                    api.insertRow(name!, rowData, enableSteps)
+                      .then((response) => handleOperationResponse(response, 'INSERT', insertStartTime))
+                      .catch((error) => handleOperationError(error as Error, 'INSERT'));
                     break;
 
                   case 'update':
-                    if (!value) {
-                      addLog('Update operation requires both key and value', 'error');
+                    if (!rowData) {
+                      addLog('Update operation requires row data', 'error');
                       return;
                     }
                     const updateStartTime = Date.now();
-                    updateMutation.mutate(
-                      { name, key, value },
-                      {
-                        onSuccess: (response) => handleOperationResponse(response, 'UPDATE', updateStartTime),
-                        onError: (error) => handleOperationError(error as Error, 'UPDATE'),
-                      }
-                    );
+                    api.updateRow(name!, rowData, enableSteps)
+                      .then((response) => handleOperationResponse(response, 'UPDATE', updateStartTime))
+                      .catch((error) => handleOperationError(error as Error, 'UPDATE'));
                     break;
 
                   case 'delete':
+                    if (!startKeyData) {
+                      addLog('Delete operation requires primary key data', 'error');
+                      return;
+                    }
                     const deleteStartTime = Date.now();
-                    deleteMutation.mutate(
-                      { name, key },
-                      {
-                        onSuccess: (response) => handleOperationResponse(response, 'DELETE', deleteStartTime),
-                        onError: (error) => handleOperationError(error as Error, 'DELETE'),
-                      }
-                    );
+                    api.deleteByKey(name!, startKeyData, enableSteps)
+                      .then((response) => handleOperationResponse(response, 'DELETE', deleteStartTime))
+                      .catch((error) => handleOperationError(error as Error, 'DELETE'));
                     break;
 
                   case 'search':
+                    if (!startKeyData) {
+                      addLog('Search operation requires primary key data', 'error');
+                      return;
+                    }
                     const searchStartTime = Date.now();
-                    searchMutation.mutate(
-                      { name, key },
-                      {
-                        onSuccess: async (response) => {
-                          await handleOperationResponse(response, 'SEARCH', searchStartTime);
-                          if (response.success && response.value) {
-                            addLog(
-                              `Search operation found value for key`,
-                              'success',
-                              response.steps,
-                              'SEARCH'
-                            );
-                          } else {
-                            addLog(
-                              `Search operation: key not found`,
-                              'warning',
-                              response.steps || [],
-                              'SEARCH'
-                            );
-                          }
-                        },
-                        onError: (error) => handleOperationError(error as Error, 'SEARCH'),
-                      }
-                    );
+                    api.searchByKey(name!, startKeyData, enableSteps)
+                      .then(async (response) => {
+                        await handleOperationResponse(response, 'SEARCH', searchStartTime);
+                        if (response.success && response.value) {
+                          addLog(
+                            `Search operation found value for key`,
+                            'success',
+                            response.steps,
+                            'SEARCH'
+                          );
+                        } else {
+                          addLog(
+                            `Search operation: key not found`,
+                            'warning',
+                            response.steps || [],
+                            'SEARCH'
+                          );
+                        }
+                      })
+                      .catch((error) => handleOperationError(error as Error, 'SEARCH'));
                     break;
 
                   case 'range':
-                    // For range queries, endKey is passed separately
-                    if (!endKey || !endKey.values || endKey.values.length === 0) {
-                      // Try to extract from value if endKey not provided (legacy format)
-                      if (value && value.columns && value.columns.length > 0) {
-                        const extractedEndKey = { values: value.columns };
-                        const rangeStartTime = Date.now();
-                        rangeQueryMutation.mutate(
-                          { name, startKey: key, endKey: extractedEndKey },
-                          {
-                            onSuccess: async (response) => {
-                              await handleOperationResponse(response, 'RANGE_QUERY', rangeStartTime);
-                              if (response.success) {
-                                const keyCount = response.keys?.length || 0;
-                                addLog(
-                                  `Range query found ${keyCount} key-value pair(s)`,
-                                  'success',
-                                  response.steps,
-                                  'RANGE_QUERY'
-                                );
-                              }
-                            },
-                            onError: (error) => handleOperationError(error as Error, 'RANGE_QUERY'),
-                          }
-                        );
-                      } else {
-                        addLog('Range query operation requires both startKey and endKey', 'error');
-                      }
-                    } else {
-                      const rangeStartTime = Date.now();
-                      rangeQueryMutation.mutate(
-                        { name, startKey: key, endKey },
-                        {
-                          onSuccess: async (response) => {
-                            await handleOperationResponse(response, 'RANGE_QUERY', rangeStartTime);
-                            if (response.success) {
-                              const keyCount = response.keys?.length || 0;
-                              addLog(
-                                `Range query found ${keyCount} key-value pair(s)`,
-                                'success',
-                                response.steps,
-                                'RANGE_QUERY'
-                              );
-                            }
-                          },
-                          onError: (error) => handleOperationError(error as Error, 'RANGE_QUERY'),
-                        }
-                      );
+                    if (!startKeyData || !endKeyData) {
+                      addLog('Range query operation requires both start key and end key data', 'error');
+                      return;
                     }
+                    const rangeStartTime = Date.now();
+                    api.rangeQueryByKeys(name!, startKeyData, endKeyData, enableSteps)
+                      .then(async (response) => {
+                        await handleOperationResponse(response, 'RANGE_QUERY', rangeStartTime);
+                        if (response.success) {
+                          const keyCount = response.keys?.length || 0;
+                          addLog(
+                            `Range query found ${keyCount} key-value pair(s)`,
+                            'success',
+                            response.steps,
+                            'RANGE_QUERY'
+                          );
+                        }
+                      })
+                      .catch((error) => handleOperationError(error as Error, 'RANGE_QUERY'));
                     break;
 
                   default:
@@ -1012,7 +1119,8 @@ export function DatabaseDetail() {
           >
             {(stepAnimator.visualTree || treeData) ? (
               <TreeCanvas 
-                treeData={stepAnimator.visualTree || treeData} 
+                treeData={stepAnimator.visualTree || treeData}
+                schema={schema || undefined}
                 highlightedIds={[]}
                 highlightedNodeId={stepAnimator.highlightedNodeId}
                 highlightedKey={stepAnimator.highlightedKey}
@@ -1048,6 +1156,7 @@ export function DatabaseDetail() {
           {/* Query Result Panel - Always present, behavior changes based on view mode */}
           <QueryResultPanel 
             result={queryResult}
+            schema={schema || undefined}
             onClear={() => setQueryResult(null)}
             fullHeight={!showVisualizer}
             isLockedOpen={!showVisualizer}

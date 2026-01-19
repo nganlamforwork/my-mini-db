@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -8,6 +9,7 @@ import (
 	"sync"
 
 	"bplustree/internal/btree"
+	"bplustree/internal/storage"
 )
 
 // DatabaseInstance represents a single database instance
@@ -16,6 +18,7 @@ type DatabaseInstance struct {
 	Filename  string
 	Tree      *btree.BPlusTree
 	Config    DatabaseConfig
+	Schema    *storage.Schema // Schema for this database (nil if not set)
 	mu        sync.RWMutex
 }
 
@@ -56,7 +59,7 @@ func (dm *DatabaseManager) getDatabasePath(name string) string {
 }
 
 // CreateDatabase creates a new database instance
-func (dm *DatabaseManager) CreateDatabase(name string, config DatabaseConfig) error {
+func (dm *DatabaseManager) CreateDatabase(name string, config DatabaseConfig, schema *storage.Schema) error {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
 
@@ -80,11 +83,22 @@ func (dm *DatabaseManager) CreateDatabase(name string, config DatabaseConfig) er
 		return fmt.Errorf("failed to create database: %w", err)
 	}
 
+	// Set schema on tree if provided
+	if schema != nil {
+		tree.SetSchema(schema)
+		// Persist schema to disk
+		if err := dm.saveSchema(name, schema); err != nil {
+			tree.Close()
+			return fmt.Errorf("failed to save schema: %w", err)
+		}
+	}
+
 	dm.databases[name] = &DatabaseInstance{
 		Name:     name,
 		Filename: filename,
 		Tree:     tree,
 		Config:   config,
+		Schema:   schema,
 	}
 
 	return nil
@@ -122,11 +136,22 @@ func (dm *DatabaseManager) ConnectDatabase(name string, config DatabaseConfig) e
 		return fmt.Errorf("failed to connect database: %w", err)
 	}
 
+	// Load schema from disk if it exists
+	schema, err := dm.loadSchema(name)
+	if err != nil && !os.IsNotExist(err) {
+		tree.Close()
+		return fmt.Errorf("failed to load schema: %w", err)
+	}
+	if schema != nil {
+		tree.SetSchema(schema)
+	}
+
 	dm.databases[name] = &DatabaseInstance{
 		Name:     name,
 		Filename: filename,
 		Tree:     tree,
 		Config:   config,
+		Schema:   schema,
 	}
 
 	return nil
@@ -336,6 +361,22 @@ func (dm *DatabaseManager) GetDatabaseInfo(name string) (*DatabaseInfo, error) {
 		cacheSize = *db.Config.CacheSize
 	}
 
+	// Include schema if available
+	var schemaInfo *SchemaInfo
+	if db.Schema != nil {
+		columns := make([]ColumnInfo, len(db.Schema.Columns))
+		for i, col := range db.Schema.Columns {
+			columns[i] = ColumnInfo{
+				Name: col.Name,
+				Type: col.Type.String(),
+			}
+		}
+		schemaInfo = &SchemaInfo{
+			Columns:          columns,
+			PrimaryKeyColumns: db.Schema.PrimaryKeyColumns,
+		}
+	}
+
 	return &DatabaseInfo{
 		Name:      name,
 		Filename:  db.Filename,
@@ -345,6 +386,7 @@ func (dm *DatabaseManager) GetDatabaseInfo(name string) (*DatabaseInfo, error) {
 		CacheSize: cacheSize,
 		RootPage:  rootPage,
 		Height:    height,
+		Schema:    schemaInfo,
 	}, nil
 }
 
@@ -357,6 +399,135 @@ func (dm *DatabaseManager) CloseAll() error {
 	for _, db := range dm.databases {
 		if err := db.Close(); err != nil && firstErr == nil {
 			firstErr = err
+		}
+	}
+
+	return firstErr
+}
+
+// getSchemaPath returns the full path to a schema file
+func (dm *DatabaseManager) getSchemaPath(name string) string {
+	return filepath.Join(dm.databaseDir, fmt.Sprintf("%s.schema.json", name))
+}
+
+// saveSchema saves the schema to disk as JSON
+func (dm *DatabaseManager) saveSchema(name string, schema *storage.Schema) error {
+	schemaPath := dm.getSchemaPath(name)
+	
+	// Convert schema to JSON-serializable format
+	schemaJSON := map[string]interface{}{
+		"columns": make([]map[string]interface{}, len(schema.Columns)),
+		"primaryKeyColumns": schema.PrimaryKeyColumns,
+	}
+	
+	for i, col := range schema.Columns {
+		schemaJSON["columns"].([]map[string]interface{})[i] = map[string]interface{}{
+			"name": col.Name,
+			"type": col.Type.String(),
+		}
+	}
+	
+	data, err := json.MarshalIndent(schemaJSON, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal schema: %w", err)
+	}
+	
+	if err := os.WriteFile(schemaPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write schema file: %w", err)
+	}
+	
+	return nil
+}
+
+// loadSchema loads the schema from disk
+func (dm *DatabaseManager) loadSchema(name string) (*storage.Schema, error) {
+	schemaPath := dm.getSchemaPath(name)
+	
+	data, err := os.ReadFile(schemaPath)
+	if err != nil {
+		return nil, err
+	}
+	
+	var schemaJSON struct {
+		Columns          []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		} `json:"columns"`
+		PrimaryKeyColumns []string `json:"primaryKeyColumns"`
+	}
+	
+	if err := json.Unmarshal(data, &schemaJSON); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal schema: %w", err)
+	}
+	
+	// Convert JSON schema to storage.Schema
+	columns := make([]storage.ColumnDefinition, len(schemaJSON.Columns))
+	for i, colJSON := range schemaJSON.Columns {
+		var colType storage.ColumnType
+		switch colJSON.Type {
+		case "INT":
+			colType = storage.TypeInt
+		case "STRING":
+			colType = storage.TypeString
+		case "FLOAT":
+			colType = storage.TypeFloat
+		case "BOOL":
+			colType = storage.TypeBool
+		default:
+			return nil, fmt.Errorf("unknown column type: %s", colJSON.Type)
+		}
+		columns[i] = storage.ColumnDefinition{
+			Name: colJSON.Name,
+			Type: colType,
+		}
+	}
+	
+	schema, err := storage.NewSchema(columns, schemaJSON.PrimaryKeyColumns)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create schema: %w", err)
+	}
+	
+	return schema, nil
+}
+
+// CleanupAllDatabases deletes all database files (.db, .wal, .schema.json) from disk
+// This is useful for wiping incompatible data structures
+func (dm *DatabaseManager) CleanupAllDatabases() error {
+	dm.mu.Lock()
+	defer dm.mu.Unlock()
+
+	// Close all databases
+	var firstErr error
+	for name, db := range dm.databases {
+		if err := db.Close(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("failed to close database '%s': %w", name, err)
+		}
+	}
+	dm.databases = make(map[string]*DatabaseInstance)
+
+	// Delete all database-related files
+	entries, err := os.ReadDir(dm.databaseDir)
+	if err != nil {
+		if firstErr == nil {
+			firstErr = fmt.Errorf("failed to read database directory: %w", err)
+		}
+		return firstErr
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			name := entry.Name()
+			// Delete .db, .wal, and .schema.json files
+			if (len(name) > 3 && name[len(name)-3:] == ".db") ||
+			   (len(name) > 4 && name[len(name)-4:] == ".wal") ||
+			   (len(name) > 13 && name[len(name)-13:] == ".schema.json") {
+				filePath := filepath.Join(dm.databaseDir, name)
+				if err := os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+					if firstErr == nil {
+						firstErr = fmt.Errorf("failed to delete file '%s': %w", name, err)
+					}
+				}
+			}
 		}
 	}
 

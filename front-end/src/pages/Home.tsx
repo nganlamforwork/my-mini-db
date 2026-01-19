@@ -1,12 +1,18 @@
 import { useState } from 'react'
+import * as React from 'react'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { useNavigate } from 'react-router-dom'
 import { Plus, Database, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { createDatabaseSchema, type CreateDatabaseInput } from '@/lib/validations'
 import { useDatabases } from '@/hooks/useDatabases'
-import { useCreateDatabase, useDeleteDatabase, useClearAllDatabases } from '@/hooks/useDatabaseMutations'
+import { useDeleteDatabase, useClearAllDatabases } from '@/hooks/useDatabaseMutations'
 import { Button } from '@/components/ui/button'
+import { SchemaBuilder } from '@/components/SchemaBuilder'
+import { api } from '@/lib/api'
+import { cn } from '@/lib/utils'
+import type { ColumnDefinition } from '@/types/database'
 import {
   Dialog,
   DialogContent,
@@ -44,12 +50,20 @@ export function Home() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState<string | null>(null)
   const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false)
   const [useCustomConfig, setUseCustomConfig] = useState(false)
+  const [isCreating, setIsCreating] = useState(false)
+  const [connectingDbName, setConnectingDbName] = useState<string | null>(null)
+  const [schemaData, setSchemaData] = useState<{
+    columns: ColumnDefinition[];
+    primaryKey: string[];
+  }>({
+    columns: [],
+    primaryKey: [],
+  })
 
   // Fetch databases list
   const { data: databases = [], isLoading } = useDatabases()
 
-  // Mutations
-  const createMutation = useCreateDatabase()
+  // Mutations (createMutation removed - using direct API calls for synchronous flow)
   const deleteMutation = useDeleteDatabase()
   const clearAllMutation = useClearAllDatabases()
 
@@ -65,23 +79,78 @@ export function Home() {
         walEnabled: true,
         cacheSize: 100,
       },
+      columns: [],
+      primaryKey: [],
     },
   })
 
-  const handleCreateDatabase = (data: CreateDatabaseInput) => {
-    // Only include config if custom config is enabled
-    const submitData: CreateDatabaseInput = {
-      name: data.name,
-      ...(useCustomConfig ? { config: data.config } : {}),
-    }
+  // Sync schemaData with form state whenever it changes
+  React.useEffect(() => {
+    form.setValue('columns', schemaData.columns, { shouldValidate: true })
+    form.setValue('primaryKey', schemaData.primaryKey, { shouldValidate: true })
+  }, [schemaData, form])
+
+  const handleCreateDatabase = async (data: CreateDatabaseInput) => {
+    // Set loading state
+    setIsCreating(true)
     
-    createMutation.mutate(submitData, {
-      onSuccess: () => {
-        setOpen(false)
-        setUseCustomConfig(false)
-        form.reset()
-      },
-    })
+    try {
+      // Build submit data - schema is mandatory (1 Database = 1 Table = 1 B+ Tree)
+      const submitData: CreateDatabaseInput = {
+        name: data.name,
+        ...(useCustomConfig ? { config: data.config } : {}),
+        // Schema is always included (mandatory)
+        columns: schemaData.columns,
+        primaryKey: schemaData.primaryKey,
+      }
+      
+      // Step 1: Create database and await response
+      const createResponse = await api.createDatabase({
+        name: submitData.name,
+        config: submitData.config,
+        columns: submitData.columns,
+        primaryKey: submitData.primaryKey,
+      })
+      
+      // Check if creation was successful
+      if (!createResponse.success) {
+        throw new Error('Database creation failed')
+      }
+      
+      // Step 2: Connect to the newly created database and await
+      const connectResponse = await api.connectDatabase({
+        name: submitData.name,
+        config: submitData.config ? { cacheSize: submitData.config.cacheSize } : undefined,
+      })
+      
+      // Check if connection was successful
+      if (!connectResponse.success) {
+        throw new Error(connectResponse.message || 'Failed to connect to database')
+      }
+      
+      // Step 3: Only navigate on success
+      // Close dialog and reset form
+      setOpen(false)
+      setUseCustomConfig(false)
+      setSchemaData({
+        columns: [],
+        primaryKey: [],
+      })
+      form.reset()
+      
+      // Navigate to database detail page
+      navigate(`/databases/${submitData.name}`)
+      
+    } catch (error) {
+      // Show error toast and stop - do NOT redirect
+      const errorMessage = error instanceof Error ? error.message : 'An error occurred while creating the database.'
+      toast.error('Failed to create database', {
+        description: errorMessage,
+      })
+    } finally {
+      // Always reset loading state
+      setIsCreating(false)
+    }
   }
 
   const handleDialogOpenChange = (isOpen: boolean) => {
@@ -89,9 +158,54 @@ export function Home() {
     if (!isOpen) {
       // Reset state when dialog closes
       setUseCustomConfig(false)
+      setSchemaData({
+        columns: [],
+        primaryKey: [],
+      })
       form.reset()
     }
   }
+
+  // Handle database card click - connect before navigating
+  const handleDatabaseClick = async (dbName: string) => {
+    // Set loading state for this specific database
+    setConnectingDbName(dbName)
+    
+    try {
+      // Await connection API call - strictly synchronous
+      const connectResponse = await api.connectDatabase({
+        name: dbName,
+        config: { cacheSize: 100 },
+      })
+      
+      // Check if connection was successful
+      if (!connectResponse.success) {
+        throw new Error(connectResponse.message || 'Failed to connect to database')
+      }
+      
+      // ONLY navigate after successful connection (strictly after await)
+      navigate(`/databases/${dbName}`)
+      
+    } catch (error) {
+      // Show error toast and stop - do NOT redirect
+      const errorMessage = error instanceof Error ? error.message : 'An error occurred while connecting to the database.'
+      toast.error('Failed to connect to database', {
+        description: errorMessage,
+      })
+    } finally {
+      // Always reset loading state
+      setConnectingDbName(null)
+    }
+  }
+
+  // Validation: Check if schema is valid (at least one column and primary key)
+  // Also check form validation state
+  const isSchemaValid = schemaData.columns.length > 0 &&
+    schemaData.columns.every(col => col.name.trim() !== '') &&
+    schemaData.primaryKey.length > 0 &&
+    schemaData.primaryKey.every(pk => schemaData.columns.some(col => col.name === pk))
+  
+  const isFormValid = form.formState.isValid && isSchemaValid
 
   const handleDelete = (name: string, e?: React.MouseEvent) => {
     e?.preventDefault()
@@ -188,61 +302,72 @@ export function Home() {
                 </div>
               ) : (
                 <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {databases.map((dbName) => (
-                    <div
-                      key={dbName}
-                      className="border rounded-lg p-4 hover:border-primary/50 transition-colors group relative cursor-pointer"
-                      onClick={() => navigate(`/databases/${dbName}`)}
-                    >
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="flex items-center gap-3">
-                          <Database className="h-5 w-5 text-primary" />
-                          <h3 className="font-semibold text-lg">{dbName}</h3>
-                        </div>
-                        <AlertDialog open={deleteDialogOpen === dbName} onOpenChange={(open) => setDeleteDialogOpen(open ? dbName : null)}>
-                          <AlertDialogTrigger asChild>
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={(e) => {
-                                e.stopPropagation()
-                                setDeleteDialogOpen(dbName)
-                              }}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </AlertDialogTrigger>
-                          <AlertDialogContent>
-                            <AlertDialogHeader>
-                              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                              <AlertDialogDescription>
-                                This action cannot be undone. This will permanently delete the database "{dbName}" from the system.
-                              </AlertDialogDescription>
-                            </AlertDialogHeader>
-                            <AlertDialogFooter>
-                              <AlertDialogCancel disabled={deleteMutation.isPending}>
-                                Cancel
-                              </AlertDialogCancel>
-                              <AlertDialogAction
+                  {databases.map((dbName) => {
+                    const isConnecting = connectingDbName === dbName
+                    return (
+                      <div
+                        key={dbName}
+                        className={cn(
+                          "border rounded-lg p-4 transition-colors group relative",
+                          isConnecting ? "cursor-wait opacity-75" : "hover:border-primary/50 cursor-pointer"
+                        )}
+                        onClick={() => !isConnecting && handleDatabaseClick(dbName)}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-3">
+                            {isConnecting ? (
+                              <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                            ) : (
+                              <Database className="h-5 w-5 text-primary" />
+                            )}
+                            <h3 className="font-semibold text-lg">{dbName}</h3>
+                          </div>
+                          <AlertDialog open={deleteDialogOpen === dbName} onOpenChange={(open) => setDeleteDialogOpen(open ? dbName : null)}>
+                            <AlertDialogTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
                                 onClick={(e) => {
-                                  e.preventDefault()
                                   e.stopPropagation()
-                                  handleDelete(dbName, e)
+                                  setDeleteDialogOpen(dbName)
                                 }}
-                                disabled={deleteMutation.isPending}
+                                disabled={isConnecting}
                               >
-                                {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
-                              </AlertDialogAction>
-                            </AlertDialogFooter>
-                          </AlertDialogContent>
-                        </AlertDialog>
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  This action cannot be undone. This will permanently delete the database "{dbName}" from the system.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel disabled={deleteMutation.isPending}>
+                                  Cancel
+                                </AlertDialogCancel>
+                                <AlertDialogAction
+                                  onClick={(e) => {
+                                    e.preventDefault()
+                                    e.stopPropagation()
+                                    handleDelete(dbName, e)
+                                  }}
+                                  disabled={deleteMutation.isPending}
+                                >
+                                  {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
+                                </AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </div>
+                        <p className="text-sm text-muted-foreground">
+                          {isConnecting ? 'Connecting...' : 'Click to view details'}
+                        </p>
                       </div>
-                      <p className="text-sm text-muted-foreground">
-                        Click to view details
-                      </p>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               )}
             </div>
@@ -255,7 +380,7 @@ export function Home() {
               <DialogHeader>
                 <DialogTitle>Create New Database</DialogTitle>
                 <DialogDescription>
-                  Enter a name for your new database. Only letters, numbers, underscores, and hyphens are allowed for the name.
+                  Create a new database with a mandatory schema. Architecture: 1 Database = 1 Table = 1 B+ Tree. The database name serves as the table identifier. Only letters, numbers, underscores, and hyphens are allowed for the name.
                 </DialogDescription>
               </DialogHeader>
               <div className="grid gap-4 py-4 max-h-[70vh] overflow-y-auto">
@@ -268,7 +393,7 @@ export function Home() {
                       <FormControl>
                         <Input
                           placeholder="mydb"
-                          disabled={createMutation.isPending}
+                          disabled={isCreating}
                           autoFocus
                           {...field}
                         />
@@ -277,6 +402,20 @@ export function Home() {
                     </FormItem>
                   )}
                 />
+
+                {/* Table Schema Definition - Mandatory */}
+                <div className="space-y-4 pt-2 border-t">
+                  <div>
+                    <h3 className="text-sm font-semibold mb-1">Table Schema Definition <span className="text-destructive">*</span></h3>
+                    <p className="text-xs text-muted-foreground">
+                      Define columns, types, and primary key. Required for all databases.
+                    </p>
+                  </div>
+                  <SchemaBuilder
+                    value={schemaData}
+                    onChange={setSchemaData}
+                  />
+                </div>
 
                 <div className="flex items-center justify-between rounded-lg border p-3">
                   <div className="space-y-0.5">
@@ -290,7 +429,7 @@ export function Home() {
                   <Switch
                     checked={useCustomConfig}
                     onCheckedChange={setUseCustomConfig}
-                    disabled={createMutation.isPending}
+                    disabled={isCreating}
                   />
                 </div>
 
@@ -308,7 +447,7 @@ export function Home() {
                           <Input
                             type="number"
                             placeholder="4"
-                            disabled={createMutation.isPending}
+                            disabled={isCreating}
                             {...field}
                             onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : undefined)}
                             value={field.value ?? ''}
@@ -332,7 +471,7 @@ export function Home() {
                           <Input
                             type="number"
                             placeholder="4096"
-                            disabled={createMutation.isPending}
+                            disabled={isCreating}
                             {...field}
                             onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : undefined)}
                             value={field.value ?? ''}
@@ -356,7 +495,7 @@ export function Home() {
                           <Input
                             type="number"
                             placeholder="100"
-                            disabled={createMutation.isPending}
+                            disabled={isCreating}
                             {...field}
                             onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : undefined)}
                             value={field.value ?? ''}
@@ -385,7 +524,7 @@ export function Home() {
                           <Switch
                             checked={field.value ?? true}
                             onCheckedChange={field.onChange}
-                            disabled={createMutation.isPending}
+                            disabled={isCreating}
                           />
                         </FormControl>
                       </FormItem>
@@ -403,12 +542,15 @@ export function Home() {
                     setUseCustomConfig(false)
                     form.reset()
                   }}
-                  disabled={createMutation.isPending}
+                  disabled={isCreating}
                 >
                   Cancel
                 </Button>
-                <Button type="submit" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? 'Creating...' : 'Create'}
+                <Button 
+                  type="submit" 
+                  disabled={isCreating || !isFormValid}
+                >
+                  {isCreating ? 'Creating...' : 'Create'}
                 </Button>
               </DialogFooter>
             </form>

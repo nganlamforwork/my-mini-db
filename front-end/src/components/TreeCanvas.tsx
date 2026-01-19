@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
-import type { TreeStructure, TreeNode, ExecutionStep } from '@/types/database';
+import type { TreeStructure, TreeNode, ExecutionStep, Schema } from '@/types/database';
+import { formatKey, compareKeys, formatNodeDataForGraph } from '@/lib/keyUtils';
 import { ZoomIn, ZoomOut, Download, RotateCcw, Info, FileImage, FileType, Image as ImageIcon } from 'lucide-react';
 import { Button } from './ui/button';
 import { NodeDetailDialog } from './NodeDetailDialog';
@@ -18,6 +19,7 @@ import {
 
 interface TreeCanvasProps {
   treeData: TreeStructure;
+  schema?: Schema | null; // Schema for rendering node details
   highlightedIds?: number[];
   highlightColor?: string;
   highlightedNodeId?: number | null; // Currently executing step's node
@@ -44,7 +46,8 @@ interface NodePosition {
 }
 
 export const TreeCanvas: React.FC<TreeCanvasProps> = ({ 
-  treeData, 
+  treeData,
+  schema,
   highlightedIds = [], 
   highlightColor = '#3b82f6',
   highlightedNodeId = null,
@@ -69,6 +72,28 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   
   // Real-time edge position tracking - stores current visual positions for edges
   const edgePositionsRef = useRef<Map<string, { startX: number; startY: number; endX: number; endY: number }>>(new Map());
+  
+  // Animation state for promoted key
+  const promotedKeyAnimationRef = useRef<{ startTime: number; duration: number } | null>(null);
+  
+  // Animation state for inserting key (INSERT_ENTRY)
+  // Changed to instant appearance with opacity transition
+  const insertingKeyAnimationRef = useRef<{ startTime: number; opacityTransitionDuration: number } | null>(null);
+  
+  // Helper to extract page ID from node_id (e.g., "N2" -> 2, "page-9" -> 9)
+  const extractPageId = (nodeId?: string | null): number | null => {
+    if (!nodeId) return null;
+    
+    // Handle new format: "N2" -> 2
+    if (nodeId.startsWith('N')) {
+      const match = nodeId.match(/N(\d+)/);
+      return match ? parseInt(match[1], 10) : null;
+    }
+    
+    // Handle legacy format: "page-9" -> 9
+    const match = nodeId.match(/page-(\d+)/);
+    return match ? parseInt(match[1], 10) : null;
+  };
 
   // Helper to draw rounded rectangle with selective corner rounding
   const drawRoundedRect = (
@@ -113,13 +138,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       return '';
     }
 
-    // Extract key values (handle single values and tuples)
-    const keyValues = parentKeys.map(key => {
-      if (key.values.length === 1) {
-        return String(key.values[0].value);
-      }
-      return `(${key.values.map(v => String(v.value)).join(', ')})`;
-    });
+    // Extract key values using formatKey utility for safe handling
+    const keyValues = parentKeys.map(key => formatKey(key)).filter(Boolean);
 
     if (childIndex === 0) {
       // Leftmost edge: Keys < [First Parent Key]
@@ -168,13 +188,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
     // Helper to calculate node width based on keys
     const calculateNodeWidth = (node: any): number => {
-      if (!node) return 100;
-      const keys = node.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-        if (k.values.length === 1) {
-          return String(k.values[0].value);
-        }
-        return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).join(' | ');
+      if (!node || !node.keys || !Array.isArray(node.keys)) return 100;
+      // Use truncated keys for visual width calculation
+      const keyTexts = formatNodeDataForGraph(node.keys);
+      const keys = keyTexts.join(' | ');
       
       // Create a temporary canvas context to measure text
       const tempCanvas = document.createElement('canvas');
@@ -338,14 +355,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       
       // Helper to calculate node width (sum of all key group widths, no gaps)
       const calculateNodeWidth = (nodeData: any): number => {
-        if (!nodeData || !nodeData.keys || nodeData.keys.length === 0) return 100;
+        if (!nodeData || !nodeData.keys || !Array.isArray(nodeData.keys) || nodeData.keys.length === 0) return 100;
         ctx.font = 'bold 14px "JetBrains Mono", monospace';
-        const keyTexts = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-          if (k.values.length === 1) {
-            return String(k.values[0].value);
-          }
-          return `(${k.values.map(v => String(v.value)).join(', ')})`;
-        });
+        // Use truncated keys for width calculation (matches visual rendering)
+        const keyTexts = formatNodeDataForGraph(nodeData.keys);
         const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
         const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
         return Math.max(100, totalKeyWidth);
@@ -440,13 +453,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         // Calculate node width using key groups (same as rendering)
         ctx.font = 'bold 14px "JetBrains Mono", monospace';
         
-        // Prepare key texts for width calculation
-        const keyTexts = parentNodeData.keys.map((key: { values: Array<{ type: string; value: any }> }) => {
-          if (key.values.length === 1) {
-            return String(key.values[0].value);
-          }
-          return `(${key.values.map(v => String(v.value)).join(', ')})`;
-        });
+        // Prepare key texts for width calculation (use truncated keys to match visual rendering)
+        const keyTexts = formatNodeDataForGraph(parentNodeData.keys);
         
         const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
         const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
@@ -543,6 +551,26 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         ctx.stroke();
       });
 
+      // Check if we're inserting a new key (for INSERT_ENTRY animation)
+      // This needs to be checked outside the forEach loop to be accessible later
+      let isInsertingNewKey = false;
+      if (currentStep && currentStep.type === 'INSERT_ENTRY' && highlightedKey && highlightedNodeId !== null) {
+        const targetNodeData = treeData.nodes[highlightedNodeId.toString()];
+        if (targetNodeData) {
+          const keyIndex = targetNodeData.keys.findIndex((k: any) => compareKeys(k, highlightedKey) === 0);
+          if (keyIndex === -1) {
+            // Key not found in node - this means we're inserting a NEW key
+            isInsertingNewKey = true;
+            console.log('[TreeCanvas] INSERT_ENTRY: Key not found in node - will animate insertion:', {
+              highlightedKey,
+              nodeKeyCount: targetNodeData.keys.length,
+              nodeId: highlightedNodeId,
+              stepType: currentStep.type
+            });
+          }
+        }
+      }
+
       // Draw Nodes
       positionsRef.current.forEach(pos => {
         const nodeData = treeData.nodes[pos.id.toString()];
@@ -552,18 +580,33 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         const isHighlighted = highlightedIds.includes(pos.id);
         const isStepHighlighted = highlightedNodeId === pos.id; // Currently executing step's node
         const isOverflow = overflowNodeId === pos.id; // Node in overflow state
+        const isDark = document.documentElement.classList.contains('dark');
         
-        // Prepare keys - format each key individually
+        // Prepare keys - format and truncate for graph visualization
         ctx.font = 'bold 14px "JetBrains Mono", monospace';
-        const keyTexts = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-          if (k.values.length === 1) {
-            return String(k.values[0].value);
+        const keyTexts = formatNodeDataForGraph(nodeData.keys);
+        
+        // Find highlighted key index for INSERT_ENTRY animation (use compareKeys instead of indexOf)
+        // OLD (Buggy): const index = node.keys.indexOf(step.key); // Fails for composite keys
+        // NEW (Correct): Use findIndex with compareKeys function
+        let highlightedKeyIndex: number | null = null;
+        if (highlightedKey && (currentStep?.type === 'INSERT_ENTRY' || currentStep?.type === 'LEAF_FOUND')) {
+          // Use findIndex with compareKeys instead of indexOf (which fails for composite keys)
+          highlightedKeyIndex = nodeData.keys.findIndex((k: any) => compareKeys(k, highlightedKey) === 0);
+          if (highlightedKeyIndex === -1) {
+            // Key not found - it's being inserted (handled by inserting key animation below)
+            highlightedKeyIndex = null;
+          } else {
+            // Key found - it's already in the node, highlight it
+            console.log('[TreeCanvas] INSERT_ENTRY: Found highlighted key at index:', highlightedKeyIndex, {
+              keyText: formatKey(highlightedKey),
+              nodeId: pos.id
+            });
           }
-          return `(${k.values.map(v => String(v.value)).join(', ')})`;
-        });
+        }
         
         // Note: We're using hover-style highlighting (border/shadow) for step highlighting
-        // No need to track individual key indices since we highlight the entire node
+        // For INSERT_ENTRY, we can also highlight the specific key being inserted
         
         // Calculate width for each key group
         const keyWidths = keyTexts.map(keyText => Math.max(60, ctx.measureText(keyText).width + 20));
@@ -584,14 +627,15 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         
         // Root node gets special amber/gold colors
         if (isRoot) {
-          const isDarkMode = document.documentElement.classList.contains('dark');
-          const rootFill = isDarkMode ? '#78350f' : '#fef3c7'; // amber-900/50 or amber-100
-          const rootStroke = isDarkMode ? '#f59e0b' : '#d97706'; // amber-500 or amber-600
+          const rootFill = isDark ? '#78350f' : '#fef3c7'; // amber-900/50 or amber-100
+          const rootStroke = isDark ? '#f59e0b' : '#d97706'; // amber-500 or amber-600
           
           // Draw all key groups filled first (no borders yet)
           keyTexts.forEach((_keyText, idx) => {
             const keyW = keyWidths[idx];
-            ctx.fillStyle = rootFill;
+            // Highlight the specific key being inserted (for INSERT_ENTRY when key already exists in node)
+            const isInsertedKey = highlightedKeyIndex === idx && highlightedKeyIndex !== null && (currentStep?.type === 'INSERT_ENTRY' || currentStep?.type === 'LEAF_FOUND');
+            ctx.fillStyle = isInsertedKey ? (isDark ? '#065f46' : '#a7f3d0') : rootFill; // Green tint for inserted key
             ctx.fillRect(currentKeyX, pos.y - rectH/2, keyW, rectH);
             currentKeyX += keyW;
           });
@@ -607,7 +651,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           // Overflow state takes priority (red highlighting)
           if (isOverflow) {
             ctx.shadowBlur = 20;
-            ctx.shadowColor = isDarkMode ? 'rgba(239, 68, 68, 0.8)' : 'rgba(220, 38, 38, 0.7)';
+            ctx.shadowColor = isDark ? 'rgba(239, 68, 68, 0.8)' : 'rgba(220, 38, 38, 0.7)';
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 0;
           } else if (isHighlighted) {
@@ -617,7 +661,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             ctx.shadowOffsetY = 0;
           } else if (isHovered || isStepHighlighted) {
             ctx.shadowBlur = 12;
-            ctx.shadowColor = isDarkMode ? 'rgba(245, 158, 11, 0.6)' : 'rgba(217, 119, 6, 0.5)';
+            ctx.shadowColor = isDark ? 'rgba(245, 158, 11, 0.6)' : 'rgba(217, 119, 6, 0.5)';
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 2;
           } else {
@@ -628,7 +672,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           
           // Overflow nodes get red border
           const strokeColor = isOverflow 
-            ? (isDarkMode ? '#ef4444' : '#dc2626') // red-500 or red-600
+            ? (isDark ? '#ef4444' : '#dc2626') // red-500 or red-600
             : (isHighlighted ? highlightColor : rootStroke);
           ctx.strokeStyle = strokeColor;
           ctx.lineWidth = lineWidth;
@@ -662,7 +706,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           // Draw all key groups filled first (no borders yet)
           keyTexts.forEach((_keyText, idx) => {
             const keyW = keyWidths[idx];
-            ctx.fillStyle = nodeFill;
+            // Highlight the specific key being inserted (for INSERT_ENTRY when key already exists in node)
+            const isInsertedKey = highlightedKeyIndex === idx && highlightedKeyIndex !== null && (currentStep?.type === 'INSERT_ENTRY' || currentStep?.type === 'LEAF_FOUND');
+            ctx.fillStyle = isInsertedKey ? (isLeaf ? (isDark ? '#065f46' : '#a7f3d0') : (isDark ? '#1e3a8a' : '#bfdbfe')) : nodeFill; // Green/blue tint for inserted key
             ctx.fillRect(currentKeyX, pos.y - rectH/2, keyW, rectH);
             currentKeyX += keyW;
           });
@@ -676,10 +722,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           
           // Set shadow only for outer border - use hover-style for step highlighting
           // Overflow state takes priority (red highlighting)
-          const isDarkMode = document.documentElement.classList.contains('dark');
           if (isOverflow) {
             ctx.shadowBlur = 20;
-            ctx.shadowColor = isDarkMode ? 'rgba(239, 68, 68, 0.8)' : 'rgba(220, 38, 38, 0.7)';
+            ctx.shadowColor = isDark ? 'rgba(239, 68, 68, 0.8)' : 'rgba(220, 38, 38, 0.7)';
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 0;
           } else if (isHighlighted) {
@@ -691,8 +736,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             // Enhanced hover effect with more contrast (same style for hover and step highlighting)
             ctx.shadowBlur = 12; // Bigger shadow
             ctx.shadowColor = isLeaf 
-              ? (isDarkMode ? 'rgba(16, 185, 129, 0.6)' : 'rgba(5, 150, 105, 0.5)') 
-              : (isDarkMode ? 'rgba(100, 116, 139, 0.6)' : 'rgba(71, 85, 105, 0.5)');
+              ? (isDark ? 'rgba(16, 185, 129, 0.6)' : 'rgba(5, 150, 105, 0.5)') 
+              : (isDark ? 'rgba(100, 116, 139, 0.6)' : 'rgba(71, 85, 105, 0.5)');
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 2; // Slight shadow offset for depth
           } else {
@@ -703,7 +748,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           
           // Overflow nodes get red border
           const strokeColor = isOverflow 
-            ? (isDarkMode ? '#ef4444' : '#dc2626') // red-500 or red-600
+            ? (isDark ? '#ef4444' : '#dc2626') // red-500 or red-600
             : (isHighlighted ? highlightColor : (isLeaf ? colors.leafStroke : colors.internalStroke));
           ctx.strokeStyle = strokeColor;
           ctx.lineWidth = lineWidth;
@@ -744,6 +789,13 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         currentKeyX = nodeLeft + padding;
         keyTexts.forEach((keyText, idx) => {
           const keyW = keyWidths[idx];
+          // Highlight inserted key text with stronger color (only if key already exists in node)
+          const isInsertedKey = highlightedKeyIndex === idx && highlightedKeyIndex !== null && (currentStep?.type === 'INSERT_ENTRY' || currentStep?.type === 'LEAF_FOUND');
+          if (isInsertedKey) {
+            ctx.fillStyle = isDark ? '#10b981' : '#059669'; // Emerald green for inserted key text
+          } else {
+            ctx.fillStyle = colors.textPrimary;
+          }
           ctx.fillText(keyText, currentKeyX + keyW / 2, pos.y);
           currentKeyX += keyW;
         });
@@ -754,6 +806,283 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         ctx.fillText(`P${pos.id}`, nodeLeft + 15, pos.y - rectH/2 - 8);
       });
 
+      // Draw Promoted Key Animation (for NODE_SPLIT and PROMOTE_KEY steps)
+      if (currentStep && (currentStep.type === 'NODE_SPLIT' || currentStep.type === 'PROMOTE_KEY')) {
+        const promotedKey = currentStep.separatorKey || currentStep.key || currentStep.metadata?.promotedKey || currentStep.metadata?.separatorKey;
+        
+        // Log NODE_SPLIT details for debugging
+        if (currentStep.type === 'NODE_SPLIT') {
+          console.log('[TreeCanvas] NODE_SPLIT step detected:', {
+            stepId: currentStep.step_id,
+            nodeId: currentStep.node_id,
+            targetId: currentStep.target_id,
+            originalNode: currentStep.originalNode,
+            newNode: currentStep.newNode,
+            newNodes: currentStep.newNodes,
+            metadata: currentStep.metadata,
+            hasPromotedKey: !!promotedKey
+          });
+        }
+        
+        if (promotedKey && highlightedNodeId !== null) {
+          // Initialize animation timing if not already started
+          if (!promotedKeyAnimationRef.current) {
+            // Calculate animation duration based on animation speed (same as step delay)
+            const stepDelay = Math.max(200, 2000 - (animationSpeed * 18));
+            promotedKeyAnimationRef.current = {
+              startTime: Date.now(),
+              duration: stepDelay
+            };
+          }
+          
+          // Get source node position (the node being split)
+          const sourcePos = positionsRef.current.get(highlightedNodeId);
+          
+          // Get target node position (parent node, if available)
+          const targetNodeId = currentStep.target_id || currentStep.targetNodeId;
+          const targetPageId = targetNodeId ? extractPageId(targetNodeId) : null;
+          const targetPos = targetPageId !== null ? positionsRef.current.get(targetPageId) : null;
+          
+          if (sourcePos) {
+            // Format the promoted key safely using formatKey utility
+            const promotedKeyText = formatKey(promotedKey);
+            
+            if (promotedKeyText) {
+              ctx.save();
+              ctx.font = 'bold 14px "JetBrains Mono", monospace';
+              
+              // Calculate promoted key width using measureText (proper geometry calculation)
+              const textWidth = ctx.measureText(promotedKeyText).width;
+              const promotedKeyWidth = Math.max(60, textWidth + 20);
+              const promotedKeyHeight = 40;
+              
+              // Calculate source position (center of the split node)
+              const sourceX = sourcePos.x;
+              const sourceY = sourcePos.y;
+              
+              // Calculate target position (if parent exists, use it; otherwise animate upward)
+              let targetX = sourceX;
+              let targetY = sourceY - 100; // Default: animate upward
+              
+              if (targetPos) {
+                targetX = targetPos.x;
+                targetY = targetPos.y + 25; // Bottom of parent node
+              }
+              
+              // Calculate animation progress based on elapsed time
+              const now = Date.now();
+              const elapsed = now - (promotedKeyAnimationRef.current.startTime || now);
+              const progress = Math.min(1, Math.max(0, elapsed / promotedKeyAnimationRef.current.duration));
+              
+              // Use easing function for smoother animation
+              const easeInOutQuad = (t: number) => t < 0.5 ? 2 * t * t : -1 + (4 - 2 * t) * t;
+              const easedProgress = easeInOutQuad(progress);
+              
+              // Interpolate position
+              const currentX = sourceX + (targetX - sourceX) * easedProgress;
+              const currentY = sourceY + (targetY - sourceY) * easedProgress;
+              
+              // Draw promoted key with glow effect
+              const isDark = document.documentElement.classList.contains('dark');
+              ctx.shadowBlur = 15;
+              ctx.shadowColor = isDark ? 'rgba(245, 158, 11, 0.8)' : 'rgba(217, 119, 6, 0.7)'; // Amber glow
+              ctx.shadowOffsetX = 0;
+              ctx.shadowOffsetY = 0;
+              
+              // Draw background
+              const keyLeft = currentX - promotedKeyWidth / 2;
+              const keyTop = currentY - promotedKeyHeight / 2;
+              ctx.fillStyle = isDark ? '#78350f' : '#fef3c7'; // Amber background
+              ctx.strokeStyle = isDark ? '#f59e0b' : '#d97706'; // Amber border
+              ctx.lineWidth = 2;
+              
+              // Draw rounded rectangle
+              const radius = 6;
+              ctx.beginPath();
+              ctx.moveTo(keyLeft + radius, keyTop);
+              ctx.lineTo(keyLeft + promotedKeyWidth - radius, keyTop);
+              ctx.arcTo(keyLeft + promotedKeyWidth, keyTop, keyLeft + promotedKeyWidth, keyTop + radius, radius);
+              ctx.lineTo(keyLeft + promotedKeyWidth, keyTop + promotedKeyHeight - radius);
+              ctx.arcTo(keyLeft + promotedKeyWidth, keyTop + promotedKeyHeight, keyLeft + promotedKeyWidth - radius, keyTop + promotedKeyHeight, radius);
+              ctx.lineTo(keyLeft + radius, keyTop + promotedKeyHeight);
+              ctx.arcTo(keyLeft, keyTop + promotedKeyHeight, keyLeft, keyTop + promotedKeyHeight - radius, radius);
+              ctx.lineTo(keyLeft, keyTop + radius);
+              ctx.arcTo(keyLeft, keyTop, keyLeft + radius, keyTop, radius);
+              ctx.closePath();
+              ctx.fill();
+              ctx.stroke();
+              
+              // Reset shadow
+              ctx.shadowBlur = 0;
+              ctx.shadowOffsetX = 0;
+              ctx.shadowOffsetY = 0;
+              
+              // Draw text
+              ctx.fillStyle = colors.textPrimary;
+              ctx.textAlign = 'center';
+              ctx.textBaseline = 'middle';
+              ctx.fillText(promotedKeyText, currentX, currentY);
+              
+              ctx.restore();
+              
+              // Log for debugging (only once per step)
+              if (progress < 0.1) {
+                console.log('[TreeCanvas] Drawing promoted key animation:', {
+                  stepType: currentStep.type,
+                  promotedKeyText,
+                  promotedKeyWidth,
+                  sourcePos: { x: sourceX, y: sourceY },
+                  targetPos: { x: targetX, y: targetY },
+                  currentPos: { x: currentX, y: currentY },
+                  progress: easedProgress,
+                  elapsed,
+                  duration: promotedKeyAnimationRef.current.duration
+                });
+              }
+            } else {
+              console.warn('[TreeCanvas] Promoted key exists but formatKey returned empty:', promotedKey);
+            }
+          } else {
+            console.warn('[TreeCanvas] Source node position not found for promoted key animation:', highlightedNodeId);
+          }
+        } else if (currentStep.type === 'NODE_SPLIT' || currentStep.type === 'PROMOTE_KEY') {
+          console.warn('[TreeCanvas] NODE_SPLIT/PROMOTE_KEY step but no promoted key found:', {
+            stepType: currentStep.type,
+            hasSeparatorKey: !!currentStep.separatorKey,
+            hasKey: !!currentStep.key,
+            metadata: currentStep.metadata,
+            fullStep: currentStep
+          });
+        }
+      } else {
+        // Reset animation ref when step changes
+        if (promotedKeyAnimationRef.current) {
+          promotedKeyAnimationRef.current = null;
+        }
+      }
+      
+      // Draw Inserting Key Animation (for INSERT_ENTRY when key is not yet in node)
+      // REFACTORED: Instant appearance with opacity transition, no gradual entry
+      if (currentStep && currentStep.type === 'INSERT_ENTRY' && highlightedKey && highlightedNodeId !== null && isInsertingNewKey) {
+        // Initialize animation timing if not already started
+        if (!insertingKeyAnimationRef.current) {
+          // Brief opacity transition duration (much shorter than before)
+          const opacityTransitionDuration = 150; // 150ms for opacity snap
+          insertingKeyAnimationRef.current = {
+            startTime: Date.now(),
+            opacityTransitionDuration: opacityTransitionDuration
+          };
+        }
+        
+        // Get target node position (the node we're inserting into)
+        const targetPos = positionsRef.current.get(highlightedNodeId);
+        
+        if (targetPos) {
+          // Format the inserting key safely using formatKey utility
+          const insertingKeyText = formatKey(highlightedKey);
+          
+          if (insertingKeyText) {
+            ctx.save();
+            ctx.font = 'bold 14px "JetBrains Mono", monospace';
+            
+            // Calculate inserting key width using measureText (proper geometry calculation)
+            const textWidth = ctx.measureText(insertingKeyText).width;
+            const insertingKeyWidth = Math.max(60, textWidth + 20);
+            const insertingKeyHeight = 40;
+            
+            // Calculate target position (center of the target node) - INSTANT POSITION, NO INTERPOLATION
+            const targetX = targetPos.x;
+            const targetY = targetPos.y;
+            
+            // Calculate opacity transition: start at 0.5 (temporary state), snap to 1.0 after brief moment
+            const now = Date.now();
+            const elapsed = now - (insertingKeyAnimationRef.current.startTime || now);
+            const opacityProgress = Math.min(1, Math.max(0, elapsed / insertingKeyAnimationRef.current.opacityTransitionDuration));
+            
+            // Opacity: start at 0.5 (temporary state), then snap to 1.0
+            // Use a step function: opacity stays at 0.5 for a brief moment, then snaps to 1.0
+            const initialOpacity = 0.5;
+            const finalOpacity = 1.0;
+            const opacitySnapThreshold = 0.3; // After 30% of transition duration, snap to full opacity
+            const currentOpacity = opacityProgress < opacitySnapThreshold 
+              ? initialOpacity 
+              : finalOpacity; // Instant snap, no gradual transition
+            
+            // Draw inserting key with glow effect (reduced when at temporary opacity)
+            const isDark = document.documentElement.classList.contains('dark');
+            ctx.shadowBlur = currentOpacity < 1.0 ? 8 : 15; // Less glow during temporary state
+            ctx.shadowColor = isDark ? 'rgba(16, 185, 129, 0.8)' : 'rgba(5, 150, 105, 0.7)'; // Emerald green glow
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+            
+            // Draw background with opacity
+            const keyLeft = targetX - insertingKeyWidth / 2;
+            const keyTop = targetY - insertingKeyHeight / 2;
+            ctx.globalAlpha = currentOpacity;
+            ctx.fillStyle = isDark ? '#065f46' : '#a7f3d0'; // Emerald green background
+            ctx.strokeStyle = isDark ? '#10b981' : '#059669'; // Emerald border
+            ctx.lineWidth = 2;
+            
+            // Draw rounded rectangle
+            const radius = 6;
+            ctx.beginPath();
+            ctx.moveTo(keyLeft + radius, keyTop);
+            ctx.lineTo(keyLeft + insertingKeyWidth - radius, keyTop);
+            ctx.arcTo(keyLeft + insertingKeyWidth, keyTop, keyLeft + insertingKeyWidth, keyTop + radius, radius);
+            ctx.lineTo(keyLeft + insertingKeyWidth, keyTop + insertingKeyHeight - radius);
+            ctx.arcTo(keyLeft + insertingKeyWidth, keyTop + insertingKeyHeight, keyLeft + insertingKeyWidth - radius, keyTop + insertingKeyHeight, radius);
+            ctx.lineTo(keyLeft + radius, keyTop + insertingKeyHeight);
+            ctx.arcTo(keyLeft, keyTop + insertingKeyHeight, keyLeft, keyTop + insertingKeyHeight - radius, radius);
+            ctx.lineTo(keyLeft, keyTop + radius);
+            ctx.arcTo(keyLeft, keyTop, keyLeft + radius, keyTop, radius);
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+            
+            // Reset shadow and opacity
+            ctx.shadowBlur = 0;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 0;
+            
+            // Draw text with opacity
+            ctx.fillStyle = colors.textPrimary;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(insertingKeyText, targetX, targetY);
+            
+            ctx.globalAlpha = 1.0; // Reset global alpha
+            ctx.restore();
+            
+            // Log for debugging (only once per step)
+            if (opacityProgress < 0.1) {
+              console.log('[TreeCanvas] Drawing inserting key (instant appearance):', {
+                stepType: currentStep.type,
+                insertingKeyText,
+                insertingKeyWidth,
+                targetPos: { x: targetX, y: targetY },
+                currentOpacity,
+                opacityProgress,
+                elapsed,
+                opacityTransitionDuration: insertingKeyAnimationRef.current.opacityTransitionDuration
+              });
+            }
+            
+            // After opacity transition completes, the key is fully inserted
+            // Overflow detection will happen automatically via the next step (OVERFLOW_DETECTED or NODE_SPLIT)
+            // The step animator will handle triggering the split/promote animation sequence
+          } else {
+            console.warn('[TreeCanvas] Inserting key exists but formatKey returned empty:', highlightedKey);
+          }
+        } else {
+          console.warn('[TreeCanvas] Target node position not found for inserting key animation:', highlightedNodeId);
+        }
+      } else {
+        // Reset animation ref when step changes
+        if (insertingKeyAnimationRef.current) {
+          insertingKeyAnimationRef.current = null;
+        }
+      }
+      
       ctx.restore();
       
       // Continue animation loop if nodes are still animating or if we need to keep rendering
@@ -777,7 +1106,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       cancelAnimationFrame(animationFrame);
       if (themeObserver) themeObserver.disconnect();
     };
-  }, [layout, camera, treeData, highlightedIds, highlightColor, isEmptyTree, hoveredEdge, tooltipPosition, highlightedNodeId, highlightedKey, overflowNodeId, currentStep]);
+  }, [layout, camera, treeData, highlightedIds, highlightColor, isEmptyTree, hoveredEdge, tooltipPosition, highlightedNodeId, highlightedKey, overflowNodeId, currentStep, animationSpeed]);
 
   // Handle step completion callback after animation duration
   useEffect(() => {
@@ -810,23 +1139,17 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       if (!nodeData) continue;
       if (!nodeData.keys || !Array.isArray(nodeData.keys) || nodeData.keys.length === 0) continue;
 
-      const keys = nodeData.keys
-        .map((k: { values?: Array<{ type: string; value: any }> }) => {
-          if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
-          if (k.values.length === 1) {
-            return String(k.values[0].value);
-          }
-          return `(${k.values.map(v => String(v.value)).join(', ')})`;
-        })
-        .filter(Boolean)
-        .join(' | ');
-      
-      if (!keys || keys.length === 0) continue;
+      // Use truncated keys for width calculation (matches visual rendering)
+      // Note: The actual node data passed to modal is still full (looked up by nodeId)
+      const keyTexts = formatNodeDataForGraph(nodeData.keys);
+      if (keyTexts.length === 0) continue;
 
       const tempCtx = document.createElement('canvas').getContext('2d');
       if (!tempCtx) continue;
       tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
-      const rectW = Math.max(100, tempCtx.measureText(keys).width + 40);
+      const keyWidths = keyTexts.map((keyText: string) => Math.max(60, tempCtx.measureText(keyText).width + 20));
+      const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+      const rectW = Math.max(100, totalKeyWidth);
       const rectH = 50;
 
       // Check if click is within node bounds
@@ -895,12 +1218,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       if (!tempCtx) continue;
       tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
 
-      const keyTexts = parentNodeData.keys.map((key: { values: Array<{ type: string; value: any }> }) => {
-        if (key.values.length === 1) {
-          return String(key.values[0].value);
-        }
-        return `(${key.values.map(v => String(v.value)).join(', ')})`;
-      });
+      // Use truncated keys for edge hover calculation (matches visual rendering)
+      const keyTexts = formatNodeDataForGraph(parentNodeData.keys);
 
       const keyWidths = keyTexts.map((keyText: string) => Math.max(60, tempCtx.measureText(keyText).width + 20));
       const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
@@ -1118,18 +1437,14 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         if (pos) {
           const nodeData = treeData.nodes[node.id.toString()];
           if (nodeData && nodeData.keys && Array.isArray(nodeData.keys) && nodeData.keys.length > 0) {
-            const keys = nodeData.keys
-              .map((k: { values?: Array<{ type: string; value: any }> }) => {
-                if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
-                if (k.values.length === 1) {
-                  return String(k.values[0].value);
-                }
-            return `(${k.values.map(v => String(v.value)).join(', ')})`;
-          }).join(' | ');
+            // Use truncated keys for bounding box calculation (matches visual rendering)
+            const keyTexts = formatNodeDataForGraph(nodeData.keys);
           const tempCtx = document.createElement('canvas').getContext('2d');
           if (tempCtx) {
             tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
-            const rectW = Math.max(100, tempCtx.measureText(keys).width + 40);
+            const keyWidths = keyTexts.map((keyText: string) => Math.max(60, tempCtx.measureText(keyText).width + 20));
+            const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+            const rectW = Math.max(100, totalKeyWidth);
             const rectH = 50;
             minX = Math.min(minX, pos.x - rectW/2);
             maxX = Math.max(maxX, pos.x + rectW/2);
@@ -1190,15 +1505,13 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     ctx.setLineDash([5, 5]);
     
     const calculateNodeWidthForDownload = (nodeData: any): number => {
-      if (!nodeData) return 100;
-      const keys = nodeData.keys.map((k: { values: Array<{ type: string; value: any }> }) => {
-        if (k.values.length === 1) {
-          return String(k.values[0].value);
-        }
-        return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).join(' | ');
+      if (!nodeData || !nodeData.keys || !Array.isArray(nodeData.keys)) return 100;
+      // Use truncated keys for visual width calculation
+      const keyTexts = formatNodeDataForGraph(nodeData.keys);
       ctx.font = 'bold 14px "JetBrains Mono", monospace';
-      return Math.max(100, ctx.measureText(keys).width + 40);
+      const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
+      const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+      return Math.max(100, totalKeyWidth);
     };
     
     layout.forEach(node => {
@@ -1267,13 +1580,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       // Calculate node width using key groups (same as rendering)
       ctx.font = 'bold 14px "JetBrains Mono", monospace';
       
-      // Prepare key texts for width calculation
-      const keyTexts = parentNodeData.keys.map((key: { values: Array<{ type: string; value: any }> }) => {
-        if (key.values.length === 1) {
-          return String(key.values[0].value);
-        }
-        return `(${key.values.map(v => String(v.value)).join(', ')})`;
-      });
+      // Prepare key texts for width calculation (use truncated keys for visual rendering)
+      const keyTexts = formatNodeDataForGraph(parentNodeData.keys);
       
       const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
       const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
@@ -1347,15 +1655,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
       const isLeaf = nodeData.type === 'leaf';
       
-      // Prepare keys - format each key individually
+      // Prepare keys - format and truncate for graph visualization only
       ctx.font = 'bold 14px "JetBrains Mono", monospace';
-      const keyTexts = nodeData.keys.map((k: { values?: Array<{ type: string; value: any }> }) => {
-        if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
-        if (k.values.length === 1) {
-          return String(k.values[0].value);
-        }
-        return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).filter(Boolean);
+      const keyTexts = formatNodeDataForGraph(nodeData.keys);
       if (keyTexts.length === 0) return;
 
       // Calculate width for each key group
@@ -1518,13 +1820,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       if (!tempCtx) return;
       tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
       
-      // Prepare key texts for width calculation
-      const keyTexts = parentNodeData.keys.map((key: { values: Array<{ type: string; value: any }> }) => {
-        if (key.values.length === 1) {
-          return String(key.values[0].value);
-        }
-        return `(${key.values.map(v => String(v.value)).join(', ')})`;
-      });
+      // Prepare key texts for width calculation (use truncated keys for visual rendering)
+      const keyTexts = formatNodeDataForGraph(parentNodeData.keys);
       
       const keyWidths = keyTexts.map((keyText: string) => Math.max(60, tempCtx.measureText(keyText).width + 20));
       const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
@@ -1610,27 +1907,18 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       if (!nodeData.keys || !Array.isArray(nodeData.keys) || nodeData.keys.length === 0) return;
       if (!nextNodeData.keys || !Array.isArray(nextNodeData.keys) || nextNodeData.keys.length === 0) return;
       
-      const keys1 = nodeData.keys
-        .map((k: { values?: Array<{ type: string; value: any }> }) => {
-          if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
-          if (k.values.length === 1) return String(k.values[0].value);
-          return `(${k.values.map(v => String(v.value)).join(', ')})`;
-        })
-        .filter(Boolean)
-        .join(' | ');
-      const keys2 = nextNodeData.keys
-        .map((k: { values?: Array<{ type: string; value: any }> }) => {
-          if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
-          if (k.values.length === 1) return String(k.values[0].value);
-          return `(${k.values.map(v => String(v.value)).join(', ')})`;
-        })
-        .filter(Boolean)
-        .join(' | ');
-      if (!keys1 || keys1.length === 0 || !keys2 || keys2.length === 0) return;
+      // Use truncated keys for SVG export (matches visual rendering)
+      const keyTexts1 = formatNodeDataForGraph(nodeData.keys);
+      const keyTexts2 = formatNodeDataForGraph(nextNodeData.keys);
+      if (keyTexts1.length === 0 || keyTexts2.length === 0) return;
       
       tempCtx.font = 'bold 14px "JetBrains Mono", monospace';
-      const nodeWidth1 = Math.max(100, tempCtx.measureText(keys1).width + 40);
-      const nodeWidth2 = Math.max(100, tempCtx.measureText(keys2).width + 40);
+      const keyWidths1 = keyTexts1.map((keyText: string) => Math.max(60, tempCtx.measureText(keyText).width + 20));
+      const keyWidths2 = keyTexts2.map((keyText: string) => Math.max(60, tempCtx.measureText(keyText).width + 20));
+      const totalKeyWidth1 = keyWidths1.reduce((sum: number, w: number) => sum + w, 0);
+      const totalKeyWidth2 = keyWidths2.reduce((sum: number, w: number) => sum + w, 0);
+      const nodeWidth1 = Math.max(100, totalKeyWidth1);
+      const nodeWidth2 = Math.max(100, totalKeyWidth2);
       
       const x1 = padding - minX + pos.x + nodeWidth1 / 2;
       const y1 = padding - minY + pos.y;
@@ -1648,14 +1936,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
       const isLeaf = nodeData.type === 'leaf';
       
-      // Prepare keys - format each key individually
-      const keyTexts = nodeData.keys.map((k: { values?: Array<{ type: string; value: any }> }) => {
-        if (!k || !k.values || !Array.isArray(k.values) || k.values.length === 0) return '';
-        if (k.values.length === 1) {
-          return String(k.values[0].value);
-        }
-        return `(${k.values.map(v => String(v.value)).join(', ')})`;
-      }).filter(Boolean);
+      // Prepare keys - format and truncate for graph visualization
+      const keyTexts = formatNodeDataForGraph(nodeData.keys);
       if (keyTexts.length === 0) return;
 
       const tempCtx = document.createElement('canvas').getContext('2d');
@@ -1878,6 +2160,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       {/* Node Detail Dialog */}
       <NodeDetailDialog
         node={selectedNode}
+        schema={schema}
         isRoot={selectedNode?.pageId === treeData.rootPage}
         open={dialogOpen}
         onOpenChange={setDialogOpen}

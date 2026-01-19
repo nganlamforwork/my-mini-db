@@ -23,6 +23,7 @@ type BPlusTree struct {
 	txManager *transaction.TransactionManager
 	wal       *transaction.WALManager
 	recorder  StepRecorder // Optional step recorder for operation visualization
+	schema    *storage.Schema // Optional schema for schema-enforced operations
 }
 
 const MAX_KEYS = page.ORDER - 1
@@ -47,6 +48,16 @@ func (tree *BPlusTree) SetRecorder(recorder StepRecorder) {
 // GetRecorder returns the current step recorder
 func (tree *BPlusTree) GetRecorder() StepRecorder {
 	return tree.recorder
+}
+
+// SetSchema sets the schema for this tree
+func (tree *BPlusTree) SetSchema(schema *storage.Schema) {
+	tree.schema = schema
+}
+
+// GetSchema returns the current schema (may be nil)
+func (tree *BPlusTree) GetSchema() *storage.Schema {
+	return tree.schema
 }
 
 // nodeID converts a page ID to a stable node identifier string
