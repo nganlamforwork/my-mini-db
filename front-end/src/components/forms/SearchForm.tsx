@@ -1,60 +1,82 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Plus } from 'lucide-react';
-import { BaseFormFields, type ColumnInput } from './BaseFormFields';
-import { validateValue, parseValue, createNewColumn } from './formUtils';
-import type { ColumnType } from '@/types/database';
+import { SchemaFormFields, type FieldValue } from './SchemaFormFields';
+import { formValuesToRowData, validateRequiredFields, validateField } from './schemaFormUtils';
+import type { Schema } from '@/types/database';
 
 interface SearchFormProps {
-  onSubmit: (key: { values: Array<{ type: ColumnType; value: any }> }) => void;
+  schema: Schema | null;
+  onSubmit: (keyData: Record<string, any>) => void;
 }
 
-export const SearchForm: React.FC<SearchFormProps> = ({ onSubmit }) => {
-  const [keyColumns, setKeyColumns] = useState<ColumnInput[]>([createNewColumn('int')]);
+export const SearchForm: React.FC<SearchFormProps> = ({ schema, onSubmit }) => {
+  const [values, setValues] = useState<Record<string, FieldValue>>({});
 
-  const keyValidation = useMemo(() => {
-    return keyColumns.map(col => validateValue(col.type, col.value));
-  }, [keyColumns]);
+  // Initialize values when schema changes (only primary key columns)
+  useEffect(() => {
+    if (schema) {
+      const initialValues: Record<string, FieldValue> = {};
+      for (const pkCol of schema.primaryKey) {
+        initialValues[pkCol] = '';
+      }
+      setValues(initialValues);
+    }
+  }, [schema]);
+
+  const validations = useMemo(() => {
+    if (!schema) return {};
+    // Only validate primary key fields
+    const pkValidations: Record<string, { valid: boolean; error?: string }> = {};
+    for (const pkCol of schema.primaryKey) {
+      const column = schema.columns.find(col => col.name === pkCol);
+      if (column) {
+        const value = values[pkCol] || '';
+        pkValidations[pkCol] = validateField(column, value, true);
+      }
+    }
+    return pkValidations;
+  }, [schema, values]);
 
   const isFormValid = useMemo(() => {
-    return keyValidation.every(v => v.valid);
-  }, [keyValidation]);
+    if (!schema) return false;
+    // All primary key fields must be filled and valid
+    const allRequiredFilled = validateRequiredFields(schema, values, schema.primaryKey);
+    const allValid = Object.values(validations).every(v => v.valid);
+    return allRequiredFilled && allValid;
+  }, [schema, values, validations]);
 
   const handleSubmit = () => {
-    if (!isFormValid) return;
+    if (!schema || !isFormValid) return;
 
-    const key = {
-      values: keyColumns.map(col => ({
-        type: col.type,
-        value: parseValue(col.type, col.value)
-      }))
-    };
-
-    onSubmit(key);
+    // Only include primary key fields
+    const keyData = formValuesToRowData(schema, values, false);
+    onSubmit(keyData);
   };
+
+  if (!schema) {
+    return (
+      <div className="text-sm text-muted-foreground text-center py-8">
+        Database schema not available. Please create database with schema first.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* Key Section */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <Label className="text-sm font-semibold">Composite Key</Label>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setKeyColumns([...keyColumns, createNewColumn()])}
-            className="h-7 text-xs"
-          >
-            <Plus size={12} className="mr-1" /> Add Column
-          </Button>
-        </div>
-        <BaseFormFields
-          columns={keyColumns}
-          onColumnsChange={setKeyColumns}
-          validations={keyValidation}
+        <Label className="text-sm font-semibold">Primary Key</Label>
+        <SchemaFormFields
+          schema={schema}
+          values={values}
+          onValuesChange={setValues}
+          requiredFields={schema.primaryKey}
+          showOptionalFields={false}
+          validations={validations}
         />
+        <p className="text-xs text-muted-foreground">
+          All primary key fields are required.
+        </p>
       </div>
 
       <div className="flex justify-end gap-2 pt-4">

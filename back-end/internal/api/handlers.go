@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+
+	"bplustree/internal/storage"
 )
 
 // APIHandler handles all API requests
@@ -50,6 +52,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleDeleteDatabase(w, r, parts[1])
 	case r.Method == "DELETE" && len(parts) == 1 && parts[0] == "databases":
 		h.handleDeleteAllDatabases(w, r)
+	case r.Method == "POST" && len(parts) == 1 && parts[0] == "databases" && r.URL.Query().Get("cleanup") == "true":
+		h.handleCleanupAllDatabases(w, r)
 	case r.Method == "POST" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "insert":
 		h.handleInsert(w, r, parts[1])
 	case r.Method == "POST" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "update":
@@ -86,10 +90,17 @@ func (h *APIHandler) handleListDatabases(w http.ResponseWriter, r *http.Request)
 }
 
 // handleCreateDatabase creates a new database
+// Architecture: 1 Database = 1 Table = 1 B+ Tree
+// Schema is mandatory - columns and primaryKey must be provided
 func (h *APIHandler) handleCreateDatabase(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name   string          `json:"name"`
-		Config DatabaseConfig  `json:"config,omitempty"`
+		Name        string          `json:"name"`
+		Config      DatabaseConfig  `json:"config,omitempty"`
+		Columns     []struct {
+			Name string `json:"name"`
+			Type string `json:"type"` // "INT", "STRING", "FLOAT", "BOOL"
+		} `json:"columns"`
+		PrimaryKey  []string        `json:"primaryKey"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -102,15 +113,73 @@ func (h *APIHandler) handleCreateDatabase(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if err := h.dbManager.CreateDatabase(req.Name, req.Config); err != nil {
+	// Schema is mandatory - validate columns and primaryKey
+	if len(req.Columns) == 0 {
+		writeError(w, http.StatusBadRequest, "At least one column is required")
+		return
+	}
+
+	if len(req.PrimaryKey) == 0 {
+		writeError(w, http.StatusBadRequest, "At least one primary key column is required")
+		return
+	}
+
+	// Build schema from columns and primaryKey
+	columnDefs := make([]storage.ColumnDefinition, len(req.Columns))
+	for i, col := range req.Columns {
+		var colType storage.ColumnType
+		switch col.Type {
+		case "INT":
+			colType = storage.TypeInt
+		case "STRING":
+			colType = storage.TypeString
+		case "FLOAT":
+			colType = storage.TypeFloat
+		case "BOOL":
+			colType = storage.TypeBool
+		default:
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid column type '%s'. Must be INT, STRING, FLOAT, or BOOL", col.Type))
+			return
+		}
+		columnDefs[i] = storage.ColumnDefinition{
+			Name: col.Name,
+			Type: colType,
+		}
+	}
+
+	schema, err := storage.NewSchema(columnDefs, req.PrimaryKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid schema: %v", err))
+		return
+	}
+
+	// Verify all primary key columns exist in columns
+	columnNames := make(map[string]bool)
+	for _, col := range columnDefs {
+		columnNames[col.Name] = true
+	}
+	for _, pkCol := range req.PrimaryKey {
+		if !columnNames[pkCol] {
+			writeError(w, http.StatusBadRequest, fmt.Sprintf("Primary key column '%s' does not exist in columns", pkCol))
+			return
+		}
+	}
+
+	if err := h.dbManager.CreateDatabase(req.Name, req.Config, schema); err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSONResponse(w, http.StatusCreated, map[string]interface{}{
+	response := map[string]interface{}{
 		"success": true,
 		"name":    req.Name,
-	})
+		"schema": map[string]interface{}{
+			"columns": req.Columns,
+			"primaryKey": req.PrimaryKey,
+		},
+	}
+
+	writeJSONResponse(w, http.StatusCreated, response)
 }
 
 // handleConnectDatabase connects to an existing database (loads from disk)
@@ -208,33 +277,59 @@ func (h *APIHandler) handleDeleteAllDatabases(w http.ResponseWriter, r *http.Req
 	})
 }
 
-// handleInsert handles insert operations
-func (h *APIHandler) handleInsert(w http.ResponseWriter, r *http.Request, dbName string) {
-	var req struct {
-		Key   JSONCompositeKey `json:"key"`
-		Value JSONRecord       `json:"value"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+// handleCleanupAllDatabases wipes all database files (.db, .wal, .schema.json) from disk
+// This is useful for cleaning up incompatible data structures
+func (h *APIHandler) handleCleanupAllDatabases(w http.ResponseWriter, r *http.Request) {
+	if err := h.dbManager.CleanupAllDatabases(); err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	writeJSONResponse(w, http.StatusOK, map[string]interface{}{
+		"success": true,
+		"message": "All database files cleaned up (.db, .wal, .schema.json)",
+	})
+}
+
+// handleInsert handles insert operations
+// Accepts row data as JSON object, extracts key using schema
+func (h *APIHandler) handleInsert(w http.ResponseWriter, r *http.Request, dbName string) {
 	db, err := h.dbManager.GetDatabase(dbName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	key, err := FromJSONCompositeKey(req.Key)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid key: %v", err))
+	// Check if database has schema
+	if db.Schema == nil {
+		writeError(w, http.StatusBadRequest, "Database does not have a schema. Please create database with schema first.")
 		return
 	}
 
-	value, err := FromJSONRecord(req.Value)
+	// Decode row data as map[string]interface{}
+	var rowData map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&rowData); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+
+	// Validate row against schema
+	if err := db.Schema.ValidateRow(rowData); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Row validation failed: %v", err))
+		return
+	}
+
+	// Extract key from row using schema
+	key, err := db.Schema.ExtractKey(rowData)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid value: %v", err))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract key: %v", err))
+		return
+	}
+
+	// Convert row to Record
+	value, err := db.Schema.RowToRecord(rowData)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to convert row to record: %v", err))
 		return
 	}
 
@@ -309,25 +404,32 @@ func (h *APIHandler) handleUpdate(w http.ResponseWriter, r *http.Request, dbName
 }
 
 // handleDelete handles delete operations
+// Accepts composite key components as JSON object, constructs key using schema
+// Only validates primary key fields, ignores non-key attributes
 func (h *APIHandler) handleDelete(w http.ResponseWriter, r *http.Request, dbName string) {
-	var req struct {
-		Key JSONCompositeKey `json:"key"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
-		return
-	}
-
 	db, err := h.dbManager.GetDatabase(dbName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	key, err := FromJSONCompositeKey(req.Key)
+	// Check if database has schema
+	if db.Schema == nil {
+		writeError(w, http.StatusBadRequest, "Database does not have a schema. Please create database with schema first.")
+		return
+	}
+
+	// Decode key components as map[string]interface{}
+	var keyData map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&keyData); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+
+	// Extract key from key components using schema (key-only validation)
+	key, err := db.Schema.ExtractKeyFromKeyData(keyData)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid key: %v", err))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract key: %v", err))
 		return
 	}
 
@@ -352,25 +454,32 @@ func (h *APIHandler) handleDelete(w http.ResponseWriter, r *http.Request, dbName
 }
 
 // handleSearch handles search operations
+// Accepts composite key components as JSON object, constructs key using schema
+// Only validates primary key fields, ignores non-key attributes
 func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request, dbName string) {
-	var req struct {
-		Key JSONCompositeKey `json:"key"`
-	}
-
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
-		return
-	}
-
 	db, err := h.dbManager.GetDatabase(dbName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	key, err := FromJSONCompositeKey(req.Key)
+	// Check if database has schema
+	if db.Schema == nil {
+		writeError(w, http.StatusBadRequest, "Database does not have a schema. Please create database with schema first.")
+		return
+	}
+
+	// Decode key components as map[string]interface{}
+	var keyData map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&keyData); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+
+	// Extract key from key components using schema (key-only validation)
+	key, err := db.Schema.ExtractKeyFromKeyData(keyData)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid key: %v", err))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract key: %v", err))
 		return
 	}
 
@@ -397,10 +506,12 @@ func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request, dbName
 }
 
 // handleRangeQuery handles range query operations
+// Accepts key component maps (like Search/Delete), constructs keys using schema
+// Only validates primary key fields, ignores non-key attributes
 func (h *APIHandler) handleRangeQuery(w http.ResponseWriter, r *http.Request, dbName string) {
 	var req struct {
-		StartKey JSONCompositeKey `json:"startKey"`
-		EndKey   JSONCompositeKey `json:"endKey"`
+		StartKey map[string]interface{} `json:"startKey"`
+		EndKey   map[string]interface{} `json:"endKey"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -414,15 +525,22 @@ func (h *APIHandler) handleRangeQuery(w http.ResponseWriter, r *http.Request, db
 		return
 	}
 
-	startKey, err := FromJSONCompositeKey(req.StartKey)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid startKey: %v", err))
+	// Check if database has schema
+	if db.Schema == nil {
+		writeError(w, http.StatusBadRequest, "Database does not have a schema. Please create database with schema first.")
 		return
 	}
 
-	endKey, err := FromJSONCompositeKey(req.EndKey)
+	// Extract keys from key component maps using schema (key-only validation)
+	startKey, err := db.Schema.ExtractKeyFromKeyData(req.StartKey)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid endKey: %v", err))
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract startKey: %v", err))
+		return
+	}
+
+	endKey, err := db.Schema.ExtractKeyFromKeyData(req.EndKey)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract endKey: %v", err))
 		return
 	}
 
@@ -457,16 +575,20 @@ func (h *APIHandler) handleRangeQuery(w http.ResponseWriter, r *http.Request, db
 }
 
 // handleGetTreeStructure returns tree structure for visualization
+// Architecture: 1 Database = 1 Table = 1 B+ Tree
+// Route: GET /api/databases/:dbName/tree
 func (h *APIHandler) handleGetTreeStructure(w http.ResponseWriter, r *http.Request, dbName string) {
+	// Get the database instance (must be connected)
 	db, err := h.dbManager.GetDatabase(dbName)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeError(w, http.StatusNotFound, fmt.Sprintf("Database '%s' not found or not connected. Please connect the database first.", dbName))
 		return
 	}
 
+	// Get tree structure from the single B+ Tree associated with this database
 	tree, err := GetTreeStructure(db.Tree)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get tree structure: %v", err))
 		return
 	}
 

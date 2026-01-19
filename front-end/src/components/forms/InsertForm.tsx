@@ -1,95 +1,74 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
-import { Plus } from 'lucide-react';
-import { BaseFormFields, type ColumnInput } from './BaseFormFields';
-import { validateValue, parseValue, createNewColumn } from './formUtils';
-import type { ColumnType } from '@/types/database';
+import { SchemaFormFields, type FieldValue } from './SchemaFormFields';
+import { validateAllFields, formValuesToRowData, validateRequiredFields } from './schemaFormUtils';
+import type { Schema } from '@/types/database';
 
 interface InsertFormProps {
-  onSubmit: (key: { values: Array<{ type: ColumnType; value: any }> }, value: { columns: Array<{ type: ColumnType; value: any }> }) => void;
+  schema: Schema | null;
+  onSubmit: (rowData: Record<string, any>) => void;
 }
 
-export const InsertForm: React.FC<InsertFormProps> = ({ onSubmit }) => {
-  const [keyColumns, setKeyColumns] = useState<ColumnInput[]>([createNewColumn('int')]);
-  const [valueColumns, setValueColumns] = useState<ColumnInput[]>([createNewColumn('string')]);
+export const InsertForm: React.FC<InsertFormProps> = ({ schema, onSubmit }) => {
+  const [values, setValues] = useState<Record<string, FieldValue>>({});
 
-  const keyValidation = useMemo(() => {
-    return keyColumns.map(col => validateValue(col.type, col.value));
-  }, [keyColumns]);
+  // Initialize values when schema changes
+  useEffect(() => {
+    if (schema) {
+      const initialValues: Record<string, FieldValue> = {};
+      for (const column of schema.columns) {
+        initialValues[column.name] = '';
+      }
+      setValues(initialValues);
+    }
+  }, [schema]);
 
-  const valueValidation = useMemo(() => {
-    return valueColumns.map(col => validateValue(col.type, col.value));
-  }, [valueColumns]);
+  const validations = useMemo(() => {
+    if (!schema) return {};
+    return validateAllFields(schema, values, schema.primaryKey);
+  }, [schema, values]);
 
   const isFormValid = useMemo(() => {
-    const allKeyValid = keyValidation.every(v => v.valid);
-    const allValueValid = valueValidation.every(v => v.valid);
-    return allKeyValid && allValueValid;
-  }, [keyValidation, valueValidation]);
+    if (!schema) return false;
+    // All primary key fields must be filled
+    const allRequiredFilled = validateRequiredFields(schema, values, schema.primaryKey);
+    // All filled fields must be valid
+    const allValid = Object.values(validations).every(v => v.valid);
+    return allRequiredFilled && allValid;
+  }, [schema, values, validations]);
 
   const handleSubmit = () => {
-    if (!isFormValid) return;
+    if (!schema || !isFormValid) return;
 
-    const key = {
-      values: keyColumns.map(col => ({
-        type: col.type,
-        value: parseValue(col.type, col.value)
-      }))
-    };
-
-    const value = {
-      columns: valueColumns.map(col => ({
-        type: col.type,
-        value: parseValue(col.type, col.value)
-      }))
-    };
-
-    onSubmit(key, value);
+    const rowData = formValuesToRowData(schema, values, true);
+    onSubmit(rowData);
   };
+
+  if (!schema) {
+    return (
+      <div className="text-sm text-muted-foreground text-center py-8">
+        Database schema not available. Please create database with schema first.
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* Key Section */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <Label className="text-sm font-semibold">Composite Key</Label>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setKeyColumns([...keyColumns, createNewColumn()])}
-            className="h-7 text-xs"
-          >
-            <Plus size={12} className="mr-1" /> Add Column
-          </Button>
-        </div>
-        <BaseFormFields
-          columns={keyColumns}
-          onColumnsChange={setKeyColumns}
-          validations={keyValidation}
+        <Label className="text-sm font-semibold">Row Data</Label>
+        <SchemaFormFields
+          schema={schema}
+          values={values}
+          onValuesChange={setValues}
+          requiredFields={schema.primaryKey}
+          showOptionalFields={true}
+          validations={validations}
         />
-      </div>
-
-      {/* Value Section */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <Label className="text-sm font-semibold">Record Value</Label>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={() => setValueColumns([...valueColumns, createNewColumn('string')])}
-            className="h-7 text-xs"
-          >
-            <Plus size={12} className="mr-1" /> Add Column
-          </Button>
-        </div>
-        <BaseFormFields
-          columns={valueColumns}
-          onColumnsChange={setValueColumns}
-          validations={valueValidation}
-        />
+        <p className="text-xs text-muted-foreground">
+          Fields marked with <span className="text-destructive">*</span> are required (Primary Key).
+          Other fields are optional.
+        </p>
       </div>
 
       <div className="flex justify-end gap-2 pt-4">

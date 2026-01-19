@@ -6,47 +6,63 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
 
 - [MiniDB Development Changelog](#minidb-development-changelog)
   - [Table of Contents](#table-of-contents)
-  - [Version 5.0 - LRU Page Cache (Current)](#version-50---lru-page-cache-current)
+  - [Version 7.0 - Schema Enforcement (Current)](#version-70---schema-enforcement-current)
     - [Major Features Added](#major-features-added)
     - [Implementation Details](#implementation-details)
+      - [Schema Definition](#schema-definition)
+      - [Row-to-Key Extraction Logic](#row-to-key-extraction-logic)
+      - [Key Ordering](#key-ordering)
+    - [API Changes](#api-changes)
+      - [Create Database (Updated)](#create-database-updated)
+      - [Insert (Updated)](#insert-updated)
+      - [Search \& Delete (Updated)](#search--delete-updated)
+      - [Cleanup All Databases (New)](#cleanup-all-databases-new)
+    - [Breaking Changes](#breaking-changes)
+    - [Migration Guide](#migration-guide)
+    - [Files Added](#files-added)
+    - [Files Modified](#files-modified)
+    - [Key Improvements Over Version 6.0](#key-improvements-over-version-60)
+  - [Version 5.0 - LRU Page Cache](#version-50---lru-page-cache)
+    - [Major Features Added](#major-features-added-1)
+    - [Implementation Details](#implementation-details-1)
     - [Real-World Context](#real-world-context)
     - [Benefits](#benefits)
     - [Cache Statistics](#cache-statistics)
     - [Testing](#testing)
-    - [Files Added](#files-added)
-    - [Files Modified](#files-modified)
+    - [Files Added](#files-added-1)
+    - [Files Modified](#files-modified-1)
     - [Key Improvements Over Version 4.0](#key-improvements-over-version-40)
   - [Version 4.0 - Complete Transaction Support \& Write-Ahead Logging](#version-40---complete-transaction-support--write-ahead-logging)
-    - [Major Features Added](#major-features-added-1)
-    - [Implementation Details](#implementation-details-1)
+    - [Major Features Added](#major-features-added-2)
+    - [Implementation Details](#implementation-details-2)
     - [Real-World Context](#real-world-context-1)
     - [Crash Safety Scenarios](#crash-safety-scenarios)
     - [Testing](#testing-1)
-    - [Files Added](#files-added-1)
-    - [Files Modified](#files-modified-1)
-    - [Key Improvements Over Version 3.0](#key-improvements-over-version-30)
-  - [Version 3.0 - Composite Keys \& Structured Records](#version-30---composite-keys--structured-records)
-    - [Major Features Added](#major-features-added-2)
-    - [Implementation Details](#implementation-details-2)
-    - [Benefits](#benefits-1)
     - [Files Added](#files-added-2)
     - [Files Modified](#files-modified-2)
-    - [Key Improvements Over Version 2.0](#key-improvements-over-version-20)
-  - [Version 2.0 - Disk Persistence \& Load from Disk](#version-20---disk-persistence--load-from-disk)
+    - [Key Improvements Over Version 3.0](#key-improvements-over-version-30)
+  - [Version 3.0 - Composite Keys \& Structured Records](#version-30---composite-keys--structured-records)
     - [Major Features Added](#major-features-added-3)
     - [Implementation Details](#implementation-details-3)
-    - [Benefits](#benefits-2)
+    - [Benefits](#benefits-1)
+    - [Files Added](#files-added-3)
     - [Files Modified](#files-modified-3)
+    - [Key Improvements Over Version 2.0](#key-improvements-over-version-20)
+  - [Version 2.0 - Disk Persistence \& Load from Disk](#version-20---disk-persistence--load-from-disk)
+    - [Major Features Added](#major-features-added-4)
+    - [Implementation Details](#implementation-details-4)
+    - [Benefits](#benefits-2)
+    - [Files Modified](#files-modified-4)
     - [Key Improvements Over Version 1.0](#key-improvements-over-version-10)
   - [Version 1.0 - Core B+Tree Implementation](#version-10---core-btree-implementation)
     - [Major Features Implemented](#major-features-implemented)
-    - [Implementation Details](#implementation-details-4)
+    - [Implementation Details](#implementation-details-5)
     - [Files Created](#files-created)
   - [Development Timeline](#development-timeline)
   - [Future Roadmap](#future-roadmap)
     - [Version 5.0 - Concurrent Access (Planned)](#version-50---concurrent-access-planned)
     - [Version 6.0 - Performance Optimizations (Planned)](#version-60---performance-optimizations-planned)
-    - [Version 7.0 - Advanced Features (Planned)](#version-70---advanced-features-planned)
+    - [Version 8.0 - Advanced Features (Planned)](#version-80---advanced-features-planned)
   - [Statistics](#statistics)
     - [Code Growth](#code-growth)
     - [Test Coverage](#test-coverage)
@@ -55,7 +71,169 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
 
 ---
 
-## Version 5.0 - LRU Page Cache (Current)
+## Version 7.0 - Schema Enforcement (Current)
+
+**Release Date:** January 2026  
+**Status:** Current Version
+
+### Major Features Added
+
+- **Schema Definition System**: Tables now require explicit schema definitions with column types and primary keys
+- **Row Validation**: Automatic validation of row data against schema (field existence and type checking)
+- **Key Extraction**: Automatic extraction of composite keys from row data based on primary key column order
+- **Schema Persistence**: Schemas are persisted to disk as `.schema.json` files
+- **Data Cleanup**: Admin endpoint to wipe incompatible database files
+
+### Implementation Details
+
+#### Schema Definition
+
+Schemas define:
+- **Columns**: Array of column definitions (name, type)
+- **Primary Key**: Ordered list of column names that form the composite primary key
+
+Supported column types:
+- `INT`: Integer (int64)
+- `STRING`: String
+- `FLOAT`: Float64
+- `BOOL`: Boolean
+
+#### Row-to-Key Extraction Logic
+
+When a row is inserted:
+1. Row is validated against schema (all columns must exist, types must match)
+2. Primary key is extracted by pulling values from the row in the order defined by `primaryKeyColumns`
+3. Example: If schema has columns [A, B, C] and PK is [C, A], input {A:1, B:2, C:3} generates Key [3, 1]
+
+#### Key Ordering
+
+The order of columns in `primaryKeyColumns` determines how records are sorted:
+- Records are sorted by the first primary key column, then the second, etc.
+- Example: PK [col2, col1] means records are sorted by col2 first, then col1
+
+### API Changes
+
+#### Create Database (Updated)
+
+**Endpoint:** `POST /api/databases`
+
+Now accepts schema definition (mandatory):
+
+**Architecture:** 1 Database = 1 Table = 1 B+ Tree. The database name serves as the table identifier.
+
+```json
+{
+  "name": "mydb",
+  "columns": [
+    { "name": "id", "type": "INT" },
+    { "name": "name", "type": "STRING" },
+    { "name": "age", "type": "INT" }
+  ],
+  "primaryKey": ["id"]
+}
+```
+
+#### Insert (Updated)
+
+**Endpoint:** `POST /api/databases/{name}/insert`
+
+Now accepts row data directly:
+
+```json
+{
+  "id": 1,
+  "name": "Alice",
+  "age": 25
+}
+```
+
+The backend automatically:
+- Validates the row against schema
+- Extracts the composite key
+- Converts the row to a Record
+
+#### Search & Delete (Updated)
+
+**Endpoints:** `POST /api/databases/{name}/search`, `POST /api/databases/{name}/delete`
+
+Now accept primary key components:
+
+```json
+{
+  "id": 1
+}
+```
+
+For composite keys:
+
+```json
+{
+  "col2": "value2",
+  "col1": 1
+}
+```
+
+#### Cleanup All Databases (New)
+
+**Endpoint:** `POST /api/databases?cleanup=true`
+
+Wipes all database files (.db, .wal, .schema.json) from disk.
+
+### Breaking Changes
+
+- **Old databases are incompatible**: Databases created before Version 7.0 use a different data structure
+- **API payloads changed**: Insert, Search, and Delete endpoints now require different request formats
+- **Schema required**: New databases must be created with a schema definition
+
+### Migration Guide
+
+1. **Backup existing data** (if needed)
+2. **Use cleanup endpoint** to wipe old database files:
+   ```bash
+   curl -X POST "http://localhost:8080/api/databases?cleanup=true"
+   ```
+3. **Create new databases with schema** (schema is mandatory):
+   ```bash
+   curl -X POST http://localhost:8080/api/databases \
+     -H "Content-Type: application/json" \
+     -d '{
+       "name": "mydb",
+       "columns": [
+         { "name": "id", "type": "INT" },
+         { "name": "name", "type": "STRING" }
+       ],
+       "primaryKey": ["id"]
+     }'
+   ```
+   
+   **Note:** Architecture is simplified: 1 Database = 1 Table = 1 B+ Tree. The database name serves as the table identifier.
+4. **Re-insert data** using the new row-based format
+
+### Files Added
+
+- `internal/storage/types.go`: Added `ColumnDefinition`, `Schema` structs and validation/extraction functions
+- `internal/storage/schema_test.go`: Schema validation and key extraction tests
+- `internal/btree/schema_test.go`: B+Tree integration tests with schema support
+
+### Files Modified
+
+- `internal/api/db_manager.go`: Added schema storage and persistence
+- `internal/api/handlers.go`: Updated endpoints to support schema-based operations
+- `internal/btree/tree.go`: Added schema field and getter/setter methods
+- `docs/API.md`: Updated API documentation with new request payloads
+- `docs/IMPLEMENTATION.md`: Added Row-to-Key extraction logic documentation
+- `docs/CHANGELOG.md`: Added Version 7.0 entry
+
+### Key Improvements Over Version 6.0
+
+- **Type Safety**: Schema enforcement ensures data integrity
+- **Simplified API**: Row-based operations are more intuitive than manual key/value construction
+- **Flexible Primary Keys**: Support for composite primary keys with custom ordering
+- **Automatic Key Extraction**: No need to manually construct composite keys
+
+---
+
+## Version 5.0 - LRU Page Cache
 
 **Date:** January 2026  
 **Status:** Completed
@@ -504,7 +682,7 @@ Phase 4: Complete Transactions (v4.0) ← Current
 - Key compression
 - Index statistics
 
-### Version 7.0 - Advanced Features (Planned)
+### Version 8.0 - Advanced Features (Planned)
 
 - MVCC (Multi-Version Concurrency Control)
 - Snapshot isolation
@@ -522,6 +700,7 @@ Phase 4: Complete Transactions (v4.0) ← Current
 - **v3.0**: Composite keys and structured records
 - **v4.0**: Complete transaction implementation with crash safety
 - **v5.0**: LRU page cache for memory management
+- **v7.0**: Schema enforcement and row-based API
 
 ### Test Coverage
 
@@ -536,6 +715,7 @@ Phase 4: Complete Transactions (v4.0) ← Current
 - **v2.0**: +1 persistence feature
 - **v3.0**: +2 type system features
 - **v4.0**: +3 transaction features (auto-commit, explicit transactions, crash safety)
+- **v7.0**: +1 schema enforcement feature (row validation, key extraction, schema persistence)
 
 ---
 
@@ -550,5 +730,5 @@ Phase 4: Complete Transactions (v4.0) ← Current
 ---
 
 **Last Updated:** January 2026  
-**Current Version:** 4.0  
+**Current Version:** 7.0  
 **Project Status:** Active Development

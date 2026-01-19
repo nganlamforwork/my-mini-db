@@ -49,6 +49,8 @@ http://localhost:8080/api
 
 ## API Overview
 
+**Architecture:** MiniDB follows a simplified architecture where **1 Database = 1 Table = 1 B+ Tree**. Each database has exactly one table with a mandatory schema. The database name serves as the table identifier.
+
 The MiniDB API is organized into three categories:
 
 1. **Database Lifecycle APIs**: Create, list, get, and drop databases
@@ -56,6 +58,8 @@ The MiniDB API is organized into three categories:
 3. **Introspection APIs**: Inspect tree structure, WAL, and cache statistics
 
 All data operations optionally return step-based execution traces for visualization when `enable_steps=true`.
+
+**Schema Enforcement:** All databases require a schema definition (columns and primary key) when created. Schema validation is enforced on all operations (insert, update, delete, search, range query).
 
 ---
 
@@ -126,6 +130,8 @@ A record represents a database row with multiple columns.
 
 Create a new database instance.
 
+**Architecture:** 1 Database = 1 Table = 1 B+ Tree. Each database has exactly one table with a defined schema.
+
 **Endpoint:** `POST /api/databases`
 
 **Request Body:**
@@ -138,23 +144,48 @@ Create a new database instance.
     "pageSize": 4096,
     "walEnabled": true,
     "cacheSize": 100
-  }
+  },
+  "columns": [
+    { "name": "id", "type": "INT" },
+    { "name": "name", "type": "STRING" },
+    { "name": "age", "type": "INT" }
+  ],
+  "primaryKey": ["id"]
 }
 ```
 
 **Configuration Options:**
 
-- `order` (optional): B+Tree order (default: 4)
-- `pageSize` (optional): Page size in bytes (default: 4096)
-- `walEnabled` (optional): Enable WAL (default: true)
-- `cacheSize` (optional): Cache size in pages (default: 100)
+- `name` (required): Database name (also serves as the table identifier)
+- `config` (optional): Database configuration
+  - `order` (optional): B+Tree order (default: 4)
+  - `pageSize` (optional): Page size in bytes (default: 4096)
+  - `walEnabled` (optional): Enable WAL (default: true)
+  - `cacheSize` (optional): Cache size in pages (default: 100)
+- `columns` (required): Array of column definitions
+  - `name` (required): Column name
+  - `type` (required): Column type - must be one of: `"INT"`, `"STRING"`, `"FLOAT"`, `"BOOL"`
+- `primaryKey` (required): Array of column names that form the primary key
+  - Order matters: The order of columns in this array determines the key ordering
+  - Example: `["col2", "col1"]` means records are sorted by `col2` first, then `col1`
+  - All primary key columns must exist in the `columns` array
+
+**Note:** Schema is mandatory. The database will enforce schema validation on all operations. Schema is persisted to disk as `{name}.schema.json`. Since each database has exactly one table, the database name serves as the table identifier.
 
 **Response:**
 
 ```json
 {
   "success": true,
-  "name": "mydb"
+  "name": "mydb",
+  "schema": {
+    "columns": [
+      { "name": "id", "type": "INT" },
+      { "name": "name", "type": "STRING" },
+      { "name": "age", "type": "INT" }
+    ],
+    "primaryKey": ["id"]
+  }
 }
 ```
 
@@ -348,6 +379,32 @@ Permanently delete all database instances and their files from disk.
 }
 ```
 
+### Cleanup All Databases
+
+Wipe all database files (.db, .wal, .schema.json) from disk. Useful for cleaning up incompatible data structures.
+
+**Endpoint:** `POST /api/databases?cleanup=true`
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "message": "All database files cleaned up (.db, .wal, .schema.json)"
+}
+```
+
+**Status Codes:**
+
+- `200 OK`: Cleanup successful
+- `500 Internal Server Error`: Cleanup failed
+
+**Note:**
+
+- This deletes all `.db`, `.wal`, and `.schema.json` files from the database directory
+- All active database connections are closed before cleanup
+- Useful when upgrading to schema-enforced databases (Version 7.0)
+
 **Status Codes:**
 
 - `200 OK`: All databases deleted successfully
@@ -378,16 +435,22 @@ Insert a key-value pair into the database.
 
 **Request Body:**
 
+Provide row data as a JSON object:
+
 ```json
 {
-  "key": {
-    "values": [{ "type": "int", "value": 42 }]
-  },
-  "value": {
-    "columns": [{ "type": "string", "value": "Hello, World!" }]
-  }
+  "id": 1,
+  "name": "Alice",
+  "age": 25
 }
 ```
+
+The backend will:
+1. Validate the row against the schema (check fields exist and types match)
+2. Extract the composite key using the primary key columns in order
+3. Convert the row to a Record
+
+**Note:** All databases require a schema. The primary key is automatically extracted from the row data using the schema's primary key column order.
 
 **Response (enable_steps=false, default):**
 
@@ -503,13 +566,24 @@ Delete a key-value pair from the database.
 
 **Request Body:**
 
+Provide the primary key components as a JSON object:
+
 ```json
 {
-  "key": {
-    "values": [{ "type": "int", "value": 42 }]
-  }
+  "id": 1
 }
 ```
+
+For composite primary keys, provide all key components:
+
+```json
+{
+  "col2": "value2",
+  "col1": 1
+}
+```
+
+The backend will extract the composite key using the primary key column order defined in the schema.
 
 **Response (enable_steps=false, default):**
 
@@ -550,13 +624,24 @@ Search for a key and return its associated value.
 
 **Request Body:**
 
+Provide the primary key components as a JSON object:
+
 ```json
 {
-  "key": {
-    "values": [{ "type": "int", "value": 42 }]
-  }
+  "id": 1
 }
 ```
+
+For composite primary keys, provide all key components:
+
+```json
+{
+  "col2": "value2",
+  "col1": 1
+}
+```
+
+The backend will extract the composite key using the primary key column order defined in the schema.
 
 **Response (enable_steps=false, default):**
 

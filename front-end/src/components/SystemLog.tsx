@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import type { LogEntry, ExecutionStep } from '@/types/database';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { formatKey } from '@/lib/keyUtils';
 
 interface SystemLogProps {
   logs: LogEntry[];
@@ -57,8 +58,10 @@ const formatStep = (step: ExecutionStep, index: number): string => {
   }
   
   if (step.key) {
-    const keyStr = step.key.values.map(v => String(v.value)).join(', ');
-    message += ` | Key: ${keyStr}`;
+    const keyStr = formatKey(step.key);
+    if (keyStr) {
+      message += ` | Key: ${keyStr}`;
+    }
   }
   
   if (step.highlightKey) {

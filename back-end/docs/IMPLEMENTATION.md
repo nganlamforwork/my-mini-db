@@ -2,7 +2,7 @@
 
 **Date:** January 13, 2026  
 **Author:** Lam Le Vu Ngan
-**Current Version:** 5.0 (LRU Page Cache)
+**Current Version:** 7.0 (Schema Enforcement)
 
 > **See [CHANGELOG.md](CHANGELOG.md) for complete development history and version evolution**
 
@@ -2108,6 +2108,106 @@ tree.Insert(key, value)  // Commit completes
 - **WAL Rotation:** Currently truncates WAL on checkpoint; production systems use WAL segment rotation
 
 ---
+
+## Row-to-Key Extraction Logic
+
+### Overview
+
+In Version 7.0, MiniDB introduced schema enforcement with automatic key extraction from row data. This section explains how row data is converted to composite keys for B+Tree operations.
+
+### Schema Definition
+
+A schema defines:
+- **Columns**: Array of column definitions (name, type)
+- **Primary Key**: Ordered list of column names that form the composite primary key
+
+Example schema:
+```go
+schema := Schema{
+    Columns: []ColumnDefinition{
+        {Name: "A", Type: TypeInt},
+        {Name: "B", Type: TypeString},
+        {Name: "C", Type: TypeInt},
+    },
+    PrimaryKeyColumns: []string{"C", "A"}, // PK order: C first, then A
+}
+```
+
+### Key Extraction Process
+
+When a row is inserted or searched:
+
+1. **Row Validation**: The row is validated against the schema:
+   - All columns in the schema must exist in the row
+   - Types must match (INT, STRING, FLOAT, BOOL)
+   - All primary key columns must be present
+
+2. **Key Extraction**: The composite key is constructed by:
+   - Iterating through `PrimaryKeyColumns` in order
+   - Extracting the corresponding value from the row
+   - Converting the value to a `Column` with the correct type
+   - Building a `CompositeKey` from these columns
+
+### Example: Key Ordering
+
+Given schema with columns [A, B, C] and PK [C, A]:
+
+**Input Row:**
+```json
+{
+  "A": 1,
+  "B": "test",
+  "C": 3
+}
+```
+
+**Extracted Key:**
+- First, extract C = 3
+- Then, extract A = 1
+- Result: CompositeKey([3, 1])
+
+**Important**: The order of `PrimaryKeyColumns` determines how records are sorted in the B+Tree:
+- PK [C, A] means records are sorted by C first, then A
+- PK [A, C] would sort by A first, then C (different ordering!)
+
+### Implementation Details
+
+The key extraction is implemented in `storage.Schema.ExtractKey()`:
+
+```go
+func (s *Schema) ExtractKey(row map[string]interface{}) (CompositeKey, error) {
+    // Validate row first
+    if err := s.ValidateRow(row); err != nil {
+        return CompositeKey{}, err
+    }
+    
+    keyValues := make([]Column, 0, len(s.PrimaryKeyColumns))
+    
+    // Extract values in primary key order
+    for _, pkColName := range s.PrimaryKeyColumns {
+        colDef, _ := s.GetColumnDefinition(pkColName)
+        value := row[pkColName]
+        column, _ := convertValueToColumn(value, colDef.Type)
+        keyValues = append(keyValues, column)
+    }
+    
+    return CompositeKey{Values: keyValues}, nil
+}
+```
+
+### Type Conversion
+
+The `convertValueToColumn()` function handles type conversion:
+- Supports JSON number types (common when parsing JSON)
+- Validates types match schema definition
+- Converts numeric types appropriately (int → int64, float → float64)
+
+### Benefits
+
+1. **Automatic Key Construction**: No need to manually build composite keys
+2. **Type Safety**: Validation ensures data integrity
+3. **Flexible Ordering**: Primary key order determines sort order
+4. **Simplified API**: Row-based operations are more intuitive
 
 ## Performance Characteristics
 

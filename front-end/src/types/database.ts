@@ -44,6 +44,10 @@ export interface DatabaseInfo {
   cacheSize: number;
   rootPage: number;
   height: number;
+  schema?: {
+    columns: Array<{ name: string; type: string }>;
+    primaryKey: string[];
+  };
 }
 
 // Cache Statistics
@@ -189,4 +193,15 @@ export interface LogEntry {
   type: 'info' | 'success' | 'error' | 'warning';
   steps?: ExecutionStep[]; // Steps from API operation
   operation?: 'INSERT' | 'UPDATE' | 'DELETE' | 'SEARCH' | 'RANGE_QUERY';
+}
+
+// Schema types for Version 7.0
+export interface ColumnDefinition {
+  name: string;
+  type: 'INT' | 'STRING' | 'FLOAT' | 'BOOL';
+}
+
+export interface Schema {
+  columns: ColumnDefinition[];
+  primaryKey: string[]; // Ordered list of column names
 }

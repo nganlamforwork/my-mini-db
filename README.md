@@ -233,29 +233,38 @@ func main() {
 
 ### Option 3: REST API Examples
 
-**Create a database:**
+**Create a database (schema is mandatory):**
+
+**Architecture:** 1 Database = 1 Table = 1 B+ Tree. Each database has exactly one table with a mandatory schema.
 
 ```bash
 curl -X POST http://localhost:8080/api/databases \
   -H "Content-Type: application/json" \
   -d '{
     "name": "mydb",
+    "columns": [
+      { "name": "id", "type": "INT" },
+      { "name": "name", "type": "STRING" }
+    ],
+    "primaryKey": ["id"],
     "config": {
       "cacheSize": 100
     }
   }'
 ```
 
-**Insert data:**
+**Insert data (row-based format):**
 
 ```bash
 curl -X POST http://localhost:8080/api/databases/mydb/insert \
   -H "Content-Type: application/json" \
   -d '{
-    "key": {"values": [{"type": "int", "value": 42}]},
-    "value": {"columns": [{"type": "string", "value": "Hello"}]}
+    "id": 1,
+    "name": "Alice"
   }'
 ```
+
+The backend automatically validates the row against the schema, extracts the primary key, and stores the record.
 
 See [API.md](back-end/docs/API.md) for complete API documentation.
 

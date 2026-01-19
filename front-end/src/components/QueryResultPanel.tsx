@@ -1,8 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
-import { ChevronDown, ChevronUp, CheckCircle2, XCircle } from 'lucide-react';
+import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Star } from 'lucide-react';
 import { Button } from './ui/button';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from './ui/table';
 import { cn } from '@/lib/utils';
-import type { CompositeKey, Record } from '@/types/database';
+import type { CompositeKey, Record as DatabaseRecord, Schema } from '@/types/database';
 
 export interface QueryResult {
   operation: 'INSERT' | 'UPDATE' | 'DELETE' | 'SEARCH' | 'RANGE_QUERY';
@@ -10,41 +18,80 @@ export interface QueryResult {
   message: string;
   executionTime?: number;
   key?: CompositeKey;
-  value?: Record;
+  value?: DatabaseRecord;
   keys?: CompositeKey[];
-  values?: Record[];
+  values?: DatabaseRecord[];
   error?: string;
   timestamp: Date;
 }
 
 interface QueryResultPanelProps {
   result: QueryResult | null;
+  schema?: Schema | null; // Schema for rendering proper table columns
   onClear?: () => void;
   fullHeight?: boolean; // When true, panel expands to fill available space
   isLockedOpen?: boolean; // When true, panel is forced expanded and cannot be collapsed
   defaultExpanded?: boolean; // Default expanded state when not locked (default: false = collapsed)
 }
 
-// Helper to format key for display
-const formatKey = (key: CompositeKey): string => {
-  if (!key || !key.values || key.values.length === 0) return '';
-  if (key.values.length === 1) {
-    return String(key.values[0].value);
-  }
-  return `(${key.values.map(v => String(v.value)).join(', ')})`;
+import { formatKey } from '@/lib/keyUtils';
+
+// Helper to format a single column value for display
+const formatColumnValue = (value: any): string => {
+  if (value === null || value === undefined) return 'NULL';
+  return String(value);
 };
 
-// Helper to format value for display
-const formatValue = (value: Record): string => {
-  if (!value || !value.columns || value.columns.length === 0) return '';
-  if (value.columns.length === 1) {
-    return String(value.columns[0].value);
+// Helper to check if a column is part of the primary key
+const isPrimaryKeyColumn = (columnName: string, schema: Schema | null | undefined): boolean => {
+  if (!schema || !schema.primaryKey) return false;
+  return schema.primaryKey.includes(columnName);
+};
+
+// Helper to parse Record to a row object mapping column names to values
+const parseRecordToRow = (record: DatabaseRecord, schema: Schema | null | undefined): { [key: string]: any } => {
+  const row: { [key: string]: any } = {};
+  
+  if (!schema || !record.columns) {
+    // Fallback: if no schema, return empty object or use index-based mapping
+    return {};
   }
-  return `(${value.columns.map(v => String(v.value)).join(', ')})`;
+  
+  // Record.columns are in the same order as schema.columns
+  schema.columns.forEach((colDef, index) => {
+    if (record.columns[index]) {
+      row[colDef.name] = record.columns[index].value;
+    } else {
+      row[colDef.name] = null;
+    }
+  });
+  
+  return row;
+};
+
+// Helper to extract key values as a row object (for display in table)
+const parseKeyToRow = (key: CompositeKey, schema: Schema | null | undefined): { [key: string]: any } => {
+  const row: { [key: string]: any } = {};
+  
+  if (!schema || !key.values) {
+    return {};
+  }
+  
+  // Key values are in the order of schema.primaryKey
+  schema.primaryKey.forEach((pkColName, index) => {
+    if (key.values[index]) {
+      row[pkColName] = key.values[index].value;
+    } else {
+      row[pkColName] = null;
+    }
+  });
+  
+  return row;
 };
 
 export function QueryResultPanel({ 
   result, 
+  schema,
   onClear, 
   fullHeight = false, 
   isLockedOpen = false,
@@ -232,43 +279,144 @@ export function QueryResultPanel({
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
           {isQueryOperation ? (
             <div className="flex-1 min-h-0 overflow-y-auto">
-              <div className="p-4">
+              <div className="p-0">
                 {hasResults ? (
-                  <table className="w-full text-xs">
-                    <thead className="bg-muted/50 sticky top-0 z-10">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-semibold text-muted-foreground border-b border-border">Key</th>
-                        <th className="px-3 py-2 text-left font-semibold text-muted-foreground border-b border-border">Value</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-border">
-                      {result.operation === 'SEARCH' && result.value && result.key && (
-                        <tr className="hover:bg-muted/30">
-                          <td className="px-3 py-2 font-mono font-semibold">
-                            {formatKey(result.key)}
-                          </td>
-                          <td className="px-3 py-2 font-mono">
-                            {formatValue(result.value)}
-                          </td>
-                        </tr>
-                      )}
-                      {result.operation === 'RANGE_QUERY' && result.keys && result.keys.map((key, index) => (
-                        <tr key={index} className="hover:bg-muted/30">
-                          <td className="px-3 py-2 font-mono font-semibold">
-                            {formatKey(key)}
-                          </td>
-                          <td className="px-3 py-2 font-mono">
-                            {result.values && result.values[index] 
-                              ? formatValue(result.values[index])
-                              : 'N/A'}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                  schema && schema.columns && schema.columns.length > 0 ? (
+                    // Schema-based table rendering using Shadcn Table components
+                    <div className="overflow-x-auto">
+                      <Table className="text-xs">
+                        <TableHeader className="bg-muted/50 sticky top-0 z-10">
+                          <TableRow>
+                            {schema.columns.map((colDef) => {
+                              const isPK = isPrimaryKeyColumn(colDef.name, schema);
+                              return (
+                                <TableHead
+                                  key={colDef.name}
+                                  className={cn(
+                                    "text-left px-3 py-2 h-auto",
+                                    isPK ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
+                                  )}
+                                >
+                                  <div className="flex items-center gap-1.5 text-left">
+                                    {isPK && (
+                                      <Star 
+                                        size={12} 
+                                        className="text-red-600 dark:text-red-400 fill-red-600 dark:fill-red-400 flex-shrink-0" 
+                                      />
+                                    )}
+                                    <span className="text-left">{colDef.name}</span>
+                                  </div>
+                                </TableHead>
+                              );
+                            })}
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {result.operation === 'SEARCH' && result.value && result.key && (() => {
+                            const keyRow = parseKeyToRow(result.key, schema);
+                            const valueRow = parseRecordToRow(result.value, schema);
+                            // Merge key and value rows (key values take precedence for PK columns)
+                            const mergedRow = { ...valueRow, ...keyRow };
+                            return (
+                              <TableRow>
+                                {schema.columns.map((colDef) => {
+                                  const isPK = isPrimaryKeyColumn(colDef.name, schema);
+                                  const cellValue = mergedRow[colDef.name];
+                                  return (
+                                    <TableCell
+                                      key={colDef.name}
+                                      className={cn(
+                                        "text-left px-3 py-1.5 font-mono",
+                                        isPK && "font-bold text-red-600 dark:text-red-400"
+                                      )}
+                                    >
+                                      {formatColumnValue(cellValue)}
+                                    </TableCell>
+                                  );
+                                })}
+                              </TableRow>
+                            );
+                          })()}
+                          {result.operation === 'RANGE_QUERY' && result.keys && result.keys.map((key, index) => {
+                            const keyRow = parseKeyToRow(key, schema);
+                            const valueRow = result.values && result.values[index] 
+                              ? parseRecordToRow(result.values[index], schema)
+                              : {};
+                            // Merge key and value rows (key values take precedence for PK columns)
+                            const mergedRow = { ...valueRow, ...keyRow };
+                            return (
+                              <TableRow key={index}>
+                                {schema.columns.map((colDef) => {
+                                  const isPK = isPrimaryKeyColumn(colDef.name, schema);
+                                  const cellValue = mergedRow[colDef.name];
+                                  return (
+                                    <TableCell
+                                      key={colDef.name}
+                                      className={cn(
+                                        "text-left px-3 py-1.5 font-mono",
+                                        isPK && "font-bold text-red-600 dark:text-red-400"
+                                      )}
+                                    >
+                                      {formatColumnValue(cellValue)}
+                                    </TableCell>
+                                  );
+                                })}
+                              </TableRow>
+                            );
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  ) : (
+                    // Fallback: Legacy Key/Value table when schema is not available
+                    <div className="p-4">
+                      <Table className="text-xs">
+                        <TableHeader className="bg-muted/50 sticky top-0 z-10">
+                          <TableRow>
+                            <TableHead className="text-left px-3 py-2">Key</TableHead>
+                            <TableHead className="text-left px-3 py-2">Value</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {result.operation === 'SEARCH' && result.value && result.key && (
+                            <TableRow>
+                              <TableCell className="text-left px-3 py-2 font-mono font-semibold">
+                                {formatKey(result.key)}
+                              </TableCell>
+                              <TableCell className="text-left px-3 py-2 font-mono">
+                                {result.value.columns?.map((col: { type: string; value: any }, idx: number) => (
+                                  <span key={idx}>
+                                    {idx > 0 && ', '}
+                                    {formatColumnValue(col.value)}
+                                  </span>
+                                ))}
+                              </TableCell>
+                            </TableRow>
+                          )}
+                          {result.operation === 'RANGE_QUERY' && result.keys && result.keys.map((key, index) => (
+                            <TableRow key={index}>
+                              <TableCell className="text-left px-3 py-2 font-mono font-semibold">
+                                {formatKey(key)}
+                              </TableCell>
+                              <TableCell className="text-left px-3 py-2 font-mono">
+                                {result.values && result.values[index] 
+                                  ? result.values[index].columns?.map((col: { type: string; value: any }, idx: number) => (
+                                      <span key={idx}>
+                                        {idx > 0 && ', '}
+                                        {formatColumnValue(col.value)}
+                                      </span>
+                                    ))
+                                  : 'N/A'}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )
                 ) : showZeroResults ? (
                   // Only show "0 results found" when there's no specific error reason
-                  <div className="text-xs text-muted-foreground text-center py-8">
+                  <div className="text-xs text-muted-foreground text-center py-8 px-4">
                     0 results found
                   </div>
                 ) : null}
