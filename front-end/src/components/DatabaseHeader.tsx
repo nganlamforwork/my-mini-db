@@ -1,8 +1,10 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowLeft, Sun, Moon } from 'lucide-react'
+import { ArrowLeft, Sun, Moon, Eye, EyeOff } from 'lucide-react'
 import { Button } from './ui/button'
 import { Switch } from './ui/switch'
+import { Label } from './ui/label'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from './ui/tooltip'
 
 function getInitialTheme(): 'light' | 'dark' {
   if (typeof window === 'undefined') return 'light'
@@ -16,9 +18,11 @@ function getInitialTheme(): 'light' | 'dark' {
 interface DatabaseHeaderProps {
   databaseName: string
   onBackClick?: () => void
+  showVisualizer?: boolean
+  onVisualizerToggle?: (show: boolean) => void
 }
 
-export function DatabaseHeader({ databaseName, onBackClick }: DatabaseHeaderProps) {
+export function DatabaseHeader({ databaseName, onBackClick, showVisualizer = false, onVisualizerToggle }: DatabaseHeaderProps) {
   const [theme, setTheme] = useState<'light' | 'dark'>(getInitialTheme)
   const navigate = useNavigate()
 
@@ -54,14 +58,45 @@ export function DatabaseHeader({ databaseName, onBackClick }: DatabaseHeaderProp
           </Button>
           <h1 className="text-lg font-semibold">{databaseName}</h1>
         </div>
-        <div className="flex items-center gap-2">
-          <Sun className="h-4 w-4" />
-          <Switch
-            checked={theme === 'dark'}
-            onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')}
-            aria-label="Toggle theme"
-          />
-          <Moon className="h-4 w-4" />
+        <div className="flex items-center gap-4">
+          {/* Visualizer Toggle */}
+          {onVisualizerToggle && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-2 border-r border-border pr-4">
+                    {showVisualizer ? (
+                      <Eye className="h-4 w-4 text-muted-foreground" />
+                    ) : (
+                      <EyeOff className="h-4 w-4 text-muted-foreground" />
+                    )}
+                    <Label htmlFor="visualizer-toggle" className="text-xs text-muted-foreground cursor-pointer">
+                      {showVisualizer ? 'Hide Graph' : 'Show Graph'}
+                    </Label>
+                    <Switch
+                      id="visualizer-toggle"
+                      checked={showVisualizer}
+                      onCheckedChange={onVisualizerToggle}
+                      aria-label="Show/Hide Graph"
+                    />
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Show/Hide Graph</p>
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+          )}
+          {/* Theme Toggle */}
+          <div className="flex items-center gap-2">
+            <Sun className="h-4 w-4" />
+            <Switch
+              checked={theme === 'dark'}
+              onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')}
+              aria-label="Toggle theme"
+            />
+            <Moon className="h-4 w-4" />
+          </div>
         </div>
       </div>
     </header>

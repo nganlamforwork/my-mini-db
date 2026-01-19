@@ -18,6 +18,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { OperationDialog } from '@/components/OperationDialog';
 import { OperationHelpDialog } from '@/components/OperationHelpDialog';
 import { SystemLog } from '@/components/SystemLog';
+import { QueryResultPanel, type QueryResult } from '@/components/QueryResultPanel';
 import { useConnectDatabase, useCloseDatabase, useTreeStructure, useCacheStats, useInsert, useUpdate, useDelete, useSearch, useRangeQuery } from '@/hooks/useDatabaseOperations';
 import { useBTreeStepAnimator } from '@/hooks/useBTreeStepAnimator';
 import type { LogEntry, TreeStructure, ExecutionStep, CacheStats } from '@/types/database';
@@ -44,6 +45,12 @@ export function DatabaseDetail() {
   
   // Global toggle for step animation (default: ON)
   const [enableSteps, setEnableSteps] = useState(true)
+  
+  // Visualizer visibility toggle (default: OFF - prioritize data view)
+  const [showVisualizer, setShowVisualizer] = useState(false)
+  
+  // Query result state
+  const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
   
   // Hooks for database operations
   const connectMutation = useConnectDatabase()
@@ -89,11 +96,23 @@ export function DatabaseDetail() {
   }
 
 
+  // Helper to format key for display
+  const formatKeyForMessage = (key?: { values: Array<{ type: string; value: any }> }): string => {
+    if (!key || !key.values || key.values.length === 0) return '';
+    if (key.values.length === 1) {
+      return String(key.values[0].value);
+    }
+    return `(${key.values.map(v => String(v.value)).join(', ')})`;
+  };
+
   // Handle operation response and execute steps if available
   const handleOperationResponse = async (
     response: any,
-    operation: string
+    operation: string,
+    startTime?: number
   ) => {
+    const executionTime = startTime ? Date.now() - startTime : undefined;
+    
     if (response.success) {
       // Execute steps if available and animation is enabled
       if (enableSteps && response.steps && response.steps.length > 0) {
@@ -136,6 +155,53 @@ export function DatabaseDetail() {
           operation as LogEntry['operation']
         );
       }
+
+      // Set query result for result panel
+      if (operation === 'INSERT' || operation === 'UPDATE' || operation === 'DELETE') {
+        const keyStr = formatKeyForMessage(response.key);
+        setQueryResult({
+          operation: operation as 'INSERT' | 'UPDATE' | 'DELETE',
+          success: true,
+          message: `${operation === 'INSERT' ? 'Key' : operation === 'UPDATE' ? 'Key' : 'Key'} ${keyStr} ${operation === 'INSERT' ? 'inserted' : operation === 'UPDATE' ? 'updated' : 'deleted'} successfully.`,
+          executionTime,
+          key: response.key,
+          value: response.value,
+          timestamp: new Date(),
+        });
+      } else if (operation === 'SEARCH') {
+        if (response.value) {
+          setQueryResult({
+            operation: 'SEARCH',
+            success: true,
+            message: `Search completed. Found 1 record.`,
+            executionTime,
+            key: response.key,
+            value: response.value,
+            timestamp: new Date(),
+          });
+        } else {
+          const keyStr = formatKeyForMessage(response.key);
+          setQueryResult({
+            operation: 'SEARCH',
+            success: true,
+            message: `Search completed. Key ${keyStr} not found.`,
+            executionTime,
+            key: response.key,
+            timestamp: new Date(),
+          });
+        }
+      } else if (operation === 'RANGE_QUERY') {
+        const count = response.keys?.length || 0;
+        setQueryResult({
+          operation: 'RANGE_QUERY',
+          success: true,
+          message: `Range query completed. Found ${count} record(s).`,
+          executionTime,
+          keys: response.keys,
+          values: response.values,
+          timestamp: new Date(),
+        });
+      }
     } else {
       // Operation failed
       if (enableSteps && response.steps && response.steps.length > 0) {
@@ -157,6 +223,16 @@ export function DatabaseDetail() {
         response.steps || [],
         operation as LogEntry['operation']
       );
+
+      // Set error result
+      setQueryResult({
+        operation: operation as 'INSERT' | 'UPDATE' | 'DELETE' | 'SEARCH' | 'RANGE_QUERY',
+        success: false,
+        message: `${operation} operation failed.`,
+        executionTime,
+        error: response.error || 'Unknown error',
+        timestamp: new Date(),
+      });
     }
   }
 
@@ -351,7 +427,12 @@ export function DatabaseDetail() {
   if (!treeData) {
     return (
       <div className="h-screen flex flex-col bg-background">
-        <DatabaseHeader databaseName={name} onBackClick={handleNavigateAway} />
+        <DatabaseHeader 
+          databaseName={name} 
+          onBackClick={handleNavigateAway}
+          showVisualizer={showVisualizer}
+          onVisualizerToggle={setShowVisualizer}
+        />
         <main className="flex-1 flex items-center justify-center">
           <p className="text-muted-foreground">
             {connectMutation.isPending ? 'Connecting to database...' : 'Loading database...'}
@@ -389,48 +470,57 @@ export function DatabaseDetail() {
         </AlertDialogContent>
       </AlertDialog>
 
-      <DatabaseHeader databaseName={name} onBackClick={handleNavigateAway} />
+      <DatabaseHeader 
+        databaseName={name} 
+        onBackClick={handleNavigateAway}
+        showVisualizer={showVisualizer}
+        onVisualizerToggle={setShowVisualizer}
+      />
       
       <div className="flex-1 flex overflow-hidden">
         {/* Sidebar */}
         <aside className="w-80 bg-card border-r border-border flex flex-col shadow-lg z-20">
           <div className="p-5 space-y-5 overflow-y-auto flex-1">
-            {/* Global Step Animation Toggle */}
-            <div className="space-y-2 pb-4 border-b border-border">
-              <div className="flex items-center justify-between">
-                <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-                  Animate B+Tree Operations
-                </Label>
-                <Switch
-                  checked={enableSteps}
-                  onCheckedChange={setEnableSteps}
-                />
-              </div>
-              <p className="text-xs text-muted-foreground">
-                {enableSteps 
-                  ? 'Animations enabled - operations will show step-by-step execution'
-                  : 'Animations disabled - operations will update instantly'}
-              </p>
-            </div>
-
-            {/* Animation Speed Control */}
-            {enableSteps && (
-              <div className="space-y-2 pb-4 border-b border-border">
-                <div className="flex items-center justify-between">
-                  <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-                    Animation Speed
-                  </Label>
-                  <span className="text-xs text-muted-foreground">{animationSpeed[0]}% (Fast)</span>
+            {/* Global Step Animation Toggle - Only show when visualizer is active */}
+            {showVisualizer && (
+              <>
+                <div className="space-y-2 pb-4 border-b border-border">
+                  <div className="flex items-center justify-between">
+                    <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+                      Animate B+Tree Operations
+                    </Label>
+                    <Switch
+                      checked={enableSteps}
+                      onCheckedChange={setEnableSteps}
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {enableSteps 
+                      ? 'Animations enabled - operations will show step-by-step execution'
+                      : 'Animations disabled - operations will update instantly'}
+                  </p>
                 </div>
-                <Slider
-                  value={animationSpeed}
-                  onValueChange={setAnimationSpeed}
-                  min={0}
-                  max={100}
-                  step={10}
-                  className="w-full"
-                />
-              </div>
+
+                {/* Animation Speed Control */}
+                {enableSteps && (
+                  <div className="space-y-2 pb-4 border-b border-border">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+                        Animation Speed
+                      </Label>
+                      <span className="text-xs text-muted-foreground">{animationSpeed[0]}% (Fast)</span>
+                    </div>
+                    <Slider
+                      value={animationSpeed}
+                      onValueChange={setAnimationSpeed}
+                      min={0}
+                      max={100}
+                      step={10}
+                      className="w-full"
+                    />
+                  </div>
+                )}
+              </>
             )}
 
             {/* Database Operations */}
@@ -669,10 +759,11 @@ export function DatabaseDetail() {
                       addLog('Insert operation requires both key and value', 'error');
                       return;
                     }
+                    const insertStartTime = Date.now();
                     insertMutation.mutate(
                       { name, key, value },
                       {
-                        onSuccess: (response) => handleOperationResponse(response, 'INSERT'),
+                        onSuccess: (response) => handleOperationResponse(response, 'INSERT', insertStartTime),
                         onError: (error) => handleOperationError(error as Error, 'INSERT'),
                       }
                     );
@@ -683,31 +774,34 @@ export function DatabaseDetail() {
                       addLog('Update operation requires both key and value', 'error');
                       return;
                     }
+                    const updateStartTime = Date.now();
                     updateMutation.mutate(
                       { name, key, value },
                       {
-                        onSuccess: (response) => handleOperationResponse(response, 'UPDATE'),
+                        onSuccess: (response) => handleOperationResponse(response, 'UPDATE', updateStartTime),
                         onError: (error) => handleOperationError(error as Error, 'UPDATE'),
                       }
                     );
                     break;
 
                   case 'delete':
+                    const deleteStartTime = Date.now();
                     deleteMutation.mutate(
                       { name, key },
                       {
-                        onSuccess: (response) => handleOperationResponse(response, 'DELETE'),
+                        onSuccess: (response) => handleOperationResponse(response, 'DELETE', deleteStartTime),
                         onError: (error) => handleOperationError(error as Error, 'DELETE'),
                       }
                     );
                     break;
 
                   case 'search':
+                    const searchStartTime = Date.now();
                     searchMutation.mutate(
                       { name, key },
                       {
                         onSuccess: async (response) => {
-                          await handleOperationResponse(response, 'SEARCH');
+                          await handleOperationResponse(response, 'SEARCH', searchStartTime);
                           if (response.success && response.value) {
                             addLog(
                               `Search operation found value for key`,
@@ -735,11 +829,12 @@ export function DatabaseDetail() {
                       // Try to extract from value if endKey not provided (legacy format)
                       if (value && value.columns && value.columns.length > 0) {
                         const extractedEndKey = { values: value.columns };
+                        const rangeStartTime = Date.now();
                         rangeQueryMutation.mutate(
                           { name, startKey: key, endKey: extractedEndKey },
                           {
                             onSuccess: async (response) => {
-                              await handleOperationResponse(response, 'RANGE_QUERY');
+                              await handleOperationResponse(response, 'RANGE_QUERY', rangeStartTime);
                               if (response.success) {
                                 const keyCount = response.keys?.length || 0;
                                 addLog(
@@ -757,11 +852,12 @@ export function DatabaseDetail() {
                         addLog('Range query operation requires both startKey and endKey', 'error');
                       }
                     } else {
+                      const rangeStartTime = Date.now();
                       rangeQueryMutation.mutate(
                         { name, startKey: key, endKey },
                         {
                           onSuccess: async (response) => {
-                            await handleOperationResponse(response, 'RANGE_QUERY');
+                            await handleOperationResponse(response, 'RANGE_QUERY', rangeStartTime);
                             if (response.success) {
                               const keyCount = response.keys?.length || 0;
                               addLog(
@@ -814,35 +910,55 @@ export function DatabaseDetail() {
           </Dialog>
         </aside>
 
-        {/* Visualization Area */}
+        {/* Main Content Area - Data View (default) or Split View (with visualizer) */}
         <main className="flex-1 relative flex flex-col bg-background">
-          {(stepAnimator.visualTree || treeData) ? (
-            <TreeCanvas 
-              treeData={stepAnimator.visualTree || treeData} 
-              highlightedIds={[]}
-              highlightedNodeId={stepAnimator.highlightedNodeId}
-              highlightedKey={stepAnimator.highlightedKey}
-              overflowNodeId={stepAnimator.overflowNodeId}
-              currentStep={stepAnimator.currentStep}
-              onStepComplete={() => {
-                // Call the stored resolve function
-                if ((window as any).__currentStepResolve) {
-                  (window as any).__currentStepResolve();
-                  (window as any).__currentStepResolve = null;
-                }
-              }}
-              animationSpeed={animationSpeed[0]}
-              config={{
-                order: 3,
-                pageSize: 4096,
-                cacheSize: 8,
-                walEnabled: true
-              }}
-            />
+          {showVisualizer ? (
+            // Split View: Top = Canvas, Bottom = Result Panel
+            <>
+              <div className="flex-1 relative min-h-0">
+                {(stepAnimator.visualTree || treeData) ? (
+                  <TreeCanvas 
+                    treeData={stepAnimator.visualTree || treeData} 
+                    highlightedIds={[]}
+                    highlightedNodeId={stepAnimator.highlightedNodeId}
+                    highlightedKey={stepAnimator.highlightedKey}
+                    overflowNodeId={stepAnimator.overflowNodeId}
+                    currentStep={stepAnimator.currentStep}
+                    onStepComplete={() => {
+                      // Call the stored resolve function
+                      if ((window as any).__currentStepResolve) {
+                        (window as any).__currentStepResolve();
+                        (window as any).__currentStepResolve = null;
+                      }
+                    }}
+                    animationSpeed={animationSpeed[0]}
+                    config={{
+                      order: 3,
+                      pageSize: 4096,
+                      cacheSize: 8,
+                      walEnabled: true
+                    }}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full text-muted-foreground">
+                    {connectMutation.isPending ? 'Connecting to database...' : treeLoading ? 'Loading tree structure...' : treeError ? `Error loading tree: ${treeError.message}` : 'Waiting for tree data...'}
+                  </div>
+                )}
+              </div>
+              {/* Query Result Panel - Bottom section in split view */}
+              <QueryResultPanel 
+                result={queryResult}
+                onClear={() => setQueryResult(null)}
+                fullHeight={false}
+              />
+            </>
           ) : (
-            <div className="flex items-center justify-center h-full text-muted-foreground">
-              {connectMutation.isPending ? 'Connecting to database...' : treeLoading ? 'Loading tree structure...' : treeError ? `Error loading tree: ${treeError.message}` : 'Waiting for tree data...'}
-            </div>
+            // Full-Screen Data View: Result Panel takes all space
+            <QueryResultPanel 
+              result={queryResult}
+              onClear={() => setQueryResult(null)}
+              fullHeight={true}
+            />
           )}
         </main>
       </div>
