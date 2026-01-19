@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { DatabaseHeader } from '@/components/DatabaseHeader';
 import { TreeCanvas } from '@/components/TreeCanvas';
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import {
   AlertDialog,
@@ -21,8 +22,10 @@ import { SystemLog } from '@/components/SystemLog';
 import { QueryResultPanel, type QueryResult } from '@/components/QueryResultPanel';
 import { useConnectDatabase, useCloseDatabase, useTreeStructure, useCacheStats, useInsert, useUpdate, useDelete, useSearch, useRangeQuery } from '@/hooks/useDatabaseOperations';
 import { useBTreeStepAnimator } from '@/hooks/useBTreeStepAnimator';
-import type { LogEntry, TreeStructure, ExecutionStep, CacheStats } from '@/types/database';
-import { Plus, Search, Trash2, Edit, ArrowLeftRight, ExternalLink, HelpCircle, Download, RotateCcw } from 'lucide-react';
+import { useLocalStorage } from '@/hooks/useLocalStorage';
+import type { LogEntry, TreeStructure, ExecutionStep, CacheStats, TreeConfig } from '@/types/database';
+import { api } from '@/lib/api';
+import { Plus, Search, Trash2, Edit, ArrowLeftRight, ExternalLink, HelpCircle, Download, RotateCcw, Info } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
@@ -37,20 +40,21 @@ export function DatabaseDetail() {
   const [currentOperation, setCurrentOperation] = useState<'insert' | 'search' | 'update' | 'delete' | 'range' | null>(null)
   const [helpDialogOpen, setHelpDialogOpen] = useState(false)
   const [helpOperation, setHelpOperation] = useState<'insert' | 'search' | 'update' | 'delete' | 'range' | null>(null)
-  const [animationSpeed, setAnimationSpeed] = useState([50]) // 0-100, default 50
   const [closeConfirmOpen, setCloseConfirmOpen] = useState(false)
   const [isNavigating, setIsNavigating] = useState(false)
   const isConnectedRef = useRef(false)
   const hasLoggedInitialLoadRef = useRef(false)
   
-  // Global toggle for step animation (default: ON)
-  const [enableSteps, setEnableSteps] = useState(true)
-  
-  // Visualizer visibility toggle (default: OFF - prioritize data view)
-  const [showVisualizer, setShowVisualizer] = useState(false)
+  // Persisted user preferences
+  const [animationSpeed, setAnimationSpeed] = useLocalStorage<number[]>('app_anim_speed', [50]) // 0-100, default 50
+  const [enableSteps, setEnableSteps] = useLocalStorage<boolean>('app_anim_enabled', true) // Global toggle for step animation (default: ON)
+  const [showVisualizer, setShowVisualizer] = useLocalStorage<boolean>('app_show_graph', false) // Visualizer visibility toggle (default: OFF - prioritize data view)
   
   // Query result state
   const [queryResult, setQueryResult] = useState<QueryResult | null>(null)
+  
+  // Tree configuration state
+  const [treeConfig, setTreeConfig] = useState<TreeConfig | null>(null)
   
   // Hooks for database operations
   const connectMutation = useConnectDatabase()
@@ -85,14 +89,21 @@ export function DatabaseDetail() {
   })
 
   const addLog = (message: string, type: LogEntry['type'] = 'info', steps?: ExecutionStep[], operation?: LogEntry['operation']) => {
-    setLogs(prev => [{
-      id: Math.random().toString(36).substring(7),
-      timestamp: new Date(),
-      message,
-      type,
-      steps,
-      operation
-    }, ...prev].slice(0, 50))
+    setLogs(prev => {
+      // Create new log entry (append to end for chronological order: oldest first, newest last)
+      const newLog: LogEntry = {
+        id: Math.random().toString(36).substring(7),
+        timestamp: new Date(),
+        message,
+        type,
+        steps,
+        operation
+      }
+      
+      // Append new log to end (oldest first, newest last) and keep last 50
+      const updated = [...prev, newLog]
+      return updated.slice(-50)
+    })
   }
 
 
@@ -121,14 +132,6 @@ export function DatabaseDetail() {
           stepAnimator.initializeVisualTree(treeData);
         }
 
-        // Log initial operation start
-        addLog(
-          `${operation} operation started`,
-          'info',
-          response.steps,
-          operation as LogEntry['operation']
-        );
-
         // Execute steps sequentially
         await stepAnimator.executeSteps(response.steps, treeData);
 
@@ -139,22 +142,15 @@ export function DatabaseDetail() {
           stepAnimator.syncVisualTree(treeStructureData);
           setTreeData(treeStructureData);
         }
-
-        addLog(
-          `${operation} operation completed successfully`,
-          'success',
-          response.steps,
-          operation as LogEntry['operation']
-        );
-      } else {
-        // No animation - just log and tree will update automatically via query invalidation
-        addLog(
-          `${operation} operation completed successfully`,
-          'success',
-          [],
-          operation as LogEntry['operation']
-        );
       }
+
+      // Log operation completion (only after animation/steps are finished)
+      addLog(
+        `${operation} operation completed successfully`,
+        'success',
+        response.steps || [],
+        operation as LogEntry['operation']
+      );
 
       // Set query result for result panel
       if (operation === 'INSERT' || operation === 'UPDATE' || operation === 'DELETE') {
@@ -371,6 +367,31 @@ export function DatabaseDetail() {
     }
   }, [cacheStatsData])
 
+  // Fetch tree configuration when database is connected
+  useEffect(() => {
+    if (!name || !isConnectedRef.current) return
+
+    const fetchTreeConfig = async () => {
+      try {
+        const config = await api.getTreeConfig(name)
+        setTreeConfig(config)
+      } catch (error) {
+        console.error('Failed to fetch tree config:', error)
+        // Set default config on error
+        setTreeConfig({
+          order: 4,
+          pageSize: 4096,
+          cacheSize: 100,
+          walEnabled: true,
+          rootPageId: 0,
+          height: 0
+        })
+      }
+    }
+
+    fetchTreeConfig()
+  }, [name])
+
   // Handle closing database on unmount (if not navigating)
   useEffect(() => {
     return () => {
@@ -483,27 +504,35 @@ export function DatabaseDetail() {
           <div className="p-5 space-y-5 overflow-y-auto flex-1">
             {/* Global Step Animation Toggle - Only show when visualizer is active */}
             {showVisualizer && (
-              <>
-                <div className="space-y-2 pb-4 border-b border-border">
-                  <div className="flex items-center justify-between">
-                    <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-                      Animate B+Tree Operations
-                    </Label>
-                    <Switch
-                      checked={enableSteps}
-                      onCheckedChange={setEnableSteps}
-                    />
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    {enableSteps 
-                      ? 'Animations enabled - operations will show step-by-step execution'
-                      : 'Animations disabled - operations will update instantly'}
-                  </p>
+              <div className="space-y-3 pb-4 border-b border-border">
+                <div className="flex items-center justify-between">
+                  <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+                    Animate B+Tree Operations
+                  </Label>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div>
+                          <Switch
+                            checked={enableSteps}
+                            onCheckedChange={setEnableSteps}
+                          />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="left" className="max-w-xs">
+                        <p className="text-xs">
+                          {enableSteps 
+                            ? 'Animations enabled - operations will show step-by-step execution'
+                            : 'Animations disabled - operations will update instantly'}
+                        </p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                 </div>
 
                 {/* Animation Speed Control */}
                 {enableSteps && (
-                  <div className="space-y-2 pb-4 border-b border-border">
+                  <div className="space-y-2">
                     <div className="flex items-center justify-between">
                       <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
                         Animation Speed
@@ -520,7 +549,7 @@ export function DatabaseDetail() {
                     />
                   </div>
                 )}
-              </>
+              </div>
             )}
 
             {/* Database Operations */}
@@ -671,7 +700,19 @@ export function DatabaseDetail() {
               </div>
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between items-center">
-                  <span className="text-muted-foreground">Size:</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1.5 cursor-help">
+                          <span className="text-muted-foreground">Size:</span>
+                          <Info size={12} className="text-muted-foreground/60" />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-xs">
+                        <p className="text-xs">Number of pages currently loaded in the buffer pool vs. maximum capacity.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <span className="font-mono">
                     {cacheStats.size} / {cacheStats.maxSize}
                   </span>
@@ -683,15 +724,51 @@ export function DatabaseDetail() {
                   />
                 </div>
                 <div className="flex justify-between items-center pt-1">
-                  <span className="text-muted-foreground">Hits:</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1.5 cursor-help">
+                          <span className="text-muted-foreground">Hits:</span>
+                          <Info size={12} className="text-muted-foreground/60" />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-xs">
+                        <p className="text-xs">Total requests where the page was found in memory (no disk I/O required).</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <span className="font-mono text-emerald-600 dark:text-emerald-400">{cacheStats.hits.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-muted-foreground">Misses:</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1.5 cursor-help">
+                          <span className="text-muted-foreground">Misses:</span>
+                          <Info size={12} className="text-muted-foreground/60" />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-xs">
+                        <p className="text-xs">Total requests where the page was not in memory and had to be fetched from disk.</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <span className="font-mono text-orange-600 dark:text-orange-400">{cacheStats.misses.toLocaleString()}</span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-muted-foreground">Hit Rate:</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1.5 cursor-help">
+                          <span className="text-muted-foreground">Hit Rate:</span>
+                          <Info size={12} className="text-muted-foreground/60" />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-xs">
+                        <p className="text-xs">Percentage of requests served from cache. Higher is better (Formula: Hits / (Hits + Misses)).</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <span className="font-mono">
                     {cacheStats.hits + cacheStats.misses > 0
                       ? ((cacheStats.hits / (cacheStats.hits + cacheStats.misses)) * 100).toFixed(1)
@@ -699,7 +776,19 @@ export function DatabaseDetail() {
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-muted-foreground">Evictions:</span>
+                  <TooltipProvider>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <div className="flex items-center gap-1.5 cursor-help">
+                          <span className="text-muted-foreground">Evictions:</span>
+                          <Info size={12} className="text-muted-foreground/60" />
+                        </div>
+                      </TooltipTrigger>
+                      <TooltipContent side="right" className="max-w-xs">
+                        <p className="text-xs">Number of pages removed from the cache to make space for new pages (usually via LRU policy).</p>
+                      </TooltipContent>
+                    </Tooltip>
+                  </TooltipProvider>
                   <span className="font-mono text-red-600 dark:text-red-400">{cacheStats.evictions.toLocaleString()}</span>
                 </div>
               </div>
@@ -890,7 +979,7 @@ export function DatabaseDetail() {
 
           {/* Full Logs Dialog */}
           <Dialog open={fullLogsOpen} onOpenChange={setFullLogsOpen}>
-            <DialogContent className="max-w-4xl max-h-[85vh]">
+            <DialogContent className="max-w-4xl max-h-[80vh]">
               <DialogHeader>
                 <div className="flex items-center justify-start gap-2">
                   <DialogTitle>System Logs</DialogTitle>
@@ -905,61 +994,65 @@ export function DatabaseDetail() {
                   </Button>
                 </div>
               </DialogHeader>
-              <SystemLog logs={logs} />
+              <div className="overflow-hidden">
+                <SystemLog logs={logs} fullView={true} />
+              </div>
             </DialogContent>
           </Dialog>
         </aside>
 
-        {/* Main Content Area - Data View (default) or Split View (with visualizer) */}
+        {/* Main Content Area - Always contains Canvas and Query Panel */}
         <main className="flex-1 relative flex flex-col bg-background">
-          {showVisualizer ? (
-            // Split View: Top = Canvas, Bottom = Result Panel
-            <>
-              <div className="flex-1 relative min-h-0">
-                {(stepAnimator.visualTree || treeData) ? (
-                  <TreeCanvas 
-                    treeData={stepAnimator.visualTree || treeData} 
-                    highlightedIds={[]}
-                    highlightedNodeId={stepAnimator.highlightedNodeId}
-                    highlightedKey={stepAnimator.highlightedKey}
-                    overflowNodeId={stepAnimator.overflowNodeId}
-                    currentStep={stepAnimator.currentStep}
-                    onStepComplete={() => {
-                      // Call the stored resolve function
-                      if ((window as any).__currentStepResolve) {
-                        (window as any).__currentStepResolve();
-                        (window as any).__currentStepResolve = null;
-                      }
-                    }}
-                    animationSpeed={animationSpeed[0]}
-                    config={{
-                      order: 3,
-                      pageSize: 4096,
-                      cacheSize: 8,
-                      walEnabled: true
-                    }}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full text-muted-foreground">
-                    {connectMutation.isPending ? 'Connecting to database...' : treeLoading ? 'Loading tree structure...' : treeError ? `Error loading tree: ${treeError.message}` : 'Waiting for tree data...'}
-                  </div>
-                )}
-              </div>
-              {/* Query Result Panel - Bottom section in split view */}
-              <QueryResultPanel 
-                result={queryResult}
-                onClear={() => setQueryResult(null)}
-                fullHeight={false}
+          {/* Canvas - Hidden when visualizer is off */}
+          <div 
+            className={cn(
+              "flex-1 relative min-h-0",
+              showVisualizer ? "block" : "hidden"
+            )}
+          >
+            {(stepAnimator.visualTree || treeData) ? (
+              <TreeCanvas 
+                treeData={stepAnimator.visualTree || treeData} 
+                highlightedIds={[]}
+                highlightedNodeId={stepAnimator.highlightedNodeId}
+                highlightedKey={stepAnimator.highlightedKey}
+                overflowNodeId={stepAnimator.overflowNodeId}
+                currentStep={stepAnimator.currentStep}
+                onStepComplete={() => {
+                  // Call the stored resolve function
+                  if ((window as any).__currentStepResolve) {
+                    (window as any).__currentStepResolve();
+                    (window as any).__currentStepResolve = null;
+                  }
+                }}
+                animationSpeed={animationSpeed[0]}
+                config={treeConfig ? {
+                  order: treeConfig.order,
+                  pageSize: treeConfig.pageSize,
+                  cacheSize: treeConfig.cacheSize,
+                  walEnabled: treeConfig.walEnabled
+                } : {
+                  order: 4,
+                  pageSize: 4096,
+                  cacheSize: 100,
+                  walEnabled: true
+                }}
               />
-            </>
-          ) : (
-            // Full-Screen Data View: Result Panel takes all space
-            <QueryResultPanel 
-              result={queryResult}
-              onClear={() => setQueryResult(null)}
-              fullHeight={true}
-            />
-          )}
+            ) : (
+              <div className="flex items-center justify-center h-full text-muted-foreground">
+                {connectMutation.isPending ? 'Connecting to database...' : treeLoading ? 'Loading tree structure...' : treeError ? `Error loading tree: ${treeError.message}` : 'Waiting for tree data...'}
+              </div>
+            )}
+          </div>
+          
+          {/* Query Result Panel - Always present, behavior changes based on view mode */}
+          <QueryResultPanel 
+            result={queryResult}
+            onClear={() => setQueryResult(null)}
+            fullHeight={!showVisualizer}
+            isLockedOpen={!showVisualizer}
+            defaultExpanded={false}
+          />
         </main>
       </div>
     </div>

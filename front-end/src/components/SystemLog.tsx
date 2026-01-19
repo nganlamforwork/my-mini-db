@@ -4,6 +4,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 
 interface SystemLogProps {
   logs: LogEntry[];
+  fullView?: boolean; // If true, use full height (for dialog), otherwise use compact height (for sidebar)
 }
 
 const getStepColor = (stepType: string): string => {
@@ -68,13 +69,14 @@ const formatStep = (step: ExecutionStep, index: number): string => {
   return message;
 };
 
-export const SystemLog: React.FC<SystemLogProps> = ({ logs }) => {
+export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false }) => {
   const scrollAreaRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   const viewportRef = useRef<HTMLElement | null>(null);
   const isUserScrollingRef = useRef(false);
   const wasAtBottomRef = useRef(true);
   const scrollTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastLogCountRef = useRef(0);
 
   // Initialize viewport reference and event listeners
   useEffect(() => {
@@ -141,12 +143,18 @@ export const SystemLog: React.FC<SystemLogProps> = ({ logs }) => {
     };
   }, []);
 
-  // Auto-scroll when logs change (only if user was at bottom)
+  // Auto-scroll when logs change (only if user was at bottom or new log was added)
   useEffect(() => {
+    const hasNewLogs = logs.length > lastLogCountRef.current;
+    lastLogCountRef.current = logs.length;
+
     const scrollToBottom = () => {
-      if (viewportRef.current && wasAtBottomRef.current && !isUserScrollingRef.current) {
+      if (viewportRef.current) {
         const viewport = viewportRef.current;
-        viewport.scrollTop = viewport.scrollHeight;
+        // Always scroll to bottom if new logs were added, otherwise only if user was at bottom
+        if (hasNewLogs || (wasAtBottomRef.current && !isUserScrollingRef.current)) {
+          viewport.scrollTop = viewport.scrollHeight;
+        }
       }
     };
 
@@ -173,7 +181,7 @@ export const SystemLog: React.FC<SystemLogProps> = ({ logs }) => {
   }, [logs]);
 
   return (
-    <div className="h-64 bg-white dark:bg-[#0d1117] border border-[#d1d9e0] dark:border-[#30363d] rounded-lg flex flex-col overflow-hidden">
+    <div className={`${fullView ? 'h-full max-h-[80vh]' : 'h-64'} bg-white dark:bg-[#0d1117] border border-[#d1d9e0] dark:border-[#30363d] rounded-lg flex flex-col overflow-hidden`}>
       <ScrollArea ref={scrollAreaRef} className="h-full">
           <div ref={contentRef} className="font-mono text-[11px] p-3 space-y-0.5 text-[#24292f] dark:text-[#c9d1d9]">
             {logs.length === 0 ? (

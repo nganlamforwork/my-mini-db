@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertCircle } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ChevronDown, ChevronUp, CheckCircle2, XCircle } from 'lucide-react';
 import { Button } from './ui/button';
 import { cn } from '@/lib/utils';
 import type { CompositeKey, Record } from '@/types/database';
@@ -21,6 +21,8 @@ interface QueryResultPanelProps {
   result: QueryResult | null;
   onClear?: () => void;
   fullHeight?: boolean; // When true, panel expands to fill available space
+  isLockedOpen?: boolean; // When true, panel is forced expanded and cannot be collapsed
+  defaultExpanded?: boolean; // Default expanded state when not locked (default: false = collapsed)
 }
 
 // Helper to format key for display
@@ -41,24 +43,72 @@ const formatValue = (value: Record): string => {
   return `(${value.columns.map(v => String(v.value)).join(', ')})`;
 };
 
-export function QueryResultPanel({ result, onClear, fullHeight = false }: QueryResultPanelProps) {
-  const [isExpanded, setIsExpanded] = useState(true);
+export function QueryResultPanel({ 
+  result, 
+  onClear, 
+  fullHeight = false, 
+  isLockedOpen = false,
+  defaultExpanded = false 
+}: QueryResultPanelProps) {
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
+  
+  // Track previous result timestamp to detect new results
+  const prevTimestampRef = useRef<Date | null>(null);
+  
+  // Auto-expand when a new result arrives (if not locked open)
+  useEffect(() => {
+    if (result && !isLockedOpen) {
+      const currentTimestamp = result.timestamp;
+      const prevTimestamp = prevTimestampRef.current;
+      
+      // Check if this is a new result (different timestamp)
+      if (!prevTimestamp || currentTimestamp.getTime() !== prevTimestamp.getTime()) {
+        // New result arrived - auto-expand to show it
+        setIsExpanded(true);
+        prevTimestampRef.current = currentTimestamp;
+      }
+    } else if (!result) {
+      // Reset timestamp when result is cleared
+      prevTimestampRef.current = null;
+    }
+  }, [result, isLockedOpen]);
+  
+  // Force expanded state when locked open
+  const effectiveExpanded = isLockedOpen ? true : isExpanded;
 
+  // Always render panel, even when no result (for persistence in DOM)
+  // Show empty state when no results
   if (!result) {
-    // Show empty state when no results - still occupy space in full-height mode
-    if (fullHeight) {
-      return (
-        <div className="flex-1 flex flex-col border-t border-border bg-card">
-          <div className="flex items-center justify-between px-4 py-2 text-xs border-b border-border">
-            <span className="text-muted-foreground">Query Result</span>
-          </div>
-          <div className="flex-1 flex items-center justify-center">
+    return (
+      <div className={cn(
+        "border-t border-border bg-card flex flex-col",
+        fullHeight ? "flex-1 min-h-0" : (effectiveExpanded ? "min-h-[250px] max-h-[40vh]" : "h-auto")
+      )}>
+        <div className="flex items-center justify-between px-4 py-2 text-xs border-b border-border flex-shrink-0">
+          <span className="text-muted-foreground">Query Result</span>
+          {!isLockedOpen && (
+            <button
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="p-0.5 hover:bg-muted rounded"
+            >
+              {isExpanded ? (
+                <ChevronDown size={14} className="text-muted-foreground" />
+              ) : (
+                <ChevronUp size={14} className="text-muted-foreground" />
+              )}
+            </button>
+          )}
+        </div>
+        {effectiveExpanded && (
+          <div className={cn(
+            "flex items-center justify-center",
+            fullHeight ? "flex-1" : "min-h-[200px]"
+          )}>
             <p className="text-sm text-muted-foreground">No query executed yet</p>
           </div>
-        </div>
-      );
-    }
-    return null;
+        )}
+      </div>
+    );
   }
 
   const isQueryOperation = result.operation === 'SEARCH' || result.operation === 'RANGE_QUERY';
@@ -66,14 +116,43 @@ export function QueryResultPanel({ result, onClear, fullHeight = false }: QueryR
     ((result.operation === 'SEARCH' && result.value) || 
      (result.operation === 'RANGE_QUERY' && result.keys && result.keys.length > 0));
 
+  // Extract error reason from message or error field
+  const getErrorReason = (): string | null => {
+    // Check error field first (for actual failures)
+    if (result.error) {
+      return result.error;
+    }
+    
+    // Extract from message (e.g., "Key not found", "Key 123 not found")
+    // This handles both success cases (key not found) and failure cases
+    const message = result.message || '';
+    
+    // Check for "not found" patterns (even if success: true)
+    if (message.includes('not found')) {
+      // Extract just the "Key X not found" part, or use the full message
+      const match = message.match(/Key\s+[^.]*not found/i);
+      return match ? match[0] : message;
+    }
+    
+    // For failures without "not found", return the message as reason
+    if (!result.success && message) {
+      return message;
+    }
+    
+    return null;
+  };
+
+  const errorReason = getErrorReason();
+  const showZeroResults = isQueryOperation && !hasResults && !errorReason;
+
   return (
     <div className={cn(
       "border-t border-border bg-card flex flex-col",
-      fullHeight ? "flex-1 min-h-0" : "min-h-[250px] max-h-[40vh]"
+      fullHeight ? "flex-1 min-h-0" : (effectiveExpanded ? "min-h-[250px] max-h-[40vh]" : "h-auto")
     )}>
       {/* Compact Status Bar - Single Line */}
       <div className="flex items-center justify-between px-4 py-2 text-xs border-b border-border flex-shrink-0">
-        <div className="flex items-center gap-3 flex-1 min-w-0">
+        <div className="flex items-center gap-2 flex-1 min-w-0">
           {/* Status Icon */}
           {result.success ? (
             <CheckCircle2 size={14} className="text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
@@ -81,25 +160,38 @@ export function QueryResultPanel({ result, onClear, fullHeight = false }: QueryR
             <XCircle size={14} className="text-red-600 dark:text-red-400 flex-shrink-0" />
           )}
           
-          {/* Status Text */}
-          <span className={cn(
-            "font-medium flex-shrink-0",
-            result.success ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
-          )}>
-            Status: {result.success ? 'Success' : 'Failed'}
-          </span>
-          
-          {/* Message */}
-          <span className="text-foreground flex-1 min-w-0 truncate">
-            {result.message}
-          </span>
-          
-          {/* Execution Time */}
-          {result.executionTime !== undefined && (
-            <span className="text-muted-foreground flex-shrink-0">
-              Time: {result.executionTime}ms
+          {/* Combined Status Line */}
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            <span className={cn(
+              "font-medium flex-shrink-0",
+              result.success ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"
+            )}>
+              Status: {result.success ? 'Success' : 'Failed'}
             </span>
-          )}
+            
+            {/* Error/Reason - Show for failures or "not found" cases */}
+            {errorReason && (
+              <>
+                <span className="text-muted-foreground flex-shrink-0">|</span>
+                <span className={cn(
+                  "flex-shrink-0",
+                  result.success ? "text-muted-foreground" : "text-red-600 dark:text-red-400"
+                )}>
+                  Reason: {errorReason}
+                </span>
+              </>
+            )}
+            
+            {/* Execution Time */}
+            {result.executionTime !== undefined && (
+              <>
+                <span className="text-muted-foreground flex-shrink-0">|</span>
+                <span className="text-muted-foreground flex-shrink-0">
+                  ({result.executionTime}ms)
+                </span>
+              </>
+            )}
+          </div>
         </div>
         
         <div className="flex items-center gap-2 flex-shrink-0 ml-2">
@@ -116,21 +208,27 @@ export function QueryResultPanel({ result, onClear, fullHeight = false }: QueryR
               Clear
             </Button>
           )}
-          <button
-            onClick={() => setIsExpanded(!isExpanded)}
-            className="p-0.5 hover:bg-muted rounded"
-          >
-            {isExpanded ? (
-              <ChevronUp size={14} className="text-muted-foreground" />
-            ) : (
-              <ChevronDown size={14} className="text-muted-foreground" />
-            )}
-          </button>
+          {!isLockedOpen && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                setIsExpanded(prev => !prev);
+              }}
+              className="p-0.5 hover:bg-muted rounded"
+              aria-label={isExpanded ? "Collapse panel" : "Expand panel"}
+            >
+              {isExpanded ? (
+                <ChevronUp size={14} className="text-muted-foreground" />
+              ) : (
+                <ChevronDown size={14} className="text-muted-foreground" />
+              )}
+            </button>
+          )}
         </div>
       </div>
 
       {/* Results Container - Fixed height with scroll */}
-      {isExpanded && (
+      {effectiveExpanded && (
         <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
           {isQueryOperation ? (
             <div className="flex-1 min-h-0 overflow-y-auto">
@@ -168,29 +266,19 @@ export function QueryResultPanel({ result, onClear, fullHeight = false }: QueryR
                       ))}
                     </tbody>
                   </table>
-                ) : (
+                ) : showZeroResults ? (
+                  // Only show "0 results found" when there's no specific error reason
                   <div className="text-xs text-muted-foreground text-center py-8">
                     0 results found
                   </div>
-                )}
+                ) : null}
               </div>
             </div>
           ) : (
+            // Non-query operations (INSERT/UPDATE/DELETE) - show success message
             <div className="flex-1 min-h-0 overflow-y-auto p-4">
               <div className="text-xs text-muted-foreground">
                 {result.message}
-              </div>
-            </div>
-          )}
-
-          {/* Error Display - Compact, Inline */}
-          {!result.success && result.error && (
-            <div className="border-t border-border px-4 py-2 flex-shrink-0">
-              <div className="flex items-center gap-2 text-xs">
-                <AlertCircle size={12} className="text-red-600 dark:text-red-400 flex-shrink-0" />
-                <span className="text-red-600 dark:text-red-400">
-                  {result.error}
-                </span>
               </div>
             </div>
           )}

@@ -73,6 +73,16 @@ export interface IOReadInfo {
   details: IOReadEntry[];
 }
 
+// Tree Configuration
+export interface TreeConfig {
+  order: number;
+  pageSize: number;
+  cacheSize: number;
+  walEnabled: boolean;
+  rootPageId: number;
+  height: number;
+}
+
 // Step types from API - matching backend exactly
 export type StepType = 
   // Navigation & Search Events

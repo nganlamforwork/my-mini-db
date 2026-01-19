@@ -70,6 +70,8 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetCacheStats(w, r, parts[1])
 	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "io":
 		h.handleGetIOReads(w, r, parts[1])
+	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "config":
+		h.handleGetTreeConfig(w, r, parts[1])
 	default:
 		writeError(w, http.StatusNotFound, "Not found")
 	}
@@ -522,6 +524,23 @@ func (h *APIHandler) handleGetIOReads(w http.ResponseWriter, r *http.Request, db
 
 	ioInfo := GetIOReadInfo(db.Tree)
 	writeJSONResponse(w, http.StatusOK, ioInfo)
+}
+
+// handleGetTreeConfig returns runtime B+Tree configuration
+func (h *APIHandler) handleGetTreeConfig(w http.ResponseWriter, r *http.Request, dbName string) {
+	db, err := h.dbManager.GetDatabase(dbName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	config, err := GetTreeConfigInfo(db.Tree)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSONResponse(w, http.StatusOK, config)
 }
 
 // writeJSONResponse writes a JSON response with appropriate headers

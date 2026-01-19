@@ -7,7 +7,8 @@ import type {
   CompositeKey,
   Record,
   OperationResponse,
-  WALInfo
+  WALInfo,
+  TreeConfig
 } from '@/types/database'
 
 const API_BASE_URL = 'http://localhost:8080/api'
@@ -287,6 +288,15 @@ export const api = {
     const response = await fetch(`${API_BASE_URL}/databases/${name}/wal`)
     if (!response.ok) {
       throw new Error(`Failed to fetch WAL info: ${name}`)
+    }
+    return await response.json()
+  },
+
+  // Get tree configuration
+  async getTreeConfig(name: string): Promise<TreeConfig> {
+    const response = await fetch(`${API_BASE_URL}/databases/${name}/config`)
+    if (!response.ok) {
+      throw new Error(`Failed to fetch tree config: ${name}`)
     }
     return await response.json()
   },
