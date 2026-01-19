@@ -66,6 +66,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   const hoveredNodeRef = useRef<number | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<{ parentId: number; childIndex: number; tooltipText: string } | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+  
+  // Real-time edge position tracking - stores current visual positions for edges
+  const edgePositionsRef = useRef<Map<string, { startX: number; startY: number; endX: number; endY: number }>>(new Map());
 
   // Helper to draw rounded rectangle with selective corner rounding
   const drawRoundedRect = (
@@ -289,7 +292,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
       const colors = getThemeColors()
 
-      // Update positions with lerp (smooth transitions)
+      // Real-time position tracking: Update node positions with faster lerp for smoother edge tracking
+      // Use higher lerp factor (0.2 instead of 0.1) for more responsive edge updates during animations
+      const LERP_FACTOR = 0.2; // Increased from 0.1 for faster convergence and smoother edge tracking
+      
       layout.forEach(target => {
         let pos = positionsRef.current.get(target.id);
         if (!pos) {
@@ -298,11 +304,25 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         }
         pos.targetX = target.x;
         pos.targetY = target.y;
-        // Smooth lerp for positions
-        pos.x += (pos.targetX - pos.x) * 0.1;
-        pos.y += (pos.targetY - pos.y) * 0.1;
+        
+        // Real-time position update with faster lerp
+        // Positions update every frame, ensuring edges track nodes with zero lag
+        pos.x += (pos.targetX - pos.x) * LERP_FACTOR;
+        pos.y += (pos.targetY - pos.y) * LERP_FACTOR;
         pos.alpha += (1 - pos.alpha) * 0.1;
       });
+      
+      // Clean up positions for nodes that no longer exist in layout
+      const layoutNodeIds = new Set(layout.map(n => n.id));
+      for (const [nodeId] of positionsRef.current) {
+        if (!layoutNodeIds.has(nodeId)) {
+          positionsRef.current.delete(nodeId);
+        }
+      }
+      
+      // Real-time edge position tracking: Update edge positions every frame
+      // This ensures edges are always in sync with node positions, even during fast animations
+      edgePositionsRef.current.clear();
 
       ctx.clearRect(0, 0, width, height);
       ctx.save();
@@ -353,6 +373,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       ctx.restore();
       
       // Draw Connections with key-aligned anchor points
+      // Real-time edge tracking: Edges are "glued" to nodes using current visual positions
+      // Positions are read directly from positionsRef every frame for zero-lag rendering
       ctx.lineWidth = 2;
       ctx.strokeStyle = colors.connectionLine;
       ctx.setLineDash([]); // Solid lines for parent-child connections
@@ -368,19 +390,31 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         }
       });
       
+      // Real-time edge rendering: Read positions directly from refs every frame
+      // This ensures edges track nodes with zero lag, even during fast animations
       layout.forEach(node => {
-        const pos = positionsRef.current.get(node.id);
-        if (!pos || !node.parentId) return;
+        // Get current visual position of child node (updated every frame via lerp)
+        const childPos = positionsRef.current.get(node.id);
+        if (!childPos || !node.parentId) return;
+        
+        // Get current visual position of parent node (updated every frame via lerp)
         const parentPos = positionsRef.current.get(node.parentId);
         if (!parentPos) return;
+        
+        // Real-time position read: These coordinates are the current visual positions
+        // on screen, updated continuously via requestAnimationFrame lerp
+        const childX = childPos.x; // Current visual X position (updates every frame)
+        const childY = childPos.y; // Current visual Y position (updates every frame)
+        const parentX = parentPos.x; // Current visual X position (updates every frame)
+        const parentY = parentPos.y; // Current visual Y position (updates every frame)
         
         // Get parent node data to calculate key positions
         const parentNodeData = treeData.nodes[node.parentId.toString()];
         if (!parentNodeData || parentNodeData.type !== 'internal') {
-          // Fallback for non-internal or missing parent
+          // Fallback for non-internal or missing parent - use current visual positions
           ctx.beginPath();
-          ctx.moveTo(parentPos.x, parentPos.y + 25);
-          ctx.bezierCurveTo(parentPos.x, parentPos.y + 70, pos.x, pos.y - 70, pos.x, pos.y - 25);
+          ctx.moveTo(parentX, parentY + 25);
+          ctx.bezierCurveTo(parentX, parentY + 70, childX, childY - 70, childX, childY - 25);
           ctx.stroke();
           return;
         }
@@ -389,10 +423,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         const parentChildren = parentChildrenMap.get(node.parentId) || [];
         const childIndex = parentChildren.indexOf(node.id);
         if (childIndex === -1) {
-          // Fallback if child not found
+          // Fallback if child not found - use current visual positions
           ctx.beginPath();
-          ctx.moveTo(parentPos.x, parentPos.y + 25);
-          ctx.bezierCurveTo(parentPos.x, parentPos.y + 70, pos.x, pos.y - 70, pos.x, pos.y - 25);
+          ctx.moveTo(parentX, parentY + 25);
+          ctx.bezierCurveTo(parentX, parentY + 70, childX, childY - 70, childX, childY - 25);
           ctx.stroke();
           return;
         }
@@ -417,8 +451,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
         const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
         const nodeWidth = Math.max(100, totalKeyWidth);
-        const nodeLeft = parentPos.x - nodeWidth / 2;
-        const nodeRight = parentPos.x + nodeWidth / 2;
+        // Use current visual position of parent (updated every frame)
+        const nodeLeft = parentX - nodeWidth / 2;
+        const nodeRight = parentX + nodeWidth / 2;
         // Use same padding calculation as node rendering: center keys in node
         const padding = (nodeWidth - totalKeyWidth) / 2;
         const contentStartX = nodeLeft + padding;
@@ -475,10 +510,36 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           }
         }
         
-        // Draw edge from calculated anchor point
+        // Real-time edge rendering: Draw edge using current visual positions
+        // Edge acts like a rubber band - always attached to current node positions
         ctx.beginPath();
-        ctx.moveTo(anchorX, parentPos.y + 25);
-        ctx.bezierCurveTo(anchorX, parentPos.y + 70, pos.x, pos.y - 70, pos.x, pos.y - 25);
+        
+        // Start point: Parent anchor (calculated from parent's current visual position)
+        const startX = anchorX;
+        const startY = parentY + 25; // Bottom of parent (using current visual Y position)
+        
+        // End point: Child node center (using current visual positions - updates every frame)
+        const endX = childX; // Current visual X - reads directly from positionsRef
+        const endY = childY - 25; // Top of child - current visual Y position
+        
+        // Bezier curve control points (also use current visual positions)
+        const control1X = anchorX;
+        const control1Y = parentY + 70;
+        const control2X = childX; // Current visual position
+        const control2Y = childY - 70; // Current visual position
+        
+        // Store edge position for potential hover/interaction tracking
+        const edgeKey = `${node.parentId}-${node.id}`;
+        edgePositionsRef.current.set(edgeKey, {
+          startX,
+          startY,
+          endX,
+          endY
+        });
+        
+        // Draw the edge - it's "glued" to nodes via real-time position tracking
+        ctx.moveTo(startX, startY);
+        ctx.bezierCurveTo(control1X, control1Y, control2X, control2Y, endX, endY);
         ctx.stroke();
       });
 
@@ -694,6 +755,9 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       });
 
       ctx.restore();
+      
+      // Continue animation loop if nodes are still animating or if we need to keep rendering
+      // This ensures edges are continuously updated during delete/merge animations
       animationFrame = requestAnimationFrame(render);
     };
 

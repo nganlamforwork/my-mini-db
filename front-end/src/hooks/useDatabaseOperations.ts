@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { CompositeKey, Record, OperationResponse, TreeStructure, WALInfo, CacheStats, CachePages, IOReadInfo } from '@/types/database'
+import type { CompositeKey, Record } from '@/types/database'
 
 // Hook for connecting to a database
 export function useConnectDatabase() {
@@ -67,12 +67,12 @@ export function useWALInfo(name: string | undefined) {
 }
 
 // Hook for insert operation
-export function useInsert() {
+export function useInsert(enableSteps: boolean = false) {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (params: { name: string; key: CompositeKey; value: Record }) =>
-      api.insert(params.name, params.key, params.value),
+      api.insert(params.name, params.key, params.value, enableSteps),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['database', variables.name, 'tree'] })
       queryClient.invalidateQueries({ queryKey: ['database', variables.name, 'cache'] })
@@ -82,12 +82,12 @@ export function useInsert() {
 }
 
 // Hook for update operation
-export function useUpdate() {
+export function useUpdate(enableSteps: boolean = false) {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (params: { name: string; key: CompositeKey; value: Record }) =>
-      api.update(params.name, params.key, params.value),
+      api.update(params.name, params.key, params.value, enableSteps),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['database', variables.name, 'tree'] })
       queryClient.invalidateQueries({ queryKey: ['database', variables.name, 'cache'] })
@@ -97,12 +97,12 @@ export function useUpdate() {
 }
 
 // Hook for delete operation
-export function useDelete() {
+export function useDelete(enableSteps: boolean = false) {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: (params: { name: string; key: CompositeKey }) =>
-      api.delete(params.name, params.key),
+      api.delete(params.name, params.key, enableSteps),
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['database', variables.name, 'tree'] })
       queryClient.invalidateQueries({ queryKey: ['database', variables.name, 'cache'] })
@@ -112,18 +112,18 @@ export function useDelete() {
 }
 
 // Hook for search operation
-export function useSearch() {
+export function useSearch(enableSteps: boolean = false) {
   return useMutation({
     mutationFn: (params: { name: string; key: CompositeKey }) =>
-      api.search(params.name, params.key),
+      api.search(params.name, params.key, enableSteps),
   })
 }
 
 // Hook for range query operation
-export function useRangeQuery() {
+export function useRangeQuery(enableSteps: boolean = false) {
   return useMutation({
     mutationFn: (params: { name: string; startKey: CompositeKey; endKey: CompositeKey }) =>
-      api.rangeQuery(params.name, params.startKey, params.endKey),
+      api.rangeQuery(params.name, params.startKey, params.endKey, enableSteps),
   })
 }
 

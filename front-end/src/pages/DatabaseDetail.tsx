@@ -19,23 +19,18 @@ import { OperationDialog } from '@/components/OperationDialog';
 import { OperationHelpDialog } from '@/components/OperationHelpDialog';
 import { SystemLog } from '@/components/SystemLog';
 import { useConnectDatabase, useCloseDatabase, useTreeStructure, useCacheStats, useInsert, useUpdate, useDelete, useSearch, useRangeQuery } from '@/hooks/useDatabaseOperations';
+import { useBTreeStepAnimator } from '@/hooks/useBTreeStepAnimator';
 import type { LogEntry, TreeStructure, ExecutionStep, CacheStats } from '@/types/database';
 import { Plus, Search, Trash2, Edit, ArrowLeftRight, ExternalLink, HelpCircle, Download, RotateCcw } from 'lucide-react';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
+import { Switch } from '@/components/ui/switch';
 
 export function DatabaseDetail() {
   const { name } = useParams<{ name: string }>()
   const navigate = useNavigate()
   const [treeData, setTreeData] = useState<TreeStructure | null>(null)
-  const [visualTree, setVisualTree] = useState<TreeStructure | null>(null) // Incrementally mutated tree for visualization
   const [logs, setLogs] = useState<LogEntry[]>([])
-  const [highlighted] = useState<number[]>([])
-  const [highlightedNodeId, setHighlightedNodeId] = useState<number | null>(null)
-  const [highlightedKey, setHighlightedKey] = useState<{ values: Array<{ type: string; value: any }> } | null>(null)
-  const [isExecutingSteps, setIsExecutingSteps] = useState(false)
-  const [overflowNodeId, setOverflowNodeId] = useState<number | null>(null) // Node in overflow state
-  const [currentStep, setCurrentStep] = useState<ExecutionStep | null>(null) // Current step being visualized
   const [fullLogsOpen, setFullLogsOpen] = useState(false)
   const [operationDialogOpen, setOperationDialogOpen] = useState(false)
   const [currentOperation, setCurrentOperation] = useState<'insert' | 'search' | 'update' | 'delete' | 'range' | null>(null)
@@ -47,18 +42,32 @@ export function DatabaseDetail() {
   const isConnectedRef = useRef(false)
   const hasLoggedInitialLoadRef = useRef(false)
   
+  // Global toggle for step animation (default: ON)
+  const [enableSteps, setEnableSteps] = useState(true)
+  
   // Hooks for database operations
   const connectMutation = useConnectDatabase()
   const closeMutation = useCloseDatabase()
   const { data: treeStructureData, error: treeError, isLoading: treeLoading } = useTreeStructure(name)
   const { data: cacheStatsData, refetch: refetchCacheStats } = useCacheStats(name)
   
-  // Operation hooks
-  const insertMutation = useInsert()
-  const updateMutation = useUpdate()
-  const deleteMutation = useDelete()
-  const searchMutation = useSearch()
-  const rangeQueryMutation = useRangeQuery()
+  // Operation hooks - recreate when enableSteps changes to update enable_steps parameter
+  const insertMutation = useInsert(enableSteps)
+  const updateMutation = useUpdate(enableSteps)
+  const deleteMutation = useDelete(enableSteps)
+  const searchMutation = useSearch(enableSteps)
+  const rangeQueryMutation = useRangeQuery(enableSteps)
+  
+  // Step animator hook
+  const stepAnimator = useBTreeStepAnimator({
+    animationSpeed: animationSpeed[0],
+    onStepComplete: () => {
+      if ((window as any).__currentStepResolve) {
+        (window as any).__currentStepResolve();
+        (window as any).__currentStepResolve = null;
+      }
+    },
+  })
   
   const [cacheStats, setCacheStats] = useState<CacheStats>({
     size: 0,
@@ -79,275 +88,76 @@ export function DatabaseDetail() {
     }, ...prev].slice(0, 50))
   }
 
-  // Helper to extract page ID from nodeId string (e.g., "page-9" -> 9)
-  const extractPageId = (nodeId?: string): number | null => {
-    if (!nodeId) return null;
-    const match = nodeId.match(/page-(\d+)/);
-    return match ? parseInt(match[1], 10) : null;
-  }
 
-  // Helper to format key for display
-  const formatKey = (key?: { values: Array<{ type: string; value: any }> }): string => {
-    if (!key || !key.values || key.values.length === 0) return '';
-    if (key.values.length === 1) {
-      return String(key.values[0].value);
-    }
-    return `(${key.values.map(v => String(v.value)).join(', ')})`;
-  }
-
-  // Helper to apply step mutation to visual tree
-  const applyStepToVisualTree = (step: ExecutionStep, currentVisualTree: TreeStructure | null): TreeStructure | null => {
-    if (!currentVisualTree) return currentVisualTree;
-    
-    const pageId = extractPageId(step.nodeId);
-    if (!pageId) return currentVisualTree;
-
-    const updatedTree = { ...currentVisualTree };
-    updatedTree.nodes = { ...updatedTree.nodes };
-    
-    const nodeKey = pageId.toString();
-    const node = updatedTree.nodes[nodeKey];
-    if (!node) return currentVisualTree;
-
-    switch (step.type) {
-      case 'ADD_TEMP_KEY':
-        // Update node with new keys (may cause overflow)
-        if (step.keys) {
-          updatedTree.nodes[nodeKey] = {
-            ...node,
-            keys: [...step.keys]
-          };
-        }
-        break;
-        
-      case 'DELETE_KEY':
-        // Update node with keys after deletion
-        if (step.keys) {
-          updatedTree.nodes[nodeKey] = {
-            ...node,
-            keys: [...step.keys]
-          };
-        }
-        break;
-        
-      case 'UPDATE_KEY':
-        // Update node keys/values
-        if (step.keys) {
-          updatedTree.nodes[nodeKey] = {
-            ...node,
-            keys: [...step.keys]
-          };
-        }
-        break;
-        
-      case 'SPLIT_NODE':
-        // Create new node and update original
-        if (step.newNodes && step.newNodes.length >= 2) {
-          const originalNodeId = extractPageId(step.newNodes[0]);
-          const newNodeId = extractPageId(step.newNodes[1]);
-          
-          if (originalNodeId && newNodeId && step.keys) {
-            // Update original node
-            const originalKey = originalNodeId.toString();
-            if (updatedTree.nodes[originalKey]) {
-              updatedTree.nodes[originalKey] = {
-                ...updatedTree.nodes[originalKey],
-                keys: [...step.keys]
-              };
-            }
-            
-            // Create new node (will be populated from actual tree data later)
-            // For now, we'll mark it as needing update
-          }
-        }
-        break;
-        
-      case 'MERGE_NODE':
-        // Node will be removed, handled by tree structure update
-        break;
-        
-      case 'PROMOTE_KEY':
-        // Update parent node with promoted key
-        const targetPageId = extractPageId(step.targetNodeId);
-        if (targetPageId && step.keys) {
-          const targetKey = targetPageId.toString();
-          if (updatedTree.nodes[targetKey]) {
-            updatedTree.nodes[targetKey] = {
-              ...updatedTree.nodes[targetKey],
-              keys: [...step.keys]
-            };
-          }
-        }
-        break;
-    }
-    
-    return updatedTree;
-  }
-
-  // Step sequencer: processes steps sequentially with incremental visual updates
-  const executeStepsSequentially = async (
-    steps: ExecutionStep[],
-    operation: LogEntry['operation'],
-    initialMessage: string
+  // Handle operation response and execute steps if available
+  const handleOperationResponse = async (
+    response: any,
+    operation: string
   ) => {
-    if (isExecutingSteps) {
-      console.warn('Step execution already in progress, skipping');
-      return;
-    }
+    if (response.success) {
+      // Execute steps if available and animation is enabled
+      if (enableSteps && response.steps && response.steps.length > 0) {
+        // Initialize visual tree before animation
+        if (treeData) {
+          stepAnimator.initializeVisualTree(treeData);
+        }
 
-    setIsExecutingSteps(true);
-    setHighlightedNodeId(null);
-    setHighlightedKey(null);
-    setOverflowNodeId(null);
-    setCurrentStep(null);
-    
-    // Initialize visual tree from current tree data
-    if (treeData) {
-      setVisualTree(JSON.parse(JSON.stringify(treeData))); // Deep clone
-    }
+        // Log initial operation start
+        addLog(
+          `${operation} operation started`,
+          'info',
+          response.steps,
+          operation as LogEntry['operation']
+        );
 
-    // Add initial log entry
-    addLog(initialMessage, 'info', steps, operation);
+        // Execute steps sequentially
+        await stepAnimator.executeSteps(response.steps, treeData);
 
-    // Calculate delay based on animation speed (0-100 -> 2000ms to 200ms)
-    const getStepDelay = () => Math.max(200, 2000 - (animationSpeed[0] * 18));
+        // Wait for tree structure to refetch after query invalidation
+        // Then sync visual tree with final state
+        await new Promise(resolve => setTimeout(resolve, 200));
+        if (treeStructureData) {
+          stepAnimator.syncVisualTree(treeStructureData);
+          setTreeData(treeStructureData);
+        }
 
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      const pageId = extractPageId(step.nodeId);
-      
-      // Set current step for visualization
-      setCurrentStep(step);
-      
-      // Set highlighting for current step
-      setHighlightedNodeId(pageId);
-      setHighlightedKey(step.highlightKey || step.key || null);
-      
-      // Handle overflow state
-      if (step.type === 'CHECK_OVERFLOW' && step.isOverflow) {
-        setOverflowNodeId(pageId);
-      } else if (step.type === 'SPLIT_NODE') {
-        // Clear overflow after split
-        setOverflowNodeId(null);
+        addLog(
+          `${operation} operation completed successfully`,
+          'success',
+          response.steps,
+          operation as LogEntry['operation']
+        );
       } else {
-        // Clear overflow for other operations
-        setOverflowNodeId(null);
+        // No animation - just log and tree will update automatically via query invalidation
+        addLog(
+          `${operation} operation completed successfully`,
+          'success',
+          [],
+          operation as LogEntry['operation']
+        );
       }
-
-      // Apply step mutation to visual tree incrementally
-      setVisualTree(prev => {
-        if (!prev) return prev;
-        return applyStepToVisualTree(step, prev);
-      });
-
-      // Generate log message for this step
-      let stepMessage = '';
-      switch (step.type) {
-        case 'TRAVERSE_NODE':
-          if (step.highlightKey) {
-            const keyStr = formatKey(step.highlightKey);
-            stepMessage = `Traversing node ${step.nodeId || 'unknown'}, comparing with ${keyStr}...`;
-          } else {
-            stepMessage = `Traversing node ${step.nodeId || 'unknown'}...`;
-          }
-          break;
-        case 'ADD_TEMP_KEY':
-          const addKeyStr = formatKey(step.key);
-          stepMessage = `Adding key ${addKeyStr} to node ${step.nodeId || 'unknown'}${step.isOverflow ? ' (OVERFLOW!)' : ''}`;
-          break;
-        case 'CHECK_OVERFLOW':
-          stepMessage = `Checking overflow for node ${step.nodeId || 'unknown'}: ${step.isOverflow ? 'OVERFLOW DETECTED' : 'No overflow'}`;
-          break;
-        case 'SPLIT_NODE':
-          stepMessage = `Splitting node ${step.nodeId || 'unknown'} into ${step.newNodes?.length || 2} nodes`;
-          break;
-        case 'PROMOTE_KEY':
-          const promoteKeyStr = formatKey(step.key);
-          stepMessage = `Promoting key ${promoteKeyStr} to parent node ${step.targetNodeId || 'unknown'}`;
-          break;
-        case 'INSERT_KEY':
-          const insertKeyStr = formatKey(step.key);
-          stepMessage = `Inserting key ${insertKeyStr} into node ${step.nodeId || 'unknown'}`;
-          break;
-        case 'UPDATE_KEY':
-          const updateKeyStr = formatKey(step.key);
-          stepMessage = `Updating key ${updateKeyStr} in node ${step.nodeId || 'unknown'}`;
-          break;
-        case 'DELETE_KEY':
-          const deleteKeyStr = formatKey(step.key);
-          stepMessage = `Deleting key ${deleteKeyStr} from node ${step.nodeId || 'unknown'}`;
-          break;
-        case 'MERGE_NODE':
-          stepMessage = `Merging node ${step.nodeId || 'unknown'} due to underflow`;
-          break;
-        case 'BORROW_KEY':
-        case 'BORROW_FROM_LEFT':
-          stepMessage = `Borrowing key from left sibling of node ${step.nodeId || 'unknown'}`;
-          break;
-        case 'BORROW_FROM_RIGHT':
-          stepMessage = `Borrowing key from right sibling of node ${step.nodeId || 'unknown'}`;
-          break;
-        case 'SEARCH_FOUND':
-          const foundKeyStr = formatKey(step.key);
-          stepMessage = `Search found key ${foundKeyStr} in node ${step.nodeId || 'unknown'}`;
-          break;
-        case 'SEARCH_NOT_FOUND':
-          const notFoundKeyStr = formatKey(step.key);
-          stepMessage = `Search did not find key ${notFoundKeyStr}`;
-          break;
-        case 'PAGE_LOAD':
-          stepMessage = `Loading page ${step.pageId || 'unknown'} from disk`;
-          break;
-        case 'PAGE_FLUSH':
-          stepMessage = `Flushing page ${step.pageId || 'unknown'} to disk`;
-          break;
-        case 'CACHE_HIT':
-          stepMessage = `Cache hit for page ${step.pageId || 'unknown'}`;
-          break;
-        case 'CACHE_MISS':
-          stepMessage = `Cache miss for page ${step.pageId || 'unknown'}`;
-          break;
-        case 'EVICT_PAGE':
-          stepMessage = `Evicting page ${step.pageId || 'unknown'} from cache`;
-          break;
-        case 'WAL_APPEND':
-          stepMessage = `Appending to WAL (LSN: ${step.lsn || 'unknown'})`;
-          break;
-        case 'BUFFER_FLUSH':
-          stepMessage = `Flushing buffer to disk`;
-          break;
-        default:
-          stepMessage = `Executing ${step.type}${step.nodeId ? ` on node ${step.nodeId}` : ''}`;
+    } else {
+      // Operation failed
+      if (enableSteps && response.steps && response.steps.length > 0) {
+        // Still animate failed operations if steps are available
+        if (treeData) {
+          stepAnimator.initializeVisualTree(treeData);
+        }
+        await stepAnimator.executeSteps(response.steps, treeData);
+        // Sync tree even on failure to show current state
+        await new Promise(resolve => setTimeout(resolve, 200));
+        if (treeStructureData) {
+          stepAnimator.syncVisualTree(treeStructureData);
+        }
       }
-
-      // Add step log message in real-time
-      addLog(stepMessage, 'info');
-
-      // Wait for step animation delay
-      await new Promise(resolve => {
-        const timeoutId = setTimeout(() => {
-          resolve(undefined);
-        }, getStepDelay());
-        
-        // Also set up callback for TreeCanvas completion
-        (window as any).__currentStepResolve = () => {
-          clearTimeout(timeoutId);
-          resolve(undefined);
-        };
-      });
+      
+      addLog(
+        `${operation} operation failed: ${response.error || 'Unknown error'}`,
+        'error',
+        response.steps || [],
+        operation as LogEntry['operation']
+      );
     }
-
-    // Finalize: sync visual tree with actual tree data
-    if (treeStructureData) {
-      setVisualTree(JSON.parse(JSON.stringify(treeStructureData)));
-      setTreeData(treeStructureData);
-    }
-
-    setIsExecutingSteps(false);
-    setHighlightedNodeId(null);
-    setHighlightedKey(null);
-    setOverflowNodeId(null);
-    setCurrentStep(null);
   }
 
   const downloadLogsAsCSV = () => {
@@ -358,19 +168,23 @@ export function DatabaseDetail() {
       const operation = log.operation || ''
       const message = log.message.replace(/"/g, '""') // Escape quotes
       const stepsCount = log.steps?.length || 0
-      const stepsDetails = log.steps?.map((step, idx) => {
-        const stepNum = String(idx + 1).padStart(3, '0')
+      const stepsDetails = log.steps?.map((step) => {
+        const stepNum = String(step.step_id || 0).padStart(3, '0')
+        const nodeId = step.node_id || step.nodeId || 'unknown'
         let stepStr = `[${stepNum}] ${step.type}`
-        if (step.nodeId) stepStr += ` → ${step.nodeId}`
-        if (step.pageId !== undefined) stepStr += ` (Page #${step.pageId})`
-        if (step.lsn !== undefined) stepStr += ` [LSN: ${step.lsn}]`
-        if (step.key) {
-          const keyStr = step.key.values.map(v => String(v.value)).join(', ')
+        if (nodeId !== 'unknown') stepStr += ` → ${nodeId}`
+        if (step.depth !== undefined) stepStr += ` (depth: ${step.depth})`
+        if (step.target_id) stepStr += ` → target: ${step.target_id}`
+        const key = step.key || step.highlightKey
+        if (key) {
+          const keyStr = key.values.map((v: any) => String(v.value)).join(', ')
           stepStr += ` | Key: ${keyStr}`
         }
-        if (step.highlightKey) {
-          const keyStr = step.highlightKey.values.map(v => String(v.value)).join(', ')
-          stepStr += ` | Highlight: ${keyStr}`
+        if (step.metadata && Object.keys(step.metadata).length > 0) {
+          const metaStr = Object.entries(step.metadata)
+            .map(([k, v]) => `${k}: ${v}`)
+            .join(', ')
+          stepStr += ` | ${metaStr}`
         }
         return stepStr
       }).join('; ') || ''
@@ -437,6 +251,9 @@ export function DatabaseDetail() {
     }
   }, [name])
 
+  // Extract stable methods from stepAnimator - methods are wrapped in useCallback so they're stable
+  const { initializeVisualTree, syncVisualTree, isExecuting: isExecutingSteps } = stepAnimator
+
   // Load tree structure from API - update when data changes (on load or after operations)
   useEffect(() => {
     if (treeStructureData) {
@@ -445,7 +262,7 @@ export function DatabaseDetail() {
       if (isInitialLoad) {
         // Initial load - update immediately
         setTreeData(treeStructureData)
-        setVisualTree(JSON.parse(JSON.stringify(treeStructureData))) // Deep clone for visual tree
+        initializeVisualTree(treeStructureData)
         if (!hasLoggedInitialLoadRef.current) {
           hasLoggedInitialLoadRef.current = true
           addLog(`B+ Tree root located at Page #${treeStructureData.rootPage}`, 'success')
@@ -454,10 +271,13 @@ export function DatabaseDetail() {
       } else if (!isExecutingSteps) {
         // Not executing steps - update immediately (e.g., manual refresh or after operation completes)
         setTreeData(treeStructureData)
-        setVisualTree(JSON.parse(JSON.stringify(treeStructureData))) // Sync visual tree
+        syncVisualTree(treeStructureData)
+      } else {
+        // During step execution, wait for animation to complete
+        // Tree will be synced after animation finishes in handleOperationResponse
       }
-      // During step execution, visual tree is updated incrementally by executeStepsSequentially
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [treeStructureData, isExecutingSteps, treeData])
 
   useEffect(() => {
@@ -575,23 +395,43 @@ export function DatabaseDetail() {
         {/* Sidebar */}
         <aside className="w-80 bg-card border-r border-border flex flex-col shadow-lg z-20">
           <div className="p-5 space-y-5 overflow-y-auto flex-1">
-            {/* Animation Speed Control */}
+            {/* Global Step Animation Toggle */}
             <div className="space-y-2 pb-4 border-b border-border">
               <div className="flex items-center justify-between">
                 <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
-                  Animation Speed
+                  Animate B+Tree Operations
                 </Label>
-                <span className="text-xs text-muted-foreground">{animationSpeed[0]}% (Fast)</span>
+                <Switch
+                  checked={enableSteps}
+                  onCheckedChange={setEnableSteps}
+                />
               </div>
-              <Slider
-                value={animationSpeed}
-                onValueChange={setAnimationSpeed}
-                min={0}
-                max={100}
-                step={10}
-                className="w-full"
-              />
+              <p className="text-xs text-muted-foreground">
+                {enableSteps 
+                  ? 'Animations enabled - operations will show step-by-step execution'
+                  : 'Animations disabled - operations will update instantly'}
+              </p>
             </div>
+
+            {/* Animation Speed Control */}
+            {enableSteps && (
+              <div className="space-y-2 pb-4 border-b border-border">
+                <div className="flex items-center justify-between">
+                  <Label className="text-[10px] font-bold text-muted-foreground uppercase tracking-widest">
+                    Animation Speed
+                  </Label>
+                  <span className="text-xs text-muted-foreground">{animationSpeed[0]}% (Fast)</span>
+                </div>
+                <Slider
+                  value={animationSpeed}
+                  onValueChange={setAnimationSpeed}
+                  min={0}
+                  max={100}
+                  step={10}
+                  className="w-full"
+                />
+              </div>
+            )}
 
             {/* Database Operations */}
             <div className="space-y-4">
@@ -814,48 +654,6 @@ export function DatabaseDetail() {
               onSubmit={(key, value, endKey) => {
                 if (!name) return;
 
-                const handleOperationSuccess = async (response: any, operation: string) => {
-                  if (response.success) {
-                    // Execute steps sequentially with animations
-                    if (response.steps && response.steps.length > 0) {
-                      await executeStepsSequentially(
-                        response.steps,
-                        operation as LogEntry['operation'],
-                        `${operation} operation started`
-                      );
-                      addLog(
-                        `${operation} operation completed successfully`,
-                        'success',
-                        response.steps,
-                        operation as LogEntry['operation']
-                      );
-                    } else {
-                      addLog(
-                        `${operation} operation completed successfully`,
-                        'success',
-                        [],
-                        operation as LogEntry['operation']
-                      );
-                    }
-                    // Tree will automatically refetch due to query invalidation in hooks
-                  } else {
-                    // Even on failure, show steps if available
-                    if (response.steps && response.steps.length > 0) {
-                      await executeStepsSequentially(
-                        response.steps,
-                        operation as LogEntry['operation'],
-                        `${operation} operation started`
-                      );
-                    }
-                    addLog(
-                      `${operation} operation failed: ${response.error || 'Unknown error'}`,
-                      'error',
-                      response.steps || [],
-                      operation as LogEntry['operation']
-                    );
-                  }
-                };
-
                 const handleOperationError = (error: Error, operation: string) => {
                   addLog(
                     `${operation} operation failed: ${error.message}`,
@@ -874,7 +672,7 @@ export function DatabaseDetail() {
                     insertMutation.mutate(
                       { name, key, value },
                       {
-                        onSuccess: (response) => handleOperationSuccess(response, 'INSERT'),
+                        onSuccess: (response) => handleOperationResponse(response, 'INSERT'),
                         onError: (error) => handleOperationError(error as Error, 'INSERT'),
                       }
                     );
@@ -888,7 +686,7 @@ export function DatabaseDetail() {
                     updateMutation.mutate(
                       { name, key, value },
                       {
-                        onSuccess: (response) => handleOperationSuccess(response, 'UPDATE'),
+                        onSuccess: (response) => handleOperationResponse(response, 'UPDATE'),
                         onError: (error) => handleOperationError(error as Error, 'UPDATE'),
                       }
                     );
@@ -898,7 +696,7 @@ export function DatabaseDetail() {
                     deleteMutation.mutate(
                       { name, key },
                       {
-                        onSuccess: (response) => handleOperationSuccess(response, 'DELETE'),
+                        onSuccess: (response) => handleOperationResponse(response, 'DELETE'),
                         onError: (error) => handleOperationError(error as Error, 'DELETE'),
                       }
                     );
@@ -909,14 +707,8 @@ export function DatabaseDetail() {
                       { name, key },
                       {
                         onSuccess: async (response) => {
+                          await handleOperationResponse(response, 'SEARCH');
                           if (response.success && response.value) {
-                            if (response.steps && response.steps.length > 0) {
-                              await executeStepsSequentially(
-                                response.steps,
-                                'SEARCH',
-                                'Search operation started'
-                              );
-                            }
                             addLog(
                               `Search operation found value for key`,
                               'success',
@@ -924,13 +716,6 @@ export function DatabaseDetail() {
                               'SEARCH'
                             );
                           } else {
-                            if (response.steps && response.steps.length > 0) {
-                              await executeStepsSequentially(
-                                response.steps,
-                                'SEARCH',
-                                'Search operation started'
-                              );
-                            }
                             addLog(
                               `Search operation: key not found`,
                               'warning',
@@ -953,26 +738,18 @@ export function DatabaseDetail() {
                         rangeQueryMutation.mutate(
                           { name, startKey: key, endKey: extractedEndKey },
                           {
-                          onSuccess: async (response) => {
-                            if (response.success) {
-                              if (response.steps && response.steps.length > 0) {
-                                await executeStepsSequentially(
+                            onSuccess: async (response) => {
+                              await handleOperationResponse(response, 'RANGE_QUERY');
+                              if (response.success) {
+                                const keyCount = response.keys?.length || 0;
+                                addLog(
+                                  `Range query found ${keyCount} key-value pair(s)`,
+                                  'success',
                                   response.steps,
-                                  'RANGE_QUERY',
-                                  'Range query operation started'
+                                  'RANGE_QUERY'
                                 );
                               }
-                              const keyCount = response.keys?.length || 0;
-                              addLog(
-                                `Range query found ${keyCount} key-value pair(s)`,
-                                'success',
-                                response.steps,
-                                'RANGE_QUERY'
-                              );
-                            } else {
-                              await handleOperationSuccess(response, 'RANGE_QUERY');
-                            }
-                          },
+                            },
                             onError: (error) => handleOperationError(error as Error, 'RANGE_QUERY'),
                           }
                         );
@@ -984,14 +761,8 @@ export function DatabaseDetail() {
                         { name, startKey: key, endKey },
                         {
                           onSuccess: async (response) => {
+                            await handleOperationResponse(response, 'RANGE_QUERY');
                             if (response.success) {
-                              if (response.steps && response.steps.length > 0) {
-                                await executeStepsSequentially(
-                                  response.steps,
-                                  'RANGE_QUERY',
-                                  'Range query operation started'
-                                );
-                              }
                               const keyCount = response.keys?.length || 0;
                               addLog(
                                 `Range query found ${keyCount} key-value pair(s)`,
@@ -999,8 +770,6 @@ export function DatabaseDetail() {
                                 response.steps,
                                 'RANGE_QUERY'
                               );
-                            } else {
-                              await handleOperationSuccess(response, 'RANGE_QUERY');
                             }
                           },
                           onError: (error) => handleOperationError(error as Error, 'RANGE_QUERY'),
@@ -1047,14 +816,14 @@ export function DatabaseDetail() {
 
         {/* Visualization Area */}
         <main className="flex-1 relative flex flex-col bg-background">
-          {(visualTree || treeData) ? (
+          {(stepAnimator.visualTree || treeData) ? (
             <TreeCanvas 
-              treeData={visualTree || treeData} 
-              highlightedIds={highlighted}
-              highlightedNodeId={highlightedNodeId}
-              highlightedKey={highlightedKey}
-              overflowNodeId={overflowNodeId}
-              currentStep={currentStep}
+              treeData={stepAnimator.visualTree || treeData} 
+              highlightedIds={[]}
+              highlightedNodeId={stepAnimator.highlightedNodeId}
+              highlightedKey={stepAnimator.highlightedKey}
+              overflowNodeId={stepAnimator.overflowNodeId}
+              currentStep={stepAnimator.currentStep}
               onStepComplete={() => {
                 // Call the stored resolve function
                 if ((window as any).__currentStepResolve) {

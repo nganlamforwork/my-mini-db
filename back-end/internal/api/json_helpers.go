@@ -138,8 +138,16 @@ func FromJSONColumn(jsonCol JSONColumn) (storage.Column, error) {
 
 // JSONStep is a JSON-serializable version of Step
 type JSONStep struct {
+	StepID       uint64                  `json:"step_id"`
 	Type         string                  `json:"type"`
 	NodeID       string                  `json:"nodeId,omitempty"`
+	TargetID     string                  `json:"targetId,omitempty"`
+	Key          *JSONCompositeKey       `json:"key,omitempty"`
+	Value        *JSONRecord             `json:"value,omitempty"`
+	Depth        int                     `json:"depth"`
+	Metadata     map[string]interface{}  `json:"metadata,omitempty"`
+	
+	// Legacy fields
 	Keys         []JSONCompositeKey      `json:"keys,omitempty"`
 	HighlightKey *JSONCompositeKey       `json:"highlightKey,omitempty"`
 	Children     []uint64                `json:"children,omitempty"`
@@ -149,8 +157,6 @@ type JSONStep struct {
 	SeparatorKey *JSONCompositeKey       `json:"separatorKey,omitempty"`
 	LSN          uint64                  `json:"lsn,omitempty"`
 	PageID       string                  `json:"pageId,omitempty"`
-	Key          *JSONCompositeKey       `json:"key,omitempty"`
-	Value        *JSONRecord             `json:"value,omitempty"`
 	TargetNodeID string                  `json:"targetNodeId,omitempty"`
 	IsOverflow   bool                    `json:"isOverflow,omitempty"`
 	Order        int                     `json:"order,omitempty"`
@@ -159,8 +165,12 @@ type JSONStep struct {
 // ToJSONStep converts a Step to JSONStep
 func ToJSONStep(step Step) JSONStep {
 	jsonStep := JSONStep{
+		StepID:       step.StepID,
 		Type:         string(step.Type),
 		NodeID:       step.NodeID,
+		TargetID:     step.TargetID,
+		Depth:        step.Depth,
+		Metadata:     step.Metadata,
 		Children:     step.Children,
 		OriginalNode: step.OriginalNode,
 		NewNode:      step.NewNode,

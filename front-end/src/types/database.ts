@@ -73,21 +73,43 @@ export interface IOReadInfo {
   details: IOReadEntry[];
 }
 
-// Step types from API
+// Step types from API - matching backend exactly
 export type StepType = 
+  // Navigation & Search Events
+  | 'TRAVERSE_START'
+  | 'NODE_VISIT'
+  | 'KEY_COMPARISON'
+  | 'CHILD_POINTER_SELECTED'
+  // Insert Logic
+  | 'LEAF_FOUND'
+  | 'INSERT_ENTRY'
+  | 'OVERFLOW_DETECTED'
+  | 'NODE_SPLIT'
+  | 'PROMOTE_KEY'
+  | 'NEW_ROOT_CREATED'
+  | 'REBALANCE_COMPLETE'
+  // Delete Logic
+  | 'ENTRY_REMOVED'
+  | 'UNDERFLOW_DETECTED'
+  | 'CHECK_SIBLING'
+  | 'BORROW_LEFT'
+  | 'BORROW_RIGHT'
+  | 'MERGE_NODES'
+  | 'SHRINK_TREE'
+  // Operation Lifecycle
+  | 'OPERATION_COMPLETE'
+  | 'SEARCH_FOUND'
+  | 'SEARCH_NOT_FOUND'
+  // Legacy types (kept for backward compatibility during transition)
   | 'TRAVERSE_NODE'
   | 'INSERT_KEY'
   | 'UPDATE_KEY'
   | 'DELETE_KEY'
-  | 'SPLIT_NODE'
-  | 'MERGE_NODE'
   | 'BORROW_FROM_LEFT'
   | 'BORROW_FROM_RIGHT'
   | 'BORROW_KEY'
   | 'WAL_APPEND'
   | 'BUFFER_FLUSH'
-  | 'SEARCH_FOUND'
-  | 'SEARCH_NOT_FOUND'
   | 'PAGE_LOAD'
   | 'PAGE_FLUSH'
   | 'CACHE_HIT'
@@ -95,24 +117,31 @@ export type StepType =
   | 'EVICT_PAGE'
   | 'ADD_TEMP_KEY'
   | 'CHECK_OVERFLOW'
-  | 'PROMOTE_KEY';
+  | 'MERGE_NODE';
 
-// Execution Step from API
+// Execution Step from API - matching backend structure exactly
 export interface ExecutionStep {
+  step_id: number;
   type: StepType;
+  node_id?: string;
+  target_id?: string | null;
+  key?: CompositeKey | null;
+  value?: Record | null;
+  depth: number;
+  metadata?: { [key: string]: any };
+  
+  // Legacy fields (for backward compatibility during transition)
   nodeId?: string;
   keys?: CompositeKey[];
   children?: number[];
   highlightKey?: CompositeKey;
-  key?: CompositeKey;
-  value?: Record;
-  originalNode?: string; // nodeId string
-  newNode?: string; // nodeId string
-  newNodes?: string[]; // Array of nodeId strings for SPLIT_NODE
+  originalNode?: string;
+  newNode?: string;
+  newNodes?: string[];
   separatorKey?: CompositeKey;
-  targetNodeId?: string; // For PROMOTE_KEY
-  isOverflow?: boolean; // For CHECK_OVERFLOW
-  order?: number; // For CHECK_OVERFLOW
+  targetNodeId?: string;
+  isOverflow?: boolean;
+  order?: number;
   lsn?: number;
   pageId?: number;
 }
@@ -125,7 +154,7 @@ export interface OperationResponse {
   value?: Record;
   keys?: CompositeKey[];
   values?: Record[];
-  steps: ExecutionStep[];
+  steps?: ExecutionStep[]; // Optional - only present when enable_steps=true
   error?: string;
 }
 

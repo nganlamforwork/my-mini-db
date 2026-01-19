@@ -168,8 +168,13 @@ export const api = {
   },
 
   // Insert a key-value pair
-  async insert(name: string, key: CompositeKey, value: Record): Promise<OperationResponse> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/insert`, {
+  async insert(name: string, key: CompositeKey, value: Record, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/insert`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -186,8 +191,13 @@ export const api = {
   },
 
   // Update a key-value pair
-  async update(name: string, key: CompositeKey, value: Record): Promise<OperationResponse> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/update`, {
+  async update(name: string, key: CompositeKey, value: Record, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/update`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -204,8 +214,13 @@ export const api = {
   },
 
   // Delete a key-value pair
-  async delete(name: string, key: CompositeKey): Promise<OperationResponse> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/delete`, {
+  async delete(name: string, key: CompositeKey, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/delete`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -222,8 +237,13 @@ export const api = {
   },
 
   // Search for a key
-  async search(name: string, key: CompositeKey): Promise<OperationResponse> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/search`, {
+  async search(name: string, key: CompositeKey, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/search`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -240,8 +260,13 @@ export const api = {
   },
 
   // Range query
-  async rangeQuery(name: string, startKey: CompositeKey, endKey: CompositeKey): Promise<OperationResponse> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/range`, {
+  async rangeQuery(name: string, startKey: CompositeKey, endKey: CompositeKey, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${name}/range`)
+    if (enableSteps) {
+      url.searchParams.set('enable_steps', 'true')
+    }
+    
+    const response = await fetch(url.toString(), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
