@@ -1,6 +1,6 @@
 # MiniDB API Documentation
 
-The MiniDB API server provides a RESTful interface to interact with MiniDB instances and visualize B+Tree operations through step-based execution traces.
+The MiniDB API server provides a RESTful interface to interact with MiniDB instances. B+Tree operations can optionally return step-based execution traces for visualization when `enable_steps=true`.
 
 ---
 
@@ -55,7 +55,7 @@ The MiniDB API is organized into three categories:
 2. **Data Operation APIs**: Insert, update, delete, search, and range queries
 3. **Introspection APIs**: Inspect tree structure, WAL, and cache statistics
 
-All data operations return step-based execution traces for visualization.
+All data operations optionally return step-based execution traces for visualization when `enable_steps=true`.
 
 ---
 
@@ -364,13 +364,17 @@ Permanently delete all database instances and their files from disk.
 
 ## Data Operation APIs
 
-All data operations return step-based execution traces. See [Step-Based Execution Traces](#step-based-execution-traces) for details.
+All data operations optionally return step-based execution traces when `enable_steps=true`. See [Step-Based Execution Traces](#step-based-execution-traces) for details.
 
 ### Insert
 
 Insert a key-value pair into the database.
 
 **Endpoint:** `POST /api/databases/{name}/insert`
+
+**Query Parameters:**
+
+- `enable_steps` (boolean, optional): Default `false`. When `true`, the response includes a `steps` field with execution traces.
 
 **Request Body:**
 
@@ -385,7 +389,21 @@ Insert a key-value pair into the database.
 }
 ```
 
-**Response:**
+**Response (enable_steps=false, default):**
+
+```json
+{
+  "success": true,
+  "operation": "INSERT",
+  "key": {
+    "values": [
+      {"type": "int", "value": 42}
+    ]
+  }
+}
+```
+
+**Response (enable_steps=true):**
 
 ```json
 {
@@ -398,15 +416,20 @@ Insert a key-value pair into the database.
   },
   "steps": [
     {
-      "type": "TRAVERSE_NODE",
-      "nodeId": "page-2",
-      "keys": [...],
-      "highlightKey": {"values": [{"type": "int", "value": 42}]}
+      "step_id": 1,
+      "type": "TRAVERSE_START",
+      "node_id": "N2",
+      "depth": 0,
+      "key": {"values": [{"type": "int", "value": 42}]},
+      "metadata": {}
     },
     {
-      "type": "INSERT_KEY",
-      "nodeId": "page-5",
-      "key": {"values": [{"type": "int", "value": 42}]}
+      "step_id": 2,
+      "type": "NODE_VISIT",
+      "node_id": "N2",
+      "depth": 0,
+      "key": {"values": [{"type": "int", "value": 42}]},
+      "metadata": {"is_leaf": false, "key_count": 1}
     }
   ]
 }
@@ -424,6 +447,10 @@ Update the value associated with a key.
 
 **Endpoint:** `POST /api/databases/{name}/update`
 
+**Query Parameters:**
+
+- `enable_steps` (boolean, optional): Default `false`. When `true`, the response includes a `steps` field with execution traces.
+
 **Request Body:**
 
 ```json
@@ -437,7 +464,17 @@ Update the value associated with a key.
 }
 ```
 
-**Response:**
+**Response (enable_steps=false, default):**
+
+```json
+{
+  "success": true,
+  "operation": "UPDATE",
+  "key": {...}
+}
+```
+
+**Response (enable_steps=true):**
 
 ```json
 {
@@ -460,6 +497,10 @@ Delete a key-value pair from the database.
 
 **Endpoint:** `POST /api/databases/{name}/delete`
 
+**Query Parameters:**
+
+- `enable_steps` (boolean, optional): Default `false`. When `true`, the response includes a `steps` field with execution traces.
+
 **Request Body:**
 
 ```json
@@ -470,7 +511,17 @@ Delete a key-value pair from the database.
 }
 ```
 
-**Response:**
+**Response (enable_steps=false, default):**
+
+```json
+{
+  "success": true,
+  "operation": "DELETE",
+  "key": {...}
+}
+```
+
+**Response (enable_steps=true):**
 
 ```json
 {
@@ -493,6 +544,10 @@ Search for a key and return its associated value.
 
 **Endpoint:** `POST /api/databases/{name}/search`
 
+**Query Parameters:**
+
+- `enable_steps` (boolean, optional): Default `false`. When `true`, the response includes a `steps` field with execution traces.
+
 **Request Body:**
 
 ```json
@@ -503,7 +558,22 @@ Search for a key and return its associated value.
 }
 ```
 
-**Response:**
+**Response (enable_steps=false, default):**
+
+```json
+{
+  "success": true,
+  "operation": "SEARCH",
+  "key": {...},
+  "value": {
+    "columns": [
+      {"type": "string", "value": "Hello, World!"}
+    ]
+  }
+}
+```
+
+**Response (enable_steps=true):**
 
 ```json
 {
@@ -531,6 +601,10 @@ Query all key-value pairs within a range.
 
 **Endpoint:** `POST /api/databases/{name}/range`
 
+**Query Parameters:**
+
+- `enable_steps` (boolean, optional): Default `false`. When `true`, the response includes a `steps` field with execution traces.
+
 **Request Body:**
 
 ```json
@@ -544,7 +618,26 @@ Query all key-value pairs within a range.
 }
 ```
 
-**Response:**
+**Response (enable_steps=false, default):**
+
+```json
+{
+  "success": true,
+  "operation": "RANGE_QUERY",
+  "keys": [
+    {"values": [{"type": "int", "value": 10}]},
+    {"values": [{"type": "int", "value": 20}]},
+    ...
+  ],
+  "values": [
+    {"columns": [...]},
+    {"columns": [...]},
+    ...
+  ]
+}
+```
+
+**Response (enable_steps=true):**
 
 ```json
 {
@@ -779,83 +872,104 @@ curl http://localhost:8080/api/databases/mydb/io
 
 ## Step-Based Execution Traces
 
-All data operations return a `steps` array containing execution traces. Each step represents a discrete operation during tree traversal and modification.
+Data operations (insert, update, delete, search, range) optionally return a `steps` array containing execution traces when `enable_steps=true`. Each step represents a discrete operation during tree traversal and modification.
 
-### Step Types
+**Note:** When `enable_steps=false` (default), the `steps` field is not included in the response, providing zero-overhead operation execution.
 
-| Step Type           | Description                                 |
-| ------------------- | ------------------------------------------- |
-| `TRAVERSE_NODE`     | Traversing through an internal or leaf node |
-| `INSERT_KEY`        | Inserting a key into a node                 |
-| `UPDATE_KEY`        | Updating a key-value pair                   |
-| `DELETE_KEY`        | Deleting a key from a node                  |
-| `SPLIT_NODE`        | Splitting a node due to overflow            |
-| `MERGE_NODE`        | Merging nodes due to underflow              |
-| `BORROW_FROM_LEFT`  | Borrowing a key from left sibling           |
-| `BORROW_FROM_RIGHT` | Borrowing a key from right sibling          |
-| `WAL_APPEND`        | Appending to Write-Ahead Log                |
-| `BUFFER_FLUSH`      | Flushing a page to disk                     |
-| `SEARCH_FOUND`      | Key found during search                     |
-| `SEARCH_NOT_FOUND`  | Key not found during search                 |
-
-### Step Structure
+### Step Object Schema
 
 ```json
 {
-  "type": "TRAVERSE_NODE",
-  "nodeId": "page-3",
-  "keys": [
-    { "values": [{ "type": "int", "value": 10 }] },
-    { "values": [{ "type": "int", "value": 20 }] }
-  ],
-  "children": [5, 6, 7],
-  "highlightKey": { "values": [{ "type": "int", "value": 15 }] }
+  "step_id": 1,
+  "type": "TRAVERSE_START",
+  "node_id": "N2",
+  "target_id": null,
+  "key": {"values": [{"type": "int", "value": 42}]},
+  "value": null,
+  "depth": 0,
+  "metadata": {}
 }
 ```
 
-**Common Fields:**
+**Fields:**
 
-- `type`: Step type (required)
-- `nodeId`: Page identifier (e.g., "page-3")
-- `keys`: Array of keys in the node (for internal/leaf nodes)
-- `children`: Array of child page IDs (for internal nodes)
-- `highlightKey`: Key being searched/operated on (for visualization)
+- `step_id` (number): Execution order of the step (monotonic, auto-incrementing)
+- `type` (string): Step type (e.g., `TRAVERSE_START`, `NODE_VISIT`, `NODE_SPLIT`, `INSERT_ENTRY`)
+- `node_id` (string): Node involved in this step (e.g., "N2", "N5")
+- `target_id` (string | null): Target node for operations involving multiple nodes (e.g., parent node for promotions)
+- `key` (any | null): Key being operated on in this step
+- `value` (any | null): Value associated with the key (for insert/update operations)
+- `depth` (number): Tree depth of the node (root = 0, increasing downward)
+- `metadata` (object): Additional step-specific information (e.g., `split_index`, `is_leaf`, `key_count`, `sibling_type`)
 
-**Step-Specific Fields:**
+### Step Types
 
-- `originalNode`, `newNode`, `separatorKey`: For split/merge operations
-- `lsn`: Log sequence number for WAL operations
-- `pageId`: Page identifier for buffer operations
-- `key`, `value`: For insert/update/delete operations
+Common step types include:
 
-### Example: Insert Operation Steps
+- **Navigation**: `TRAVERSE_START`, `NODE_VISIT`, `KEY_COMPARISON`, `CHILD_POINTER_SELECTED`
+- **Insert**: `LEAF_FOUND`, `INSERT_ENTRY`, `OVERFLOW_DETECTED`, `NODE_SPLIT`, `PROMOTE_KEY`, `NEW_ROOT_CREATED`, `REBALANCE_COMPLETE`
+- **Delete**: `ENTRY_REMOVED`, `UNDERFLOW_DETECTED`, `CHECK_SIBLING`, `BORROW_LEFT`, `BORROW_RIGHT`, `MERGE_NODES`, `SHRINK_TREE`
+- **Search**: `SEARCH_FOUND`, `SEARCH_NOT_FOUND`
+- **Lifecycle**: `OPERATION_COMPLETE`
+
+### Example: Insert Operation (enable_steps=true)
+
+```bash
+curl -X POST "http://localhost:8080/api/databases/mydb/insert?enable_steps=true" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": {"values": [{"type": "int", "value": 42}]},
+    "value": {"columns": [{"type": "string", "value": "Hello"}]}
+  }'
+```
+
+**Response:**
 
 ```json
 {
   "success": true,
   "operation": "INSERT",
-  "key": {...},
+  "key": {"values": [{"type": "int", "value": 42}]},
   "steps": [
     {
-      "type": "TRAVERSE_NODE",
-      "nodeId": "page-2",
-      "keys": [{"values": [{"type": "int", "value": 30}]}],
-      "children": [3, 4],
-      "highlightKey": {"values": [{"type": "int", "value": 42}]}
+      "step_id": 1,
+      "type": "TRAVERSE_START",
+      "node_id": "N2",
+      "depth": 0,
+      "key": {"values": [{"type": "int", "value": 42}]},
+      "metadata": {}
     },
     {
-      "type": "TRAVERSE_NODE",
-      "nodeId": "page-4",
-      "keys": [
-        {"values": [{"type": "int", "value": 35}]},
-        {"values": [{"type": "int", "value": 40}]}
-      ],
-      "highlightKey": {"values": [{"type": "int", "value": 42}]}
+      "step_id": 2,
+      "type": "NODE_VISIT",
+      "node_id": "N2",
+      "depth": 0,
+      "key": {"values": [{"type": "int", "value": 42}]},
+      "metadata": {"is_leaf": false, "key_count": 1}
     },
     {
-      "type": "INSERT_KEY",
-      "nodeId": "page-4",
-      "key": {"values": [{"type": "int", "value": 42}]}
+      "step_id": 3,
+      "type": "LEAF_FOUND",
+      "node_id": "N4",
+      "depth": 1,
+      "key": {"values": [{"type": "int", "value": 42}]},
+      "metadata": {}
+    },
+    {
+      "step_id": 4,
+      "type": "INSERT_ENTRY",
+      "node_id": "N4",
+      "depth": 1,
+      "key": {"values": [{"type": "int", "value": 42}]},
+      "value": {"columns": [{"type": "string", "value": "Hello"}]},
+      "metadata": {}
+    },
+    {
+      "step_id": 5,
+      "type": "OPERATION_COMPLETE",
+      "node_id": "N4",
+      "depth": 1,
+      "metadata": {"op": "insert"}
     }
   ]
 }
@@ -908,10 +1022,29 @@ curl -X POST http://localhost:8080/api/databases \
   }'
 ```
 
-**2. Insert a key-value pair:**
+**2. Insert a key-value pair (without steps, default):**
 
 ```bash
 curl -X POST http://localhost:8080/api/databases/example/insert \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": {
+      "values": [
+        {"type": "int", "value": 10}
+      ]
+    },
+    "value": {
+      "columns": [
+        {"type": "string", "value": "Ten"}
+      ]
+    }
+  }'
+```
+
+**2b. Insert a key-value pair (with steps):**
+
+```bash
+curl -X POST "http://localhost:8080/api/databases/example/insert?enable_steps=true" \
   -H "Content-Type: application/json" \
   -d '{
     "key": {
@@ -1005,9 +1138,9 @@ const response = await fetch("http://localhost:8080/api/databases", {
   }),
 });
 
-// Insert data
+// Insert data (with steps)
 const insertResponse = await fetch(
-  "http://localhost:8080/api/databases/mydb/insert",
+  "http://localhost:8080/api/databases/mydb/insert?enable_steps=true",
   {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1023,7 +1156,7 @@ const insertResponse = await fetch(
 );
 
 const result = await insertResponse.json();
-console.log("Steps:", result.steps);
+console.log("Steps:", result.steps); // Only present when enable_steps=true
 ```
 
 ### Python Example
@@ -1037,8 +1170,8 @@ response = requests.post('http://localhost:8080/api/databases', json={
     'config': {'cacheSize': 100}
 })
 
-# Insert data
-response = requests.post('http://localhost:8080/api/databases/mydb/insert', json={
+# Insert data (with steps)
+response = requests.post('http://localhost:8080/api/databases/mydb/insert?enable_steps=true', json={
     'key': {
         'values': [{'type': 'int', 'value': 42}]
     },
@@ -1048,22 +1181,24 @@ response = requests.post('http://localhost:8080/api/databases/mydb/insert', json
 })
 
 result = response.json()
-print('Steps:', result['steps'])
+print('Steps:', result.get('steps', []))  # Only present when enable_steps=true
 ```
 
 ---
 
 ## Notes
 
-1. **Determinism**: Step traces are deterministic for identical inputs. The same operation on the same tree state produces the same steps.
+1. **Step Collection**: Step traces are optional and only included when `enable_steps=true`. When `enable_steps=false` (default), operations execute with zero overhead from step collection.
 
-2. **Visualization**: Steps are designed for visualization. The `highlightKey` field indicates which key is being operated on during traversal.
+2. **Determinism**: Step traces are deterministic for identical inputs. The same operation on the same tree state produces the same steps in the same order.
 
-3. **Core Independence**: The API layer is an adapter. The core B+Tree implementation works independently without the API.
+3. **Step Ordering**: Steps are returned in execution order with monotonic `step_id` values. The order reflects the actual control flow of the operation.
 
-4. **Concurrency**: The API server handles concurrent requests. Each database instance manages its own locking.
+4. **Core Independence**: The API layer is an adapter. The core B+Tree implementation works independently without the API.
 
-5. **Error Recovery**: If an operation fails, the `success` field is `false` and an `error` message is provided. The `steps` array may be incomplete for failed operations.
+5. **Concurrency**: The API server handles concurrent requests. Each database instance manages its own locking.
+
+6. **Error Recovery**: If an operation fails, the `success` field is `false` and an `error` message is provided. When `enable_steps=true`, the `steps` array may be incomplete for failed operations.
 
 ---
 

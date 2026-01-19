@@ -64,12 +64,14 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleGetTreeStructure(w, r, parts[1])
 	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "wal":
 		h.handleGetWALInfo(w, r, parts[1])
+	case r.Method == "GET" && len(parts) == 4 && parts[0] == "databases" && parts[2] == "cache" && parts[3] == "pages":
+		h.handleGetCachePages(w, r, parts[1])
 	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "cache":
 		h.handleGetCacheStats(w, r, parts[1])
-	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "cache/pages":
-		h.handleGetCachePages(w, r, parts[1])
 	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "io":
 		h.handleGetIOReads(w, r, parts[1])
+	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "config":
+		h.handleGetTreeConfig(w, r, parts[1])
 	default:
 		writeError(w, http.StatusNotFound, "Not found")
 	}
@@ -236,8 +238,11 @@ func (h *APIHandler) handleInsert(w http.ResponseWriter, r *http.Request, dbName
 		return
 	}
 
+	// Parse enable_steps query parameter (default: false)
+	enableSteps := r.URL.Query().Get("enable_steps") == "true"
+
 	adapter := NewTreeAdapter(db.Tree)
-	steps, err := adapter.Insert(key, value)
+	steps, err := adapter.Insert(key, value, enableSteps)
 
 	resp := OperationResponse{
 		Success:   err == nil,
@@ -283,8 +288,11 @@ func (h *APIHandler) handleUpdate(w http.ResponseWriter, r *http.Request, dbName
 		return
 	}
 
+	// Parse enable_steps query parameter (default: false)
+	enableSteps := r.URL.Query().Get("enable_steps") == "true"
+
 	adapter := NewTreeAdapter(db.Tree)
-	steps, err := adapter.Update(key, value)
+	steps, err := adapter.Update(key, value, enableSteps)
 
 	resp := OperationResponse{
 		Success:   err == nil,
@@ -323,8 +331,11 @@ func (h *APIHandler) handleDelete(w http.ResponseWriter, r *http.Request, dbName
 		return
 	}
 
+	// Parse enable_steps query parameter (default: false)
+	enableSteps := r.URL.Query().Get("enable_steps") == "true"
+
 	adapter := NewTreeAdapter(db.Tree)
-	steps, err := adapter.Delete(key)
+	steps, err := adapter.Delete(key, enableSteps)
 
 	resp := OperationResponse{
 		Success:   err == nil,
@@ -363,8 +374,11 @@ func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request, dbName
 		return
 	}
 
+	// Parse enable_steps query parameter (default: false)
+	enableSteps := r.URL.Query().Get("enable_steps") == "true"
+
 	adapter := NewTreeAdapter(db.Tree)
-	value, steps, err := adapter.Search(key)
+	value, steps, err := adapter.Search(key, enableSteps)
 
 	resp := OperationResponse{
 		Success:   err == nil,
@@ -412,8 +426,11 @@ func (h *APIHandler) handleRangeQuery(w http.ResponseWriter, r *http.Request, db
 		return
 	}
 
+	// Parse enable_steps query parameter (default: false)
+	enableSteps := r.URL.Query().Get("enable_steps") == "true"
+
 	adapter := NewTreeAdapter(db.Tree)
-	keys, values, steps, err := adapter.SearchRange(startKey, endKey)
+	keys, values, steps, err := adapter.SearchRange(startKey, endKey, enableSteps)
 
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -507,6 +524,23 @@ func (h *APIHandler) handleGetIOReads(w http.ResponseWriter, r *http.Request, db
 
 	ioInfo := GetIOReadInfo(db.Tree)
 	writeJSONResponse(w, http.StatusOK, ioInfo)
+}
+
+// handleGetTreeConfig returns runtime B+Tree configuration
+func (h *APIHandler) handleGetTreeConfig(w http.ResponseWriter, r *http.Request, dbName string) {
+	db, err := h.dbManager.GetDatabase(dbName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	config, err := GetTreeConfigInfo(db.Tree)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	writeJSONResponse(w, http.StatusOK, config)
 }
 
 // writeJSONResponse writes a JSON response with appropriate headers

@@ -1,11 +1,11 @@
 import { useState } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Plus, Database, Trash2, X } from 'lucide-react'
-import { toast } from 'sonner'
-import { api } from '@/lib/api'
+import { useNavigate } from 'react-router-dom'
+import { Plus, Database, Trash2 } from 'lucide-react'
 import { createDatabaseSchema, type CreateDatabaseInput } from '@/lib/validations'
+import { useDatabases } from '@/hooks/useDatabases'
+import { useCreateDatabase, useDeleteDatabase, useClearAllDatabases } from '@/hooks/useDatabaseMutations'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -25,6 +25,7 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
+import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -36,21 +37,21 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { useDatabaseStore } from '@/store/databaseStore'
 
 export function Home() {
-  const queryClient = useQueryClient()
-  const { addDatabase, removeDatabase } = useDatabaseStore()
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState<string | null>(null)
   const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false)
+  const [useCustomConfig, setUseCustomConfig] = useState(false)
 
   // Fetch databases list
-  const { data: databases = [], isLoading } = useQuery({
-    queryKey: ['databases'],
-    queryFn: api.listDatabases,
-    refetchInterval: 5000, // Refetch every 5 seconds
-  })
+  const { data: databases = [], isLoading } = useDatabases()
+
+  // Mutations
+  const createMutation = useCreateDatabase()
+  const deleteMutation = useDeleteDatabase()
+  const clearAllMutation = useClearAllDatabases()
 
   // Form setup with zod validation
   const form = useForm<CreateDatabaseInput>({
@@ -58,88 +59,61 @@ export function Home() {
     mode: 'onBlur',
     defaultValues: {
       name: '',
-    },
-  })
-
-  // Create database mutation
-  const createMutation = useMutation({
-    mutationFn: (name: string) =>
-      api.createDatabase({
-        name,
-        config: {
-          cacheSize: 100,
-          walEnabled: true,
-        },
-      }),
-    onSuccess: (_, name) => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] })
-      addDatabase(name)
-      setOpen(false)
-      form.reset()
-      toast.success('Database created successfully', {
-        description: `${name} has been created.`,
-      })
-    },
-    onError: (error: Error) => {
-      toast.error('Failed to create database', {
-        description: error.message || 'An error occurred while creating the database.',
-      })
+      config: {
+        order: 4,
+        pageSize: 4096,
+        walEnabled: true,
+        cacheSize: 100,
+      },
     },
   })
 
   const handleCreateDatabase = (data: CreateDatabaseInput) => {
-    createMutation.mutate(data.name)
+    // Only include config if custom config is enabled
+    const submitData: CreateDatabaseInput = {
+      name: data.name,
+      ...(useCustomConfig ? { config: data.config } : {}),
+    }
+    
+    createMutation.mutate(submitData, {
+      onSuccess: () => {
+        setOpen(false)
+        setUseCustomConfig(false)
+        form.reset()
+      },
+    })
   }
 
-  // Delete database mutation
-  const deleteMutation = useMutation({
-    mutationFn: (name: string) => api.dropDatabase(name),
-    onSuccess: (_, name) => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] })
-      removeDatabase(name)
-      setDeleteDialogOpen(null)
-      toast.success('Database deleted successfully', {
-        description: `${name} has been deleted.`,
-      })
-    },
-    onError: (error: Error) => {
-      toast.error('Failed to delete database', {
-        description: error.message || 'An error occurred while deleting the database.',
-      })
-    },
-  })
+  const handleDialogOpenChange = (isOpen: boolean) => {
+    setOpen(isOpen)
+    if (!isOpen) {
+      // Reset state when dialog closes
+      setUseCustomConfig(false)
+      form.reset()
+    }
+  }
 
-  // Clear all databases mutation
-  const clearAllMutation = useMutation({
-    mutationFn: async () => {
-      const allDbs = await api.listDatabases()
-      await Promise.all(allDbs.map((name) => api.dropDatabase(name)))
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['databases'] })
-      setClearAllDialogOpen(false)
-      toast.success('All databases cleared', {
-        description: 'All databases have been deleted.',
-      })
-    },
-    onError: (error: Error) => {
-      toast.error('Failed to clear all databases', {
-        description: error.message || 'An error occurred while clearing databases.',
-      })
-    },
-  })
-
-  const handleDelete = (name: string) => {
-    deleteMutation.mutate(name)
+  const handleDelete = (name: string, e?: React.MouseEvent) => {
+    e?.preventDefault()
+    e?.stopPropagation()
+    deleteMutation.mutate(name, {
+      onSuccess: () => {
+        setDeleteDialogOpen(null)
+      },
+    })
   }
 
   const handleClearAll = () => {
-    clearAllMutation.mutate()
+    clearAllMutation.mutate(undefined, {
+      onSuccess: () => {
+        setClearAllDialogOpen(false)
+      },
+    })
   }
 
   return (
     <>
-      <Dialog open={open} onOpenChange={setOpen}>
+      <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <div className="flex flex-col min-h-[calc(100vh-3.5rem)]">
           {/* Hero Section */}
           <section className="container mx-auto px-4 py-16 text-center">
@@ -151,12 +125,6 @@ export function Home() {
               visualization. Explore how databases work under the hood with real-time
               tree operations and execution traces.
             </p>
-            <DialogTrigger asChild>
-              <Button size="lg" className="gap-2">
-                <Plus className="h-5 w-5" />
-                Create Database
-              </Button>
-            </DialogTrigger>
           </section>
 
           {/* Databases List Section */}
@@ -164,35 +132,43 @@ export function Home() {
             <div className="max-w-4xl mx-auto">
               <div className="flex items-center justify-between mb-6">
                 <h2 className="text-2xl font-semibold">Your Databases</h2>
-                {databases.length > 0 && (
-                  <AlertDialog open={clearAllDialogOpen} onOpenChange={setClearAllDialogOpen}>
-                    <AlertDialogTrigger asChild>
-                      <Button variant="destructive" size="sm" disabled={clearAllMutation.isPending}>
-                        <X className="h-4 w-4 mr-2" />
-                        {clearAllMutation.isPending ? 'Clearing...' : 'Clear All'}
-                      </Button>
-                    </AlertDialogTrigger>
-                    <AlertDialogContent>
-                      <AlertDialogHeader>
-                        <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
-                        <AlertDialogDescription>
-                          This action cannot be undone. This will permanently delete all {databases.length} database{databases.length !== 1 ? 's' : ''} from the system.
-                        </AlertDialogDescription>
-                      </AlertDialogHeader>
-                      <AlertDialogFooter>
-                        <AlertDialogCancel disabled={clearAllMutation.isPending}>
-                          Cancel
-                        </AlertDialogCancel>
-                        <AlertDialogAction
-                          onClick={handleClearAll}
-                          disabled={clearAllMutation.isPending}
-                        >
+                <div className="flex items-center gap-2">
+                  {databases.length > 0 && (
+                    <AlertDialog open={clearAllDialogOpen} onOpenChange={setClearAllDialogOpen}>
+                      <AlertDialogTrigger asChild>
+                        <Button variant="ghost" disabled={clearAllMutation.isPending}>
+                          <Trash2 className="h-4 w-4 mr-2" />
                           {clearAllMutation.isPending ? 'Clearing...' : 'Clear All'}
-                        </AlertDialogAction>
-                      </AlertDialogFooter>
-                    </AlertDialogContent>
-                  </AlertDialog>
-                )}
+                        </Button>
+                      </AlertDialogTrigger>
+                      <AlertDialogContent>
+                        <AlertDialogHeader>
+                          <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                          <AlertDialogDescription>
+                            This action cannot be undone. This will permanently delete all {databases.length} database{databases.length !== 1 ? 's' : ''} from the system.
+                          </AlertDialogDescription>
+                        </AlertDialogHeader>
+                        <AlertDialogFooter>
+                          <AlertDialogCancel disabled={clearAllMutation.isPending}>
+                            Cancel
+                          </AlertDialogCancel>
+                          <AlertDialogAction
+                            onClick={handleClearAll}
+                            disabled={clearAllMutation.isPending}
+                          >
+                            {clearAllMutation.isPending ? 'Clearing...' : 'Clear All'}
+                          </AlertDialogAction>
+                        </AlertDialogFooter>
+                      </AlertDialogContent>
+                    </AlertDialog>
+                  )}
+                  <DialogTrigger asChild>
+                    <Button  className="gap-2">
+                      <Plus className="h-4 w-4" />
+                      Create Database
+                    </Button>
+                  </DialogTrigger>
+                </div>
               </div>
               
               {isLoading ? (
@@ -215,7 +191,8 @@ export function Home() {
                   {databases.map((dbName) => (
                     <div
                       key={dbName}
-                      className="border rounded-lg p-4 hover:border-primary/50 transition-colors group relative"
+                      className="border rounded-lg p-4 hover:border-primary/50 transition-colors group relative cursor-pointer"
+                      onClick={() => navigate(`/databases/${dbName}`)}
                     >
                       <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-3">
@@ -248,7 +225,11 @@ export function Home() {
                                 Cancel
                               </AlertDialogCancel>
                               <AlertDialogAction
-                                onClick={() => handleDelete(dbName)}
+                                onClick={(e) => {
+                                  e.preventDefault()
+                                  e.stopPropagation()
+                                  handleDelete(dbName, e)
+                                }}
                                 disabled={deleteMutation.isPending}
                               >
                                 {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
@@ -274,10 +255,10 @@ export function Home() {
               <DialogHeader>
                 <DialogTitle>Create New Database</DialogTitle>
                 <DialogDescription>
-                  Enter a name for your new database. Only letters, numbers, underscores, and hyphens are allowed.
+                  Enter a name for your new database. Only letters, numbers, underscores, and hyphens are allowed for the name.
                 </DialogDescription>
               </DialogHeader>
-              <div className="grid gap-4 py-4">
+              <div className="grid gap-4 py-4 max-h-[70vh] overflow-y-auto">
                 <FormField
                   control={form.control}
                   name="name"
@@ -296,6 +277,122 @@ export function Home() {
                     </FormItem>
                   )}
                 />
+
+                <div className="flex items-center justify-between rounded-lg border p-3">
+                  <div className="space-y-0.5">
+                    <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
+                      Use Custom Configuration
+                    </label>
+                    <p className="text-xs text-muted-foreground">
+                      Customize database settings (order, page size, cache, WAL)
+                    </p>
+                  </div>
+                  <Switch
+                    checked={useCustomConfig}
+                    onCheckedChange={setUseCustomConfig}
+                    disabled={createMutation.isPending}
+                  />
+                </div>
+
+                {useCustomConfig && (
+                  <div className="space-y-4 pt-2 border-t animate-in slide-in-from-top-2 duration-200">
+                    <h3 className="text-sm font-semibold">Configuration</h3>
+                  
+                  <FormField
+                    control={form.control}
+                    name="config.order"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>B+Tree Order</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            placeholder="4"
+                            disabled={createMutation.isPending}
+                            {...field}
+                            onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : undefined)}
+                            value={field.value ?? ''}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                        <p className="text-xs text-muted-foreground">
+                          Number of keys per node (default: 4)
+                        </p>
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="config.pageSize"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Page Size (bytes)</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            placeholder="4096"
+                            disabled={createMutation.isPending}
+                            {...field}
+                            onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : undefined)}
+                            value={field.value ?? ''}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                        <p className="text-xs text-muted-foreground">
+                          Size of each page in bytes (default: 4096)
+                        </p>
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="config.cacheSize"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Cache Size (pages)</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            placeholder="100"
+                            disabled={createMutation.isPending}
+                            {...field}
+                            onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : undefined)}
+                            value={field.value ?? ''}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                        <p className="text-xs text-muted-foreground">
+                          Maximum number of pages in cache (default: 100)
+                        </p>
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="config.walEnabled"
+                    render={({ field }) => (
+                      <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
+                        <div className="space-y-0.5">
+                          <FormLabel>Write-Ahead Log (WAL)</FormLabel>
+                          <p className="text-xs text-muted-foreground">
+                            Enable WAL for durability (default: enabled)
+                          </p>
+                        </div>
+                        <FormControl>
+                          <Switch
+                            checked={field.value ?? true}
+                            onCheckedChange={field.onChange}
+                            disabled={createMutation.isPending}
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                  </div>
+                )}
               </div>
               <DialogFooter>
                 <Button
@@ -303,6 +400,7 @@ export function Home() {
                   variant="outline"
                   onClick={() => {
                     setOpen(false)
+                    setUseCustomConfig(false)
                     form.reset()
                   }}
                   disabled={createMutation.isPending}

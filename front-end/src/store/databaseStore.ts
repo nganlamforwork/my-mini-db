@@ -1,15 +1,16 @@
 import { create } from 'zustand'
-import { type DatabaseInfo } from '@/lib/api'
+import type { DatabaseInfo } from '@/types/database'
 
 interface DatabaseStore {
   databases: string[]
   selectedDatabase: string | null
-  databaseInfo: Record<string, DatabaseInfo>
+  databaseInfo: { [key: string]: DatabaseInfo }
   setDatabases: (databases: string[]) => void
   setSelectedDatabase: (name: string | null) => void
   setDatabaseInfo: (name: string, info: DatabaseInfo) => void
   addDatabase: (name: string) => void
   removeDatabase: (name: string) => void
+  clearDatabases: () => void
 }
 
 export const useDatabaseStore = create<DatabaseStore>((set) => ({
@@ -35,5 +36,11 @@ export const useDatabaseStore = create<DatabaseStore>((set) => ({
         selectedDatabase:
           state.selectedDatabase === name ? null : state.selectedDatabase,
       }
+    }),
+  clearDatabases: () =>
+    set({
+      databases: [],
+      databaseInfo: {},
+      selectedDatabase: null,
     }),
 }))

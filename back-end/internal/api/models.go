@@ -8,34 +8,73 @@ import (
 type StepType string
 
 const (
-	StepTypeTraverseNode   StepType = "TRAVERSE_NODE"
-	StepTypeInsertKey      StepType = "INSERT_KEY"
-	StepTypeUpdateKey      StepType = "UPDATE_KEY"
-	StepTypeDeleteKey      StepType = "DELETE_KEY"
-	StepTypeSplitNode      StepType = "SPLIT_NODE"
-	StepTypeMergeNode      StepType = "MERGE_NODE"
-	StepTypeBorrowFromLeft StepType = "BORROW_FROM_LEFT"
-	StepTypeBorrowFromRight StepType = "BORROW_FROM_RIGHT"
-	StepTypeWalAppend      StepType = "WAL_APPEND"
-	StepTypeBufferFlush    StepType = "BUFFER_FLUSH"
-	StepTypeSearchFound    StepType = "SEARCH_FOUND"
-	StepTypeSearchNotFound StepType = "SEARCH_NOT_FOUND"
+	// Navigation & Search Events
+	StepTypeTraverseStart      StepType = "TRAVERSE_START"
+	StepTypeNodeVisit          StepType = "NODE_VISIT"
+	StepTypeKeyComparison      StepType = "KEY_COMPARISON"
+	StepTypeChildPointerSelected StepType = "CHILD_POINTER_SELECTED"
+
+	// Insert Logic
+	StepTypeLeafFound          StepType = "LEAF_FOUND"
+	StepTypeInsertEntry        StepType = "INSERT_ENTRY"
+	StepTypeOverflowDetected   StepType = "OVERFLOW_DETECTED"
+	StepTypeNodeSplit          StepType = "NODE_SPLIT"
+	StepTypePromoteKey         StepType = "PROMOTE_KEY"
+	StepTypeNewRootCreated     StepType = "NEW_ROOT_CREATED"
+	StepTypeRebalanceComplete  StepType = "REBALANCE_COMPLETE"
+
+	// Delete Logic
+	StepTypeEntryRemoved       StepType = "ENTRY_REMOVED"
+	StepTypeUnderflowDetected  StepType = "UNDERFLOW_DETECTED"
+	StepTypeCheckSibling       StepType = "CHECK_SIBLING"
+	StepTypeBorrowLeft         StepType = "BORROW_LEFT"
+	StepTypeBorrowRight        StepType = "BORROW_RIGHT"
+	StepTypeMergeNodes         StepType = "MERGE_NODES"
+	StepTypeShrinkTree         StepType = "SHRINK_TREE"
+
+	// Operation Lifecycle
+	StepTypeOperationComplete  StepType = "OPERATION_COMPLETE"
+	StepTypeSearchFound        StepType = "SEARCH_FOUND"
+	StepTypeSearchNotFound     StepType = "SEARCH_NOT_FOUND"
+
+	// Legacy/Deprecated (kept for backward compatibility)
+	StepTypeTraverseNode       StepType = "TRAVERSE_NODE"
+	StepTypeInsertKey          StepType = "INSERT_KEY"
+	StepTypeUpdateKey          StepType = "UPDATE_KEY"
+	StepTypeDeleteKey          StepType = "DELETE_KEY"
+	StepTypeBorrowFromLeft     StepType = "BORROW_FROM_LEFT"
+	StepTypeBorrowFromRight     StepType = "BORROW_FROM_RIGHT"
+	StepTypeWalAppend          StepType = "WAL_APPEND"
+	StepTypeBufferFlush         StepType = "BUFFER_FLUSH"
+	StepTypeAddTempKey          StepType = "ADD_TEMP_KEY"
+	StepTypeCheckOverflow       StepType = "CHECK_OVERFLOW"
+	StepTypeBorrowKey           StepType = "BORROW_KEY"
 )
 
 // Step represents a single execution step in an operation
 type Step struct {
+	StepID       uint64                  `json:"step_id"`
 	Type         StepType                `json:"type"`
 	NodeID       string                  `json:"nodeId,omitempty"`
+	TargetID     string                  `json:"targetId,omitempty"`
+	Key          *storage.CompositeKey   `json:"key,omitempty"`
+	Value        *storage.Record         `json:"value,omitempty"`
+	Depth        int                     `json:"depth"`
+	Metadata     map[string]interface{}  `json:"metadata,omitempty"`
+	
+	// Legacy fields (kept for backward compatibility)
 	Keys         []storage.CompositeKey  `json:"keys,omitempty"`
 	HighlightKey *storage.CompositeKey   `json:"highlightKey,omitempty"`
 	Children     []uint64                `json:"children,omitempty"`
 	OriginalNode string                  `json:"originalNode,omitempty"`
 	NewNode      string                  `json:"newNode,omitempty"`
+	NewNodes     []string                `json:"newNodes,omitempty"`
 	SeparatorKey *storage.CompositeKey   `json:"separatorKey,omitempty"`
 	LSN          uint64                  `json:"lsn,omitempty"`
 	PageID       string                  `json:"pageId,omitempty"`
-	Key          *storage.CompositeKey   `json:"key,omitempty"`
-	Value        *storage.Record         `json:"value,omitempty"`
+	TargetNodeID string                  `json:"targetNodeId,omitempty"`
+	IsOverflow   bool                    `json:"isOverflow,omitempty"`
+	Order        int                     `json:"order,omitempty"`
 }
 
 // OperationResponse represents the response from an API operation
@@ -70,13 +109,13 @@ type DatabaseInfo struct {
 
 // TreeNode represents a node in the B+Tree for visualization
 type TreeNode struct {
-	PageID    uint64                  `json:"pageId"`
-	Type      string                  `json:"type"` // "internal" or "leaf"
-	Keys      []storage.CompositeKey  `json:"keys"`
-	Children  []uint64                `json:"children,omitempty"` // For internal nodes
-	Values    []storage.Record        `json:"values,omitempty"`   // For leaf nodes
-	NextPage  *uint64                 `json:"nextPage,omitempty"` // For leaf nodes
-	PrevPage  *uint64                 `json:"prevPage,omitempty"` // For leaf nodes
+	PageID    uint64            `json:"pageId"`
+	Type      string            `json:"type"` // "internal" or "leaf"
+	Keys      []JSONCompositeKey `json:"keys"`
+	Children  []uint64          `json:"children,omitempty"` // For internal nodes
+	Values    []JSONRecord      `json:"values,omitempty"`   // For leaf nodes
+	NextPage  *uint64           `json:"nextPage,omitempty"` // For leaf nodes
+	PrevPage  *uint64           `json:"prevPage,omitempty"` // For leaf nodes
 }
 
 // TreeStructure represents the full tree structure for visualization

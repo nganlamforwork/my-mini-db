@@ -5,7 +5,6 @@ import (
 
 	"bplustree/internal/btree"
 	"bplustree/internal/page"
-	"bplustree/internal/storage"
 )
 
 // GetTreeStructure builds the full tree structure for visualization
@@ -49,8 +48,10 @@ func GetTreeStructure(tree *btree.BPlusTree) (*TreeStructure, error) {
 
 		switch p := pg.(type) {
 		case *page.InternalPage:
-			keys := make([]storage.CompositeKey, len(p.Keys))
-			copy(keys, p.Keys)
+			keys := make([]JSONCompositeKey, len(p.Keys))
+			for i, k := range p.Keys {
+				keys[i] = ToJSONCompositeKey(k)
+			}
 			children := make([]uint64, len(p.Children))
 			copy(children, p.Children)
 
@@ -69,10 +70,14 @@ func GetTreeStructure(tree *btree.BPlusTree) (*TreeStructure, error) {
 			}
 
 		case *page.LeafPage:
-			keys := make([]storage.CompositeKey, len(p.Keys))
-			copy(keys, p.Keys)
-			values := make([]storage.Record, len(p.Values))
-			copy(values, p.Values)
+			keys := make([]JSONCompositeKey, len(p.Keys))
+			for i, k := range p.Keys {
+				keys[i] = ToJSONCompositeKey(k)
+			}
+			values := make([]JSONRecord, len(p.Values))
+			for i, v := range p.Values {
+				values[i] = ToJSONRecord(v)
+			}
 
 			var nextPage *uint64
 			if p.Header.NextPage != 0 {
@@ -160,6 +165,16 @@ type IOReadInfo struct {
 	Details    []page.IOReadEntry     `json:"details,omitempty"`
 }
 
+// TreeConfigInfo represents runtime B+Tree configuration
+type TreeConfigInfo struct {
+	Order      int    `json:"order"`
+	PageSize   int    `json:"pageSize"`
+	CacheSize  int    `json:"cacheSize"`
+	WalEnabled bool   `json:"walEnabled"`
+	RootPageID uint64 `json:"rootPageId"`
+	Height     int    `json:"height"`
+}
+
 // GetIOReadInfo retrieves I/O read statistics and details
 func GetIOReadInfo(tree *btree.BPlusTree) *IOReadInfo {
 	pager := tree.GetPager()
@@ -170,4 +185,80 @@ func GetIOReadInfo(tree *btree.BPlusTree) *IOReadInfo {
 		TotalReads: totalReads,
 		Details:    details,
 	}
+}
+
+// GetTreeConfigInfo retrieves runtime B+Tree configuration
+func GetTreeConfigInfo(tree *btree.BPlusTree) (*TreeConfigInfo, error) {
+	pager := tree.GetPager()
+	
+	// Get order from page package constant
+	order := int(page.ORDER)
+	
+	// Get page size from meta page
+	meta, err := pager.ReadMeta()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read meta page: %w", err)
+	}
+	
+	pageSize := int(meta.PageSize)
+	if pageSize == 0 {
+		pageSize = 4096 // DefaultPageSize fallback
+	}
+	
+	// Get cache size from pager
+	cacheSize := pager.GetMaxCacheSize()
+	
+	// Check if WAL is enabled (WAL manager exists)
+	// In current implementation, WAL is always enabled when tree is created
+	walEnabled := true
+	
+	// Get root page ID
+	rootPageID := uint64(0)
+	if meta != nil {
+		rootPageID = meta.RootPage
+	}
+	
+	// Calculate height by traversing tree
+	height := 0
+	if !tree.IsEmpty() && rootPageID != 0 {
+		// Use similar logic to GetTreeStructure to calculate height
+		var calculateHeight func(pageID uint64, level int) error
+		maxLevel := 0
+		calculateHeight = func(pageID uint64, level int) error {
+			if level > maxLevel {
+				maxLevel = level
+			}
+			
+			pg := pager.Get(pageID)
+			if pg == nil {
+				return fmt.Errorf("page not found: %d", pageID)
+			}
+			
+			switch p := pg.(type) {
+			case *page.InternalPage:
+				// Recursively calculate height for children
+				for _, childID := range p.Children {
+					if err := calculateHeight(childID, level+1); err != nil {
+						return err
+					}
+				}
+			case *page.LeafPage:
+				// Leaf node - this is the deepest level
+			}
+			return nil
+		}
+		
+		if err := calculateHeight(rootPageID, 1); err == nil {
+			height = maxLevel
+		}
+	}
+	
+	return &TreeConfigInfo{
+		Order:      order,
+		PageSize:   pageSize,
+		CacheSize:  cacheSize,
+		WalEnabled: walEnabled,
+		RootPageID: rootPageID,
+		Height:     height,
+	}, nil
 }
