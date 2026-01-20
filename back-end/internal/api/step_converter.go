@@ -67,8 +67,9 @@ func convertBTreeStepToAPIStep(btStep btree.Step) Step {
 		apiStep.TargetNodeID = btStep.TargetID
 	}
 
-	// Set HighlightKey to Key for traversal steps
-	if btStep.Type == btree.StepTypeNodeVisit || btStep.Type == btree.StepTypeKeyComparison {
+	// Set HighlightKey only for comparison / promotion steps.
+	// NODE_VISIT should not carry a highlight key to avoid confusing, always-on highlights.
+	if btStep.Type == btree.StepTypeKeyComparison || btStep.Type == btree.StepTypePromoteKey {
 		apiStep.HighlightKey = btStep.Key
 	}
 

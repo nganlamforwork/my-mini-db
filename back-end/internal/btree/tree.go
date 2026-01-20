@@ -377,15 +377,6 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 				childIndex = pos + 1
 			}
 
-			// Record child pointer selection
-			if tree.recorder != nil {
-				metadata := map[string]interface{}{
-					"child_index": childIndex,
-					"child_page_id": p.Children[childIndex],
-				}
-				tree.recorder.RecordStep(StepTypeChildPointerSelected, nodeID(currentID), depth, metadata)
-			}
-
 			currentID = p.Children[childIndex]
 			depth++
 
@@ -493,18 +484,18 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	sizeOverflow := page.ComputeLeafPayloadSize(leaf) > payloadCapacity
 	isOverflow := keyOverflow || sizeOverflow
 
-	// Record overflow detection
-	if tree.recorder != nil {
-		metadata := map[string]interface{}{
-			"key_count": len(leaf.Keys),
-			"max_keys": MAX_KEYS,
-			"payload_size": page.ComputeLeafPayloadSize(leaf),
-			"payload_capacity": payloadCapacity,
-			"key_overflow": keyOverflow,
-			"size_overflow": sizeOverflow,
+		// Record overflow detection (leaf) with full payload/key metadata
+		if tree.recorder != nil {
+			metadata := map[string]interface{}{
+				"key_count":        len(leaf.Keys),
+				"max_keys":         MAX_KEYS,
+				"payload_size":     page.ComputeLeafPayloadSize(leaf),
+				"payload_capacity": payloadCapacity,
+				"key_overflow":     keyOverflow,
+				"size_overflow":    sizeOverflow,
+			}
+			tree.recorder.RecordStep(StepTypeOverflowDetected, nodeID(leaf.Header.PageID), leafDepth, metadata)
 		}
-		tree.recorder.RecordStep(StepTypeOverflowDetected, nodeID(leaf.Header.PageID), leafDepth, metadata)
-	}
 
 	// If the leaf does not overflow (by key count or payload), we're done
 	if !isOverflow {
@@ -580,11 +571,19 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 			return nil
 		}
 
-		// Record overflow detected in parent
+		// Record overflow detected in parent (internal node) with metadata shape
+		// consistent with leaf overflow detection. Internal nodes don't have
+		// payload, so we only report key-based overflow and use zeroed payload
+		// fields for UI consistency.
 		if tree.recorder != nil {
+			keyOverflowParent := len(parent.Keys) > MAX_KEYS
 			metadata := map[string]interface{}{
-				"key_count": len(parent.Keys),
-				"order": page.ORDER,
+				"key_count":        len(parent.Keys),
+				"max_keys":         MAX_KEYS,
+				"payload_size":     0,
+				"payload_capacity": 0,
+				"key_overflow":     keyOverflowParent,
+				"size_overflow":    false,
 			}
 			tree.recorder.RecordStep(StepTypeOverflowDetected, nodeID(parentID), parentDepth, metadata)
 		}

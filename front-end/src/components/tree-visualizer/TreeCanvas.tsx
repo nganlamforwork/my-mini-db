@@ -1,21 +1,58 @@
+/**
+ * TreeCanvas Component
+ * 
+ * @description
+ * Main orchestrator component for rendering B+ Tree visualizations on an HTML5 Canvas.
+ * This component handles the complete tree visualization lifecycle including:
+ * - Canvas rendering with hierarchical layout algorithm
+ * - Interactive features (pan, zoom, node selection)
+ * - Animation support for step-by-step tree operations
+ * - Download functionality (JPG, PNG, SVG formats)
+ * 
+ * @usage
+ * ```tsx
+ * <TreeCanvas
+ *   treeData={treeStructure}
+ *   schema={schema}
+ *   highlightedNodeId={currentNodeId}
+ *   highlightedKey={currentKey}
+ *   currentStep={executionStep}
+ *   onStepComplete={handleStepComplete}
+ *   animationSpeed={50}
+ *   config={treeConfig}
+ * />
+ * ```
+ * 
+ * @dependencies
+ * - Uses TreeNode.tsx for node rendering logic
+ * - Uses TreeEdge.tsx for edge rendering logic
+ * - Uses Controls.tsx for zoom/download controls
+ * - Integrates with useBTreeVisualization hook for state management
+ * 
+ * @note
+ * This component uses Canvas API for performance. For large trees, consider
+ * implementing viewport culling to optimize rendering.
+ */
+
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import type { TreeStructure, TreeNode, ExecutionStep, Schema } from '@/types/database';
 import { formatKey, compareKeys, formatNodeDataForGraph } from '@/lib/keyUtils';
 import { ZoomIn, ZoomOut, Download, RotateCcw, Info, FileImage, FileType, Image as ImageIcon } from 'lucide-react';
-import { Button } from './ui/button';
-import { NodeDetailDialog } from './NodeDetailDialog';
+import { Button } from '../ui/button';
+import { NodeDetailDialog } from '../NodeDetailDialog';
+import { extractPageId, drawRoundedRect, generateEdgeTooltipText, getThemeColors } from './helpers';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from './ui/dropdown-menu';
+} from '../ui/dropdown-menu';
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
-} from './ui/tooltip';
+} from '../ui/tooltip';
 
 interface TreeCanvasProps {
   treeData: TreeStructure;
@@ -80,81 +117,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   // Changed to instant appearance with opacity transition
   const insertingKeyAnimationRef = useRef<{ startTime: number; opacityTransitionDuration: number } | null>(null);
   
-  // Helper to extract page ID from node_id (e.g., "N2" -> 2, "page-9" -> 9)
-  const extractPageId = (nodeId?: string | null): number | null => {
-    if (!nodeId) return null;
-    
-    // Handle new format: "N2" -> 2
-    if (nodeId.startsWith('N')) {
-      const match = nodeId.match(/N(\d+)/);
-      return match ? parseInt(match[1], 10) : null;
-    }
-    
-    // Handle legacy format: "page-9" -> 9
-    const match = nodeId.match(/page-(\d+)/);
-    return match ? parseInt(match[1], 10) : null;
-  };
-
-  // Helper to draw rounded rectangle with selective corner rounding
-  const drawRoundedRect = (
-    ctx: CanvasRenderingContext2D,
-    x: number,
-    y: number,
-    width: number,
-    height: number,
-    radius: number,
-    corners: { topLeft?: boolean; topRight?: boolean; bottomLeft?: boolean; bottomRight?: boolean } = {}
-  ) => {
-    const { topLeft = true, topRight = true, bottomLeft = true, bottomRight = true } = corners;
-    
-    ctx.beginPath();
-    ctx.moveTo(x + (topLeft ? radius : 0), y);
-    ctx.lineTo(x + width - (topRight ? radius : 0), y);
-    if (topRight) {
-      ctx.arcTo(x + width, y, x + width, y + radius, radius);
-    }
-    ctx.lineTo(x + width, y + height - (bottomRight ? radius : 0));
-    if (bottomRight) {
-      ctx.arcTo(x + width, y + height, x + width - radius, y + height, radius);
-    }
-    ctx.lineTo(x + (bottomLeft ? radius : 0), y + height);
-    if (bottomLeft) {
-      ctx.arcTo(x, y + height, x, y + height - radius, radius);
-    }
-    ctx.lineTo(x, y + (topLeft ? radius : 0));
-    if (topLeft) {
-      ctx.arcTo(x, y, x + radius, y, radius);
-    }
-    ctx.closePath();
-  };
-
-  // Generate tooltip text for an edge based on parent keys and child index
-  const generateEdgeTooltipText = (
-    parentKeys: Array<{ values: Array<{ type: string; value: any }> }>,
-    childIndex: number,
-    numChildren: number
-  ): string => {
-    if (!parentKeys || parentKeys.length === 0) {
-      return '';
-    }
-
-    // Extract key values using formatKey utility for safe handling
-    const keyValues = parentKeys.map(key => formatKey(key)).filter(Boolean);
-
-    if (childIndex === 0) {
-      // Leftmost edge: Keys < [First Parent Key]
-      return `Keys < ${keyValues[0]}`;
-    } else if (childIndex === numChildren - 1) {
-      // Rightmost edge: Keys >= [Last Parent Key]
-      return `Keys >= ${keyValues[keyValues.length - 1]}`;
-    } else {
-      // Inner edge: [Left Key] <= Keys < [Right Key]
-      const leftKey = keyValues[childIndex - 1];
-      const rightKey = keyValues[childIndex];
-      return `${leftKey} <= Keys < ${rightKey}`;
-    }
-  };
-
   // Check if tree is empty
   const isEmptyTree = useMemo(() => {
     if (!treeData || !treeData.nodes || typeof treeData.nodes !== 'object') {
@@ -280,22 +242,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
 
     let animationFrame: number;
     let themeObserver: MutationObserver | null = null;
-
-    const getThemeColors = () => {
-      // Get colors from CSS variables, with fallbacks
-      const isDark = document.documentElement.classList.contains('dark')
-      
-      return {
-        connectionLine: isDark ? '#475569' : '#94a3b8',
-        internalFill: isDark ? '#1e293b' : '#f1f5f9',
-        internalStroke: isDark ? '#64748b' : '#475569',
-        leafFill: isDark ? '#064e3b' : '#d1fae5',
-        leafStroke: isDark ? '#10b981' : '#059669',
-        textPrimary: isDark ? '#f8fafc' : '#0f172a',
-        textSecondary: isDark ? '#94a3b8' : '#64748b',
-        bgPattern: isDark ? '#1e293b' : '#e2e8f0'
-      }
-    }
 
     const render = () => {
       if (!ctx || !containerRef.current) return;
@@ -561,12 +507,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           if (keyIndex === -1) {
             // Key not found in node - this means we're inserting a NEW key
             isInsertingNewKey = true;
-            console.log('[TreeCanvas] INSERT_ENTRY: Key not found in node - will animate insertion:', {
-              highlightedKey,
-              nodeKeyCount: targetNodeData.keys.length,
-              nodeId: highlightedNodeId,
-              stepType: currentStep.type
-            });
           }
         }
       }
@@ -587,8 +527,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         const keyTexts = formatNodeDataForGraph(nodeData.keys);
         
         // Find highlighted key index for INSERT_ENTRY animation (use compareKeys instead of indexOf)
-        // OLD (Buggy): const index = node.keys.indexOf(step.key); // Fails for composite keys
-        // NEW (Correct): Use findIndex with compareKeys function
         let highlightedKeyIndex: number | null = null;
         if (highlightedKey && (currentStep?.type === 'INSERT_ENTRY' || currentStep?.type === 'LEAF_FOUND')) {
           // Use findIndex with compareKeys instead of indexOf (which fails for composite keys)
@@ -596,12 +534,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           if (highlightedKeyIndex === -1) {
             // Key not found - it's being inserted (handled by inserting key animation below)
             highlightedKeyIndex = null;
-          } else {
-            // Key found - it's already in the node, highlight it
-            console.log('[TreeCanvas] INSERT_ENTRY: Found highlighted key at index:', highlightedKeyIndex, {
-              keyText: formatKey(highlightedKey),
-              nodeId: pos.id
-            });
           }
         }
         
@@ -810,20 +742,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
       if (currentStep && (currentStep.type === 'NODE_SPLIT' || currentStep.type === 'PROMOTE_KEY')) {
         const promotedKey = currentStep.separatorKey || currentStep.key || currentStep.metadata?.promotedKey || currentStep.metadata?.separatorKey;
         
-        // Log NODE_SPLIT details for debugging
-        if (currentStep.type === 'NODE_SPLIT') {
-          console.log('[TreeCanvas] NODE_SPLIT step detected:', {
-            stepId: currentStep.step_id,
-            nodeId: currentStep.node_id,
-            targetId: currentStep.target_id,
-            originalNode: currentStep.originalNode,
-            newNode: currentStep.newNode,
-            newNodes: currentStep.newNodes,
-            metadata: currentStep.metadata,
-            hasPromotedKey: !!promotedKey
-          });
-        }
-        
         if (promotedKey && highlightedNodeId !== null) {
           // Initialize animation timing if not already started
           if (!promotedKeyAnimationRef.current) {
@@ -925,34 +843,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
               
               ctx.restore();
               
-              // Log for debugging (only once per step)
-              if (progress < 0.1) {
-                console.log('[TreeCanvas] Drawing promoted key animation:', {
-                  stepType: currentStep.type,
-                  promotedKeyText,
-                  promotedKeyWidth,
-                  sourcePos: { x: sourceX, y: sourceY },
-                  targetPos: { x: targetX, y: targetY },
-                  currentPos: { x: currentX, y: currentY },
-                  progress: easedProgress,
-                  elapsed,
-                  duration: promotedKeyAnimationRef.current.duration
-                });
-              }
-            } else {
-              console.warn('[TreeCanvas] Promoted key exists but formatKey returned empty:', promotedKey);
-            }
-          } else {
-            console.warn('[TreeCanvas] Source node position not found for promoted key animation:', highlightedNodeId);
-          }
-        } else if (currentStep.type === 'NODE_SPLIT' || currentStep.type === 'PROMOTE_KEY') {
-          console.warn('[TreeCanvas] NODE_SPLIT/PROMOTE_KEY step but no promoted key found:', {
-            stepType: currentStep.type,
-            hasSeparatorKey: !!currentStep.separatorKey,
-            hasKey: !!currentStep.key,
-            metadata: currentStep.metadata,
-            fullStep: currentStep
-          });
+            } 
+          } 
         }
       } else {
         // Reset animation ref when step changes
@@ -1053,29 +945,11 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
             ctx.globalAlpha = 1.0; // Reset global alpha
             ctx.restore();
             
-            // Log for debugging (only once per step)
-            if (opacityProgress < 0.1) {
-              console.log('[TreeCanvas] Drawing inserting key (instant appearance):', {
-                stepType: currentStep.type,
-                insertingKeyText,
-                insertingKeyWidth,
-                targetPos: { x: targetX, y: targetY },
-                currentOpacity,
-                opacityProgress,
-                elapsed,
-                opacityTransitionDuration: insertingKeyAnimationRef.current.opacityTransitionDuration
-              });
-            }
-            
             // After opacity transition completes, the key is fully inserted
             // Overflow detection will happen automatically via the next step (OVERFLOW_DETECTED or NODE_SPLIT)
             // The step animator will handle triggering the split/promote animation sequence
-          } else {
-            console.warn('[TreeCanvas] Inserting key exists but formatKey returned empty:', highlightedKey);
-          }
-        } else {
-          console.warn('[TreeCanvas] Target node position not found for inserting key animation:', highlightedNodeId);
-        }
+          } 
+        } 
       } else {
         // Reset animation ref when step changes
         if (insertingKeyAnimationRef.current) {
@@ -1457,25 +1331,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     return { minX, maxX, minY, maxY };
   };
 
-  // Helper to get colors
-  const getColors = () => {
-    const isDark = document.documentElement.classList.contains('dark');
-    return {
-      connectionLine: isDark ? '#475569' : '#94a3b8',
-      internalFill: isDark ? '#1e293b' : '#f1f5f9',
-      internalStroke: isDark ? '#64748b' : '#475569',
-      leafFill: isDark ? '#064e3b' : '#d1fae5',
-      leafStroke: isDark ? '#10b981' : '#059669',
-      textPrimary: isDark ? '#f8fafc' : '#0f172a',
-      textSecondary: isDark ? '#94a3b8' : '#64748b',
-      bgPattern: isDark ? '#1e293b' : '#e2e8f0',
-      bg: isDark ? '#0f172a' : '#ffffff'
-    };
-  };
 
   // Helper to draw tree on canvas
   const drawTreeOnCanvas = (ctx: CanvasRenderingContext2D, padding: number, minX: number, minY: number, withBackground: boolean) => {
-    const colors = getColors();
+    const colors = getThemeColors();
     const isDark = document.documentElement.classList.contains('dark');
 
     if (withBackground) {
@@ -1772,7 +1631,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   };
 
   const handleDownloadSVG = (minX: number, minY: number, treeWidth: number, treeHeight: number, padding: number) => {
-    const colors = getColors();
+    const colors = getThemeColors();
     const isDark = document.documentElement.classList.contains('dark');
     
     let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${treeWidth}" height="${treeHeight}" viewBox="0 0 ${treeWidth} ${treeHeight}">`;
