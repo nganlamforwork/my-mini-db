@@ -20,14 +20,20 @@ export interface Database {
 
 export interface CreateDatabaseRequest {
   name: string
+}
+
+export interface CreateTableRequest {
+  name: string
   config?: {
     order?: number
     pageSize?: number
     walEnabled?: boolean
     cacheSize?: number
   }
-  columns: Array<{ name: string; type: 'INT' | 'STRING' | 'FLOAT' | 'BOOL' }>
-  primaryKey: string[]
+  schema: {
+    columns: Array<{ name: string; type: 'INT' | 'STRING' | 'FLOAT' | 'BOOL' }>
+    primaryKey: string[]
+  }
 }
 
 // ConnectDatabaseRequest is for connecting to existing databases (schema is loaded from disk)
@@ -82,6 +88,34 @@ export const api = {
     return await response.json()
   },
 
+  // Create a new table in a database
+  async createTable(dbName: string, request: CreateTableRequest): Promise<{ success: boolean; database: string; name: string; schema: any }> {
+    const response = await fetch(`${API_BASE_URL}/databases/${dbName}/tables`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(request),
+    })
+    
+    if (!response.ok) {
+      const error = await response.json()
+      throw new Error(error.error || 'Failed to create table')
+    }
+    
+    return await response.json()
+  },
+
+  // List tables in a database
+  async listTables(dbName: string): Promise<string[]> {
+    const response = await fetch(`${API_BASE_URL}/databases/${dbName}/tables`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch tables: ${dbName}`);
+    }
+    const data = await response.json();
+    return data.tables || [];
+  },
+
   // Drop a database
   async dropDatabase(name: string): Promise<void> {
     const response = await fetch(`${API_BASE_URL}/databases/${name}`, {
@@ -109,37 +143,37 @@ export const api = {
   },
 
   // Get tree structure
-  async getTreeStructure(name: string): Promise<TreeStructure> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/tree`)
+  async getTreeStructure(dbName: string, tableName: string): Promise<TreeStructure> {
+    const response = await fetch(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/tree`)
     if (!response.ok) {
-      throw new Error(`Failed to fetch tree structure: ${name}`)
+      throw new Error(`Failed to fetch tree structure: ${dbName}/${tableName}`)
     }
     return await response.json()
   },
 
   // Get cache statistics
-  async getCacheStats(name: string): Promise<CacheStats> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/cache`)
+  async getCacheStats(dbName: string, tableName: string): Promise<CacheStats> {
+    const response = await fetch(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/cache`)
     if (!response.ok) {
-      throw new Error(`Failed to fetch cache stats: ${name}`)
+      throw new Error(`Failed to fetch cache stats: ${dbName}/${tableName}`)
     }
     return await response.json()
   },
 
   // Get cached pages
-  async getCachePages(name: string): Promise<CachePages> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/cache/pages`)
+  async getCachePages(dbName: string, tableName: string): Promise<CachePages> {
+    const response = await fetch(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/cache/pages`)
     if (!response.ok) {
-      throw new Error(`Failed to fetch cache pages: ${name}`)
+      throw new Error(`Failed to fetch cache pages: ${dbName}/${tableName}`)
     }
     return await response.json()
   },
 
   // Get I/O read statistics
-  async getIOReads(name: string): Promise<IOReadInfo> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/io`)
+  async getIOReads(dbName: string, tableName: string): Promise<IOReadInfo> {
+    const response = await fetch(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/io`)
     if (!response.ok) {
-      throw new Error(`Failed to fetch I/O reads: ${name}`)
+      throw new Error(`Failed to fetch I/O reads: ${dbName}/${tableName}`)
     }
     return await response.json()
   },
@@ -295,46 +329,50 @@ export const api = {
   },
 
   // Get WAL info
-  async getWALInfo(name: string): Promise<WALInfo> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/wal`)
+  async getWALInfo(dbName: string, tableName: string): Promise<WALInfo> {
+    const response = await fetch(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/wal`)
     if (!response.ok) {
-      throw new Error(`Failed to fetch WAL info: ${name}`)
+      throw new Error(`Failed to fetch WAL info: ${dbName}/${tableName}`)
     }
     return await response.json()
   },
 
   // Get tree configuration
-  async getTreeConfig(name: string): Promise<TreeConfig> {
-    const response = await fetch(`${API_BASE_URL}/databases/${name}/config`)
+  async getTreeConfig(dbName: string, tableName: string): Promise<TreeConfig> {
+    const response = await fetch(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/config`)
     if (!response.ok) {
-      throw new Error(`Failed to fetch tree config: ${name}`)
+      throw new Error(`Failed to fetch tree config: ${dbName}/${tableName}`)
     }
     return await response.json()
   },
 
-  // Get database schema (Version 7.0)
-  async getSchema(name: string): Promise<Schema | null> {
+  // Get table schema
+  async getSchema(dbName: string, tableName: string): Promise<Schema | null> {
     try {
-      const info = await this.getDatabaseInfo(name)
-      if (info.schema) {
-        // Convert API schema format to frontend Schema format
-        return {
-          columns: info.schema.columns.map(col => ({
-            name: col.name,
-            type: col.type as 'INT' | 'STRING' | 'FLOAT' | 'BOOL',
-          })),
-          primaryKey: info.schema.primaryKey,
+      const response = await fetch(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/schema`);
+      if (!response.ok) {
+        if (response.status === 404) {
+          return null;
         }
+        throw new Error(`Failed to fetch schema: ${dbName}/${tableName}`);
       }
-      return null
+      const schemaInfo = await response.json();
+      // Convert API schema format to frontend Schema format
+      return {
+        columns: schemaInfo.columns.map((col: any) => ({
+          name: col.name,
+          type: col.type as 'INT' | 'STRING' | 'FLOAT' | 'BOOL',
+        })),
+        primaryKey: schemaInfo.primaryKey || schemaInfo.primaryKeyColumns,
+      };
     } catch {
-      return null
+      return null;
     }
   },
 
-  // Insert row data (schema-based, Version 7.0)
-  async insertRow(name: string, rowData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
-    const url = new URL(`${API_BASE_URL}/databases/${name}/insert`)
+  // Insert row data (schema-based)
+  async insertRow(dbName: string, tableName: string, rowData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/insert`)
     if (enableSteps) {
       url.searchParams.set('enable_steps', 'true')
     }
@@ -355,9 +393,9 @@ export const api = {
     return await response.json()
   },
 
-  // Update row data (schema-based, Version 7.0)
-  async updateRow(name: string, rowData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
-    const url = new URL(`${API_BASE_URL}/databases/${name}/update`)
+  // Update row data (schema-based)
+  async updateRow(dbName: string, tableName: string, rowData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/update`)
     if (enableSteps) {
       url.searchParams.set('enable_steps', 'true')
     }
@@ -378,9 +416,9 @@ export const api = {
     return await response.json()
   },
 
-  // Delete by key components (schema-based, Version 7.0)
-  async deleteByKey(name: string, keyData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
-    const url = new URL(`${API_BASE_URL}/databases/${name}/delete`)
+  // Delete by key components (schema-based)
+  async deleteByKey(dbName: string, tableName: string, keyData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/delete`)
     if (enableSteps) {
       url.searchParams.set('enable_steps', 'true')
     }
@@ -401,9 +439,9 @@ export const api = {
     return await response.json()
   },
 
-  // Search by key components (schema-based, Version 7.0)
-  async searchByKey(name: string, keyData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
-    const url = new URL(`${API_BASE_URL}/databases/${name}/search`)
+  // Search by key components (schema-based)
+  async searchByKey(dbName: string, tableName: string, keyData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/search`)
     if (enableSteps) {
       url.searchParams.set('enable_steps', 'true')
     }
@@ -424,9 +462,9 @@ export const api = {
     return await response.json()
   },
 
-  // Range query by key components (schema-based, Version 7.0)
-  async rangeQueryByKeys(name: string, startKeyData: { [key: string]: any }, endKeyData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
-    const url = new URL(`${API_BASE_URL}/databases/${name}/range`)
+  // Range query by key components (schema-based)
+  async rangeQueryByKeys(dbName: string, tableName: string, startKeyData: { [key: string]: any }, endKeyData: { [key: string]: any }, enableSteps: boolean = false): Promise<OperationResponse> {
+    const url = new URL(`${API_BASE_URL}/databases/${dbName}/tables/${tableName}/range`)
     if (enableSteps) {
       url.searchParams.set('enable_steps', 'true')
     }

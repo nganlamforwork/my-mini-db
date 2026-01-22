@@ -12,9 +12,6 @@ export function useCreateDatabase() {
     mutationFn: (data: CreateDatabaseInput) =>
       api.createDatabase({
         name: data.name,
-        config: data.config,
-        columns: data.columns,
-        primaryKey: data.primaryKey,
       }),
     onSuccess: (_, data) => {
       queryClient.invalidateQueries({ queryKey: ['databases'] })

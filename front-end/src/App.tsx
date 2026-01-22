@@ -5,12 +5,14 @@ import { About } from './pages/About'
 import { Documentation } from './pages/Documentation'
 import { HowToUse } from './pages/HowToUse'
 import { DatabaseDetail } from './pages/DatabaseDetail'
+import { TableDetail } from './pages/TableDetail'
 import './App.css'
 
 function App() {
   return (
     <Routes>
       <Route path="/databases/:name" element={<DatabaseDetail />} />
+      <Route path="/databases/:dbName/tables/:tableName" element={<TableDetail />} />
       <Route
         path="/*"
         element={

@@ -20,6 +20,26 @@ export const createDatabaseSchema = z.object({
       (val) => !val.endsWith('-') && !val.endsWith('_'),
       'Database name cannot end with a hyphen or underscore'
     ),
+})
+
+// Table creation validation schema
+export const createTableSchema = z.object({
+  name: z
+    .string()
+    .min(1, 'Table name is required')
+    .max(50, 'Table name must be 50 characters or less')
+    .regex(
+      /^[a-zA-Z0-9_-]+$/,
+      'Table name can only contain letters, numbers, underscores, and hyphens. No spaces or special characters allowed.'
+    )
+    .refine(
+      (val) => !val.startsWith('-') && !val.startsWith('_'),
+      'Table name cannot start with a hyphen or underscore'
+    )
+    .refine(
+      (val) => !val.endsWith('-') && !val.endsWith('_'),
+      'Table name cannot end with a hyphen or underscore'
+    ),
   config: z
     .object({
       order: z
@@ -43,25 +63,27 @@ export const createDatabaseSchema = z.object({
         .optional(),
     })
     .optional(),
-  // Schema fields (Version 7.0) - Mandatory (1 Database = 1 Table = 1 B+ Tree)
-  columns: z.array(z.object({
-    name: z.string().min(1, 'Column name is required'),
-    type: z.enum(['INT', 'STRING', 'FLOAT', 'BOOL']),
-  })).min(1, 'At least one column is required'),
-  primaryKey: z.array(z.string()).min(1, 'At least one primary key column is required'),
+  schema: z.object({
+    columns: z.array(z.object({
+      name: z.string().min(1, 'Column name is required'),
+      type: z.enum(['INT', 'STRING', 'FLOAT', 'BOOL']),
+    })).min(1, 'At least one column is required'),
+    primaryKey: z.array(z.string()).min(1, 'At least one primary key column is required'),
+  }),
 }).refine(
   (data) => {
     // All primary key columns must exist in columns
-    if (data.columns && data.primaryKey) {
-      const columnNames = new Set(data.columns.map(col => col.name));
-      return data.primaryKey.every(pk => columnNames.has(pk));
+    if (data.schema.columns && data.schema.primaryKey) {
+      const columnNames = new Set(data.schema.columns.map(col => col.name));
+      return data.schema.primaryKey.every(pk => columnNames.has(pk));
     }
     return true;
   },
   {
     message: 'All primary key columns must exist in the columns list',
-    path: ['primaryKey'],
+    path: ['schema', 'primaryKey'],
   }
 )
 
 export type CreateDatabaseInput = z.infer<typeof createDatabaseSchema>
+export type CreateTableInput = z.infer<typeof createTableSchema>

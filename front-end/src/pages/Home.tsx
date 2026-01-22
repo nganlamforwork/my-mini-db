@@ -9,10 +9,8 @@ import { createDatabaseSchema, type CreateDatabaseInput } from '@/lib/validation
 import { useDatabases } from '@/hooks/useDatabases'
 import { useDeleteDatabase, useClearAllDatabases } from '@/hooks/useDatabaseMutations'
 import { Button } from '@/components/ui/button'
-import { SchemaBuilder } from '@/components/SchemaBuilder'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
-import type { ColumnDefinition } from '@/types/database'
 import {
   Dialog,
   DialogContent,
@@ -31,7 +29,6 @@ import {
   FormMessage,
 } from '@/components/ui/form'
 import { Input } from '@/components/ui/input'
-import { Switch } from '@/components/ui/switch'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -49,16 +46,8 @@ export function Home() {
   const [open, setOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState<string | null>(null)
   const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false)
-  const [useCustomConfig, setUseCustomConfig] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [connectingDbName, setConnectingDbName] = useState<string | null>(null)
-  const [schemaData, setSchemaData] = useState<{
-    columns: ColumnDefinition[];
-    primaryKey: string[];
-  }>({
-    columns: [],
-    primaryKey: [],
-  })
 
   // Fetch databases list
   const { data: databases = [], isLoading } = useDatabases()
@@ -73,43 +62,17 @@ export function Home() {
     mode: 'onBlur',
     defaultValues: {
       name: '',
-      config: {
-        order: 4,
-        pageSize: 4096,
-        walEnabled: true,
-        cacheSize: 100,
-      },
-      columns: [],
-      primaryKey: [],
     },
   })
-
-  // Sync schemaData with form state whenever it changes
-  React.useEffect(() => {
-    form.setValue('columns', schemaData.columns, { shouldValidate: true })
-    form.setValue('primaryKey', schemaData.primaryKey, { shouldValidate: true })
-  }, [schemaData, form])
 
   const handleCreateDatabase = async (data: CreateDatabaseInput) => {
     // Set loading state
     setIsCreating(true)
     
     try {
-      // Build submit data - schema is mandatory (1 Database = 1 Table = 1 B+ Tree)
-      const submitData: CreateDatabaseInput = {
-        name: data.name,
-        ...(useCustomConfig ? { config: data.config } : {}),
-        // Schema is always included (mandatory)
-        columns: schemaData.columns,
-        primaryKey: schemaData.primaryKey,
-      }
-      
-      // Step 1: Create database and await response
+      // Step 1: Create database (name only)
       const createResponse = await api.createDatabase({
-        name: submitData.name,
-        config: submitData.config,
-        columns: submitData.columns,
-        primaryKey: submitData.primaryKey,
+        name: data.name,
       })
       
       // Check if creation was successful
@@ -117,10 +80,10 @@ export function Home() {
         throw new Error('Database creation failed')
       }
       
-      // Step 2: Connect to the newly created database and await
+      // Step 2: Connect to the newly created database
       const connectResponse = await api.connectDatabase({
-        name: submitData.name,
-        config: submitData.config ? { cacheSize: submitData.config.cacheSize } : undefined,
+        name: data.name,
+        config: { cacheSize: 100 },
       })
       
       // Check if connection was successful
@@ -131,15 +94,10 @@ export function Home() {
       // Step 3: Only navigate on success
       // Close dialog and reset form
       setOpen(false)
-      setUseCustomConfig(false)
-      setSchemaData({
-        columns: [],
-        primaryKey: [],
-      })
       form.reset()
       
-      // Navigate to database detail page
-      navigate(`/databases/${submitData.name}`)
+      // Navigate to database detail page (where user can create tables)
+      navigate(`/databases/${data.name}`)
       
     } catch (error) {
       // Show error toast and stop - do NOT redirect
@@ -157,11 +115,6 @@ export function Home() {
     setOpen(isOpen)
     if (!isOpen) {
       // Reset state when dialog closes
-      setUseCustomConfig(false)
-      setSchemaData({
-        columns: [],
-        primaryKey: [],
-      })
       form.reset()
     }
   }
@@ -198,14 +151,7 @@ export function Home() {
     }
   }
 
-  // Validation: Check if schema is valid (at least one column and primary key)
-  // Also check form validation state
-  const isSchemaValid = schemaData.columns.length > 0 &&
-    schemaData.columns.every(col => col.name.trim() !== '') &&
-    schemaData.primaryKey.length > 0 &&
-    schemaData.primaryKey.every(pk => schemaData.columns.some(col => col.name === pk))
-  
-  const isFormValid = form.formState.isValid && isSchemaValid
+  const isFormValid = form.formState.isValid
 
   const handleDelete = (name: string, e?: React.MouseEvent) => {
     e?.preventDefault()
@@ -380,10 +326,10 @@ export function Home() {
               <DialogHeader>
                 <DialogTitle>Create New Database</DialogTitle>
                 <DialogDescription>
-                  Create a new database with a mandatory schema. Architecture: 1 Database = 1 Table = 1 B+ Tree. The database name serves as the table identifier. Only letters, numbers, underscores, and hyphens are allowed for the name.
+                  Create a new empty database. You'll be able to create tables with schemas after creation. Only letters, numbers, underscores, and hyphens are allowed for the name.
                 </DialogDescription>
               </DialogHeader>
-              <div className="grid gap-4 py-4 max-h-[70vh] overflow-y-auto">
+              <div className="grid gap-4 py-4">
                 <FormField
                   control={form.control}
                   name="name"
@@ -402,136 +348,6 @@ export function Home() {
                     </FormItem>
                   )}
                 />
-
-                {/* Table Schema Definition - Mandatory */}
-                <div className="space-y-4 pt-2 border-t">
-                  <div>
-                    <h3 className="text-sm font-semibold mb-1">Table Schema Definition <span className="text-destructive">*</span></h3>
-                    <p className="text-xs text-muted-foreground">
-                      Define columns, types, and primary key. Required for all databases.
-                    </p>
-                  </div>
-                  <SchemaBuilder
-                    value={schemaData}
-                    onChange={setSchemaData}
-                  />
-                </div>
-
-                <div className="flex items-center justify-between rounded-lg border p-3">
-                  <div className="space-y-0.5">
-                    <label className="text-sm font-medium leading-none peer-disabled:cursor-not-allowed peer-disabled:opacity-70">
-                      Use Custom Configuration
-                    </label>
-                    <p className="text-xs text-muted-foreground">
-                      Customize database settings (order, page size, cache, WAL)
-                    </p>
-                  </div>
-                  <Switch
-                    checked={useCustomConfig}
-                    onCheckedChange={setUseCustomConfig}
-                    disabled={isCreating}
-                  />
-                </div>
-
-                {useCustomConfig && (
-                  <div className="space-y-4 pt-2 border-t animate-in slide-in-from-top-2 duration-200">
-                    <h3 className="text-sm font-semibold">Configuration</h3>
-                  
-                  <FormField
-                    control={form.control}
-                    name="config.order"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>B+Tree Order</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            placeholder="4"
-                            disabled={isCreating}
-                            {...field}
-                            onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : undefined)}
-                            value={field.value ?? ''}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                        <p className="text-xs text-muted-foreground">
-                          Number of keys per node (default: 4)
-                        </p>
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="config.pageSize"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Page Size (bytes)</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            placeholder="4096"
-                            disabled={isCreating}
-                            {...field}
-                            onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : undefined)}
-                            value={field.value ?? ''}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                        <p className="text-xs text-muted-foreground">
-                          Size of each page in bytes (default: 4096)
-                        </p>
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="config.cacheSize"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel>Cache Size (pages)</FormLabel>
-                        <FormControl>
-                          <Input
-                            type="number"
-                            placeholder="100"
-                            disabled={isCreating}
-                            {...field}
-                            onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value, 10) : undefined)}
-                            value={field.value ?? ''}
-                          />
-                        </FormControl>
-                        <FormMessage />
-                        <p className="text-xs text-muted-foreground">
-                          Maximum number of pages in cache (default: 100)
-                        </p>
-                      </FormItem>
-                    )}
-                  />
-
-                  <FormField
-                    control={form.control}
-                    name="config.walEnabled"
-                    render={({ field }) => (
-                      <FormItem className="flex flex-row items-center justify-between rounded-lg border p-3">
-                        <div className="space-y-0.5">
-                          <FormLabel>Write-Ahead Log (WAL)</FormLabel>
-                          <p className="text-xs text-muted-foreground">
-                            Enable WAL for durability (default: enabled)
-                          </p>
-                        </div>
-                        <FormControl>
-                          <Switch
-                            checked={field.value ?? true}
-                            onCheckedChange={field.onChange}
-                            disabled={isCreating}
-                          />
-                        </FormControl>
-                      </FormItem>
-                    )}
-                  />
-                  </div>
-                )}
               </div>
               <DialogFooter>
                 <Button
@@ -539,7 +355,6 @@ export function Home() {
                   variant="outline"
                   onClick={() => {
                     setOpen(false)
-                    setUseCustomConfig(false)
                     form.reset()
                   }}
                   disabled={isCreating}

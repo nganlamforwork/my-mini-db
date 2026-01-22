@@ -2,6 +2,8 @@
 
 The MiniDB API server provides a RESTful interface to interact with MiniDB instances. B+Tree operations can optionally return step-based execution traces for visualization when `enable_steps=true`.
 
+**Architecture:** MiniDB follows a standard RDBMS hierarchy: **1 Database contains N Tables**, and **1 Table contains 1 B+ Tree**. Databases are logical containers, while tables hold the actual data and B+ Trees.
+
 ---
 
 ## Table of Contents
@@ -10,6 +12,7 @@ The MiniDB API server provides a RESTful interface to interact with MiniDB insta
 - [API Overview](#api-overview)
 - [Data Types](#data-types)
 - [Database Lifecycle APIs](#database-lifecycle-apis)
+- [Table Lifecycle APIs](#table-lifecycle-apis)
 - [Data Operation APIs](#data-operation-apis)
 - [Introspection APIs](#introspection-apis)
 - [Step-Based Execution Traces](#step-based-execution-traces)
@@ -35,7 +38,12 @@ Options:
 
 The server will start and listen on the specified address. All API endpoints are prefixed with `/api`.
 
-**Note:** Database files (`.db` and `.wal`) are automatically stored in the `database/` folder relative to the backend directory. The folder is created automatically if it doesn't exist.
+**Note:** Database files are organized in a directory structure: `database/{dbName}/`. Each table within a database has its own files:
+- `{tableName}.db` - B+ Tree data file
+- `{tableName}.wal` - Write-Ahead Log file
+- `{tableName}.schema.json` - Schema definition file
+
+The `database/` folder is created automatically if it doesn't exist.
 
 ### Base URL
 
@@ -49,17 +57,26 @@ http://localhost:8080/api
 
 ## API Overview
 
-**Architecture:** MiniDB follows a simplified architecture where **1 Database = 1 Table = 1 B+ Tree**. Each database has exactly one table with a mandatory schema. The database name serves as the table identifier.
+**Architecture:** MiniDB follows a standard RDBMS hierarchy: **1 Database contains N Tables**, and **1 Table contains 1 B+ Tree**. 
+
+- **Database**: A logical container that groups related tables. A database is created with just a name and contains no data until tables are created.
+- **Table**: A named collection of records with a defined schema. Each table has its own B+ Tree, schema (columns and primary key), and configuration.
 
 The MiniDB API is organized into three categories:
 
-1. **Database Lifecycle APIs**: Create, list, get, and drop databases
-2. **Data Operation APIs**: Insert, update, delete, search, and range queries
-3. **Introspection APIs**: Inspect tree structure, WAL, and cache statistics
+1. **Database Lifecycle APIs**: Create, list, get, connect, and drop databases
+2. **Table Lifecycle APIs**: Create tables within databases (with schema and config)
+3. **Data Operation APIs**: Insert, update, delete, search, and range queries on tables
+4. **Introspection APIs**: Inspect tree structure, WAL, and cache statistics for tables
 
 All data operations optionally return step-based execution traces for visualization when `enable_steps=true`.
 
-**Schema Enforcement:** All databases require a schema definition (columns and primary key) when created. Schema validation is enforced on all operations (insert, update, delete, search, range query).
+**Schema Enforcement:** All tables require a schema definition (columns and primary key) when created. Schema validation is enforced on all operations (insert, update, delete, search, range query).
+
+**Setup Flow:** The typical workflow is:
+1. **Step 1**: Create a Database (name only)
+2. **Step 2**: Create one or more Tables within that Database (schema + config)
+3. **Step 3**: Perform data operations on the Tables
 
 ---
 
@@ -128,9 +145,7 @@ A record represents a database row with multiple columns.
 
 ### Create Database
 
-Create a new database instance.
-
-**Architecture:** 1 Database = 1 Table = 1 B+ Tree. Each database has exactly one table with a defined schema.
+Create a new empty database (container). The database will have no tables until you create them.
 
 **Endpoint:** `POST /api/databases`
 
@@ -138,46 +153,89 @@ Create a new database instance.
 
 ```json
 {
-  "name": "mydb",
-  "config": {
-    "order": 4,
-    "pageSize": 4096,
-    "walEnabled": true,
-    "cacheSize": 100
-  },
-  "columns": [
-    { "name": "id", "type": "INT" },
-    { "name": "name", "type": "STRING" },
-    { "name": "age", "type": "INT" }
-  ],
-  "primaryKey": ["id"]
+  "name": "mydb"
 }
 ```
 
-**Configuration Options:**
+**Request Fields:**
 
-- `name` (required): Database name (also serves as the table identifier)
-- `config` (optional): Database configuration
-  - `order` (optional): B+Tree order (default: 4)
-  - `pageSize` (optional): Page size in bytes (default: 4096)
-  - `walEnabled` (optional): Enable WAL (default: true)
-  - `cacheSize` (optional): Cache size in pages (default: 100)
-- `columns` (required): Array of column definitions
-  - `name` (required): Column name
-  - `type` (required): Column type - must be one of: `"INT"`, `"STRING"`, `"FLOAT"`, `"BOOL"`
-- `primaryKey` (required): Array of column names that form the primary key
-  - Order matters: The order of columns in this array determines the key ordering
-  - Example: `["col2", "col1"]` means records are sorted by `col2` first, then `col1`
-  - All primary key columns must exist in the `columns` array
-
-**Note:** Schema is mandatory. The database will enforce schema validation on all operations. Schema is persisted to disk as `{name}.schema.json`. Since each database has exactly one table, the database name serves as the table identifier.
+- `name` (required): Database name
 
 **Response:**
 
 ```json
 {
   "success": true,
-  "name": "mydb",
+  "name": "mydb"
+}
+```
+
+**Status Codes:**
+
+- `201 Created`: Database created successfully
+- `400 Bad Request`: Invalid request (e.g., database already exists, empty name)
+- `500 Internal Server Error`: Creation failed
+
+**Note:** This creates an empty database container. To store data, you must create tables within this database using the [Create Table](#create-table) endpoint.
+
+**File Structure:** Database files are stored in `database/{dbName}/` directory. Each table will have its own `.db` and `.schema.json` files within this directory.
+
+---
+
+## Table Lifecycle APIs
+
+### Create Table
+
+Create a new table within an existing database. Each table has its own B+ Tree, schema, and configuration.
+
+**Endpoint:** `POST /api/databases/{dbName}/tables`
+
+**Request Body:**
+
+```json
+{
+  "name": "users",
+  "config": {
+    "order": 4,
+    "pageSize": 4096,
+    "walEnabled": true,
+    "cacheSize": 100
+  },
+  "schema": {
+    "columns": [
+      { "name": "id", "type": "INT" },
+      { "name": "name", "type": "STRING" },
+      { "name": "age", "type": "INT" }
+    ],
+    "primaryKey": ["id"]
+  }
+}
+```
+
+**Request Fields:**
+
+- `name` (required): Table name
+- `config` (optional): Table-specific B+Tree configuration
+  - `order` (optional): B+Tree order (default: 4)
+  - `pageSize` (optional): Page size in bytes (default: 4096)
+  - `walEnabled` (optional): Enable WAL (default: true)
+  - `cacheSize` (optional): Cache size in pages (default: 100)
+- `schema` (required): Table schema definition
+  - `columns` (required): Array of column definitions
+    - `name` (required): Column name
+    - `type` (required): Column type - must be one of: `"INT"`, `"STRING"`, `"FLOAT"`, `"BOOL"`
+  - `primaryKey` (required): Array of column names that form the primary key
+    - Order matters: The order of columns in this array determines the key ordering
+    - Example: `["col2", "col1"]` means records are sorted by `col2` first, then `col1`
+    - All primary key columns must exist in the `columns` array
+
+**Response:**
+
+```json
+{
+  "success": true,
+  "database": "mydb",
+  "name": "users",
   "schema": {
     "columns": [
       { "name": "id", "type": "INT" },
@@ -191,9 +249,12 @@ Create a new database instance.
 
 **Status Codes:**
 
-- `201 Created`: Database created successfully
-- `400 Bad Request`: Invalid request
+- `201 Created`: Table created successfully
+- `400 Bad Request`: Invalid request (e.g., invalid schema, table already exists)
+- `404 Not Found`: Database not found
 - `500 Internal Server Error`: Creation failed
+
+**Note:** Schema is mandatory and persisted to disk as `database/{dbName}/{tableName}.schema.json`. The table's B+ Tree file is stored as `database/{dbName}/{tableName}.db`.
 
 ### List Databases
 
@@ -236,8 +297,9 @@ Get information about a specific database.
 
 **Note:**
 
-- Database files are stored in the `database/` folder relative to the backend directory
-- The filename field shows the relative path to the database file
+- Database files are stored in the `database/{dbName}/` folder relative to the backend directory
+- The filename field shows the directory path for the database
+- Individual table files are stored within this directory
 
 **Status Codes:**
 
@@ -246,7 +308,7 @@ Get information about a specific database.
 
 ### Connect Database
 
-Connect to an existing database instance (loads from disk). This will read the database file and load pages into memory. All disk I/O during loading is tracked.
+Connect to an existing database instance (loads tables from disk). This will read all table files and load pages into memory. All disk I/O during loading is tracked.
 
 **Endpoint:** `POST /api/databases/connect`
 
@@ -275,13 +337,14 @@ Connect to an existing database instance (loads from disk). This will read the d
 
 - `200 OK`: Database connected successfully
 - `400 Bad Request`: Invalid request
-- `404 Not Found`: Database file not found
+- `404 Not Found`: Database directory not found
 - `500 Internal Server Error`: Connection failed
 
 **Note:**
 
-- This endpoint opens an existing database file (does not create a new one)
-- Disk I/O during database loading (meta page and other pages) is tracked and visible via the I/O statistics endpoint
+- This endpoint opens an existing database and loads all tables from disk (does not create a new database)
+- All tables within the database directory are automatically loaded
+- Disk I/O during table loading is tracked and visible via the I/O statistics endpoint
 - The database remains connected until you explicitly close or drop it
 - Use this endpoint to resume work with a previously created database
 
@@ -360,7 +423,7 @@ Permanently delete a database instance and its files from disk.
 
 **Note:**
 
-- This permanently deletes the database `.db` and `.wal` files from the `database/` folder
+- This permanently deletes the entire database directory (`database/{dbName}/`) including all tables and their files (`.db`, `.wal`, `.schema.json`)
 - The database is automatically closed if it's currently open
 - This operation cannot be undone
 
@@ -412,7 +475,7 @@ Wipe all database files (.db, .wal, .schema.json) from disk. Useful for cleaning
 
 **Note:**
 
-- This permanently deletes all `.db` and `.wal` files from the `database/` folder
+- This permanently deletes all database directories and their contents (all `.db`, `.wal`, and `.schema.json` files)
 - All open databases are automatically closed
 - This operation cannot be undone
 - Use with caution!
@@ -423,11 +486,13 @@ Wipe all database files (.db, .wal, .schema.json) from disk. Useful for cleaning
 
 All data operations optionally return step-based execution traces when `enable_steps=true`. See [Step-Based Execution Traces](#step-based-execution-traces) for details.
 
+**Note:** All data operations now require both database name and table name in the path: `/api/databases/{dbName}/tables/{tableName}/{operation}`
+
 ### Insert
 
-Insert a key-value pair into the database.
+Insert a row into a table.
 
-**Endpoint:** `POST /api/databases/{name}/insert`
+**Endpoint:** `POST /api/databases/{dbName}/tables/{tableName}/insert`
 
 **Query Parameters:**
 
@@ -502,13 +567,13 @@ The backend will:
 
 - `200 OK`: Success
 - `400 Bad Request`: Invalid request or duplicate key
-- `404 Not Found`: Database not found
+- `404 Not Found`: Database or table not found
 
 ### Update
 
-Update the value associated with a key.
+Update a row in a table.
 
-**Endpoint:** `POST /api/databases/{name}/update`
+**Endpoint:** `POST /api/databases/{dbName}/tables/{tableName}/update`
 
 **Query Parameters:**
 
@@ -556,9 +621,9 @@ Update the value associated with a key.
 
 ### Delete
 
-Delete a key-value pair from the database.
+Delete a row from a table.
 
-**Endpoint:** `POST /api/databases/{name}/delete`
+**Endpoint:** `POST /api/databases/{dbName}/tables/{tableName}/delete`
 
 **Query Parameters:**
 
@@ -614,9 +679,9 @@ The backend will extract the composite key using the primary key column order de
 
 ### Search
 
-Search for a key and return its associated value.
+Search for a row in a table by primary key.
 
-**Endpoint:** `POST /api/databases/{name}/search`
+**Endpoint:** `POST /api/databases/{dbName}/tables/{tableName}/search`
 
 **Query Parameters:**
 
@@ -682,9 +747,9 @@ The backend will extract the composite key using the primary key column order de
 
 ### Range Query
 
-Query all key-value pairs within a range.
+Query all rows within a key range in a table.
 
-**Endpoint:** `POST /api/databases/{name}/range`
+**Endpoint:** `POST /api/databases/{dbName}/tables/{tableName}/range`
 
 **Query Parameters:**
 
@@ -746,17 +811,19 @@ Query all key-value pairs within a range.
 
 - `200 OK`: Success
 - `400 Bad Request`: Invalid request (e.g., startKey > endKey)
-- `404 Not Found`: Database not found
+- `404 Not Found`: Database or table not found
 
 ---
 
 ## Introspection APIs
 
+All introspection endpoints now require both database name and table name in the path: `/api/databases/{dbName}/tables/{tableName}/{operation}`
+
 ### Get Tree Structure
 
-Get the full B+Tree structure for visualization.
+Get the full B+Tree structure for a table.
 
-**Endpoint:** `GET /api/databases/{name}/tree`
+**Endpoint:** `GET /api/databases/{dbName}/tables/{tableName}/tree`
 
 **Response:**
 
@@ -811,9 +878,9 @@ Get the full B+Tree structure for visualization.
 
 ### Get WAL Info
 
-Get Write-Ahead Log information.
+Get Write-Ahead Log information for a table.
 
-**Endpoint:** `GET /api/databases/{name}/wal`
+**Endpoint:** `GET /api/databases/{dbName}/tables/{tableName}/wal`
 
 **Response:**
 
@@ -834,9 +901,9 @@ Get Write-Ahead Log information.
 
 ### Get Cache Statistics
 
-Get buffer pool/cache statistics.
+Get buffer pool/cache statistics for a table.
 
-**Endpoint:** `GET /api/databases/{name}/cache`
+**Endpoint:** `GET /api/databases/{dbName}/tables/{tableName}/cache`
 
 **Response:**
 
@@ -865,9 +932,9 @@ Get buffer pool/cache statistics.
 
 ### Get Cached Pages
 
-Get a list of all page IDs currently in the cache.
+Get a list of all page IDs currently in the cache for a table.
 
-**Endpoint:** `GET /api/databases/{name}/cache/pages`
+**Endpoint:** `GET /api/databases/{dbName}/tables/{tableName}/cache/pages`
 
 **Response:**
 
@@ -899,9 +966,9 @@ curl http://localhost:8080/api/databases/mydb/cache/pages
 
 ### Get I/O Read Statistics
 
-Get statistics and details of all I/O read operations (disk reads when cache misses occur).
+Get statistics and details of all I/O read operations (disk reads when cache misses occur) for a table.
 
-**Endpoint:** `GET /api/databases/{name}/io`
+**Endpoint:** `GET /api/databases/{dbName}/tables/{tableName}/io`
 
 **Response:**
 
@@ -948,7 +1015,7 @@ This endpoint is essential for understanding the performance benefits of the B+T
 **Example Request:**
 
 ```bash
-curl http://localhost:8080/api/databases/mydb/io
+curl http://localhost:8080/api/databases/mydb/tables/users/io
 ```
 
 **Note:** The details array is limited to the last 1000 I/O reads to prevent unbounded memory growth. The `totalReads` counter is not limited and tracks all I/O operations since database creation.
@@ -1000,11 +1067,11 @@ Common step types include:
 ### Example: Insert Operation (enable_steps=true)
 
 ```bash
-curl -X POST "http://localhost:8080/api/databases/mydb/insert?enable_steps=true" \
+curl -X POST "http://localhost:8080/api/databases/mydb/tables/users/insert?enable_steps=true" \
   -H "Content-Type: application/json" \
   -d '{
-    "key": {"values": [{"type": "int", "value": 42}]},
-    "value": {"columns": [{"type": "string", "value": "Hello"}]}
+    "id": 42,
+    "name": "Hello"
   }'
 ```
 
@@ -1076,8 +1143,13 @@ All API endpoints return JSON responses. Errors follow this format:
 **Common Error Status Codes:**
 
 - `400 Bad Request`: Invalid request format or parameters
-- `404 Not Found`: Database or resource not found
+- `404 Not Found`: Database, table, or resource not found
 - `500 Internal Server Error`: Server-side error
+
+**Error Messages:**
+
+- `"Database 'x' not found"`: The specified database does not exist
+- `"Table 'y' not found in database 'x'"`: The specified table does not exist in the database
 
 **Example Error Response:**
 
@@ -1100,96 +1172,96 @@ All API endpoints return JSON responses. Errors follow this format:
 curl -X POST http://localhost:8080/api/databases \
   -H "Content-Type: application/json" \
   -d '{
-    "name": "example",
+    "name": "example"
+  }'
+```
+
+**2. Create a table:**
+
+```bash
+curl -X POST http://localhost:8080/api/databases/example/tables \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "users",
     "config": {
       "cacheSize": 100
-    }
-  }'
-```
-
-**2. Insert a key-value pair (without steps, default):**
-
-```bash
-curl -X POST http://localhost:8080/api/databases/example/insert \
-  -H "Content-Type: application/json" \
-  -d '{
-    "key": {
-      "values": [
-        {"type": "int", "value": 10}
-      ]
     },
-    "value": {
+    "schema": {
       "columns": [
-        {"type": "string", "value": "Ten"}
-      ]
+        { "name": "id", "type": "INT" },
+        { "name": "name", "type": "STRING" },
+        { "name": "age", "type": "INT" }
+      ],
+      "primaryKey": ["id"]
     }
   }'
 ```
 
-**2b. Insert a key-value pair (with steps):**
+**3. Insert a row (without steps, default):**
 
 ```bash
-curl -X POST "http://localhost:8080/api/databases/example/insert?enable_steps=true" \
+curl -X POST http://localhost:8080/api/databases/example/tables/users/insert \
   -H "Content-Type: application/json" \
   -d '{
-    "key": {
-      "values": [
-        {"type": "int", "value": 10}
-      ]
-    },
-    "value": {
-      "columns": [
-        {"type": "string", "value": "Ten"}
-      ]
-    }
+    "id": 1,
+    "name": "Alice",
+    "age": 25
   }'
 ```
 
-**3. Search for the key:**
+**3b. Insert a row (with steps):**
 
 ```bash
-curl -X POST http://localhost:8080/api/databases/example/search \
+curl -X POST "http://localhost:8080/api/databases/example/tables/users/insert?enable_steps=true" \
   -H "Content-Type: application/json" \
   -d '{
-    "key": {
-      "values": [
-        {"type": "int", "value": 10}
-      ]
-    }
+    "id": 2,
+    "name": "Bob",
+    "age": 30
   }'
 ```
 
-**4. Get tree structure:**
+**4. Search for a row:**
 
 ```bash
-curl http://localhost:8080/api/databases/example/tree
+curl -X POST http://localhost:8080/api/databases/example/tables/users/search \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 1
+  }'
 ```
 
-**5. Get cache statistics:**
+**5. Get tree structure:**
 
 ```bash
-curl http://localhost:8080/api/databases/example/cache
+curl http://localhost:8080/api/databases/example/tables/users/tree
 ```
 
-**6. Get list of cached pages:**
+**6. Get cache statistics:**
 
 ```bash
-curl http://localhost:8080/api/databases/example/cache/pages
+curl http://localhost:8080/api/databases/example/tables/users/cache
 ```
 
-**7. Get I/O read statistics:**
+**7. Get list of cached pages:**
 
 ```bash
-curl http://localhost:8080/api/databases/example/io
+curl http://localhost:8080/api/databases/example/tables/users/cache/pages
 ```
 
-**8. Close the database:**
+**8. Get I/O read statistics:**
+
+```bash
+curl http://localhost:8080/api/databases/example/tables/users/io
+```
+
+**9. Close the database:**
 
 ```bash
 curl -X POST http://localhost:8080/api/databases/example/close
 ```
 
-**9. Reconnect the database:**
+**10. Reconnect the database:**
 
 ```bash
 curl -X POST http://localhost:8080/api/databases/connect \
@@ -1207,35 +1279,47 @@ curl -X POST http://localhost:8080/api/databases/connect \
 To format JSON output, pipe through `jq`:
 
 ```bash
-curl http://localhost:8080/api/databases/example/tree | jq
+curl http://localhost:8080/api/databases/example/tables/users/tree | jq
 ```
 
 ### JavaScript/Fetch Example
 
 ```javascript
-// Create database
-const response = await fetch("http://localhost:8080/api/databases", {
+// Step 1: Create database
+const dbResponse = await fetch("http://localhost:8080/api/databases", {
   method: "POST",
   headers: { "Content-Type": "application/json" },
   body: JSON.stringify({
     name: "mydb",
-    config: { cacheSize: 100 },
   }),
 });
 
-// Insert data (with steps)
+// Step 2: Create table
+const tableResponse = await fetch("http://localhost:8080/api/databases/mydb/tables", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({
+    name: "users",
+    config: { cacheSize: 100 },
+    schema: {
+      columns: [
+        { name: "id", type: "INT" },
+        { name: "name", type: "STRING" },
+      ],
+      primaryKey: ["id"],
+    },
+  }),
+});
+
+// Step 3: Insert data (with steps)
 const insertResponse = await fetch(
-  "http://localhost:8080/api/databases/mydb/insert?enable_steps=true",
+  "http://localhost:8080/api/databases/mydb/tables/users/insert?enable_steps=true",
   {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
-      key: {
-        values: [{ type: "int", value: 42 }],
-      },
-      value: {
-        columns: [{ type: "string", value: "Hello" }],
-      },
+      id: 1,
+      name: "Alice",
     }),
   }
 );
@@ -1249,23 +1333,34 @@ console.log("Steps:", result.steps); // Only present when enable_steps=true
 ```python
 import requests
 
-# Create database
-response = requests.post('http://localhost:8080/api/databases', json={
-    'name': 'mydb',
-    'config': {'cacheSize': 100}
+# Step 1: Create database
+db_response = requests.post('http://localhost:8080/api/databases', json={
+    'name': 'mydb'
 })
 
-# Insert data (with steps)
-response = requests.post('http://localhost:8080/api/databases/mydb/insert?enable_steps=true', json={
-    'key': {
-        'values': [{'type': 'int', 'value': 42}]
-    },
-    'value': {
-        'columns': [{'type': 'string', 'value': 'Hello'}]
+# Step 2: Create table
+table_response = requests.post('http://localhost:8080/api/databases/mydb/tables', json={
+    'name': 'users',
+    'config': {'cacheSize': 100},
+    'schema': {
+        'columns': [
+            {'name': 'id', 'type': 'INT'},
+            {'name': 'name', 'type': 'STRING'}
+        ],
+        'primaryKey': ['id']
     }
 })
 
-result = response.json()
+# Step 3: Insert data (with steps)
+insert_response = requests.post(
+    'http://localhost:8080/api/databases/mydb/tables/users/insert?enable_steps=true',
+    json={
+        'id': 1,
+        'name': 'Alice'
+    }
+)
+
+result = insert_response.json()
 print('Steps:', result.get('steps', []))  # Only present when enable_steps=true
 ```
 

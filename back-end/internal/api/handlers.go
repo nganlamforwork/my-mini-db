@@ -42,6 +42,12 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleListDatabases(w, r)
 	case r.Method == "POST" && len(parts) == 1 && parts[0] == "databases":
 		h.handleCreateDatabase(w, r)
+	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "tables":
+		dbName := parts[1]
+		h.handleListTables(w, r, dbName)
+	case r.Method == "POST" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "tables":
+		dbName := parts[1]
+		h.handleCreateTable(w, r, dbName)
 	case r.Method == "POST" && len(parts) == 2 && parts[0] == "databases" && parts[1] == "connect":
 		h.handleConnectDatabase(w, r)
 	case r.Method == "GET" && len(parts) == 2 && parts[0] == "databases":
@@ -54,28 +60,31 @@ func (h *APIHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.handleDeleteAllDatabases(w, r)
 	case r.Method == "POST" && len(parts) == 1 && parts[0] == "databases" && r.URL.Query().Get("cleanup") == "true":
 		h.handleCleanupAllDatabases(w, r)
-	case r.Method == "POST" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "insert":
-		h.handleInsert(w, r, parts[1])
-	case r.Method == "POST" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "update":
-		h.handleUpdate(w, r, parts[1])
-	case r.Method == "POST" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "delete":
-		h.handleDelete(w, r, parts[1])
-	case r.Method == "POST" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "search":
-		h.handleSearch(w, r, parts[1])
-	case r.Method == "POST" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "range":
-		h.handleRangeQuery(w, r, parts[1])
-	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "tree":
-		h.handleGetTreeStructure(w, r, parts[1])
-	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "wal":
-		h.handleGetWALInfo(w, r, parts[1])
-	case r.Method == "GET" && len(parts) == 4 && parts[0] == "databases" && parts[2] == "cache" && parts[3] == "pages":
-		h.handleGetCachePages(w, r, parts[1])
-	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "cache":
-		h.handleGetCacheStats(w, r, parts[1])
-	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "io":
-		h.handleGetIOReads(w, r, parts[1])
-	case r.Method == "GET" && len(parts) == 3 && parts[0] == "databases" && parts[2] == "config":
-		h.handleGetTreeConfig(w, r, parts[1])
+	// Table operations: /api/databases/:dbName/tables/:tableName/:operation
+	case r.Method == "POST" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "insert":
+		h.handleInsert(w, r, parts[1], parts[3])
+	case r.Method == "POST" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "update":
+		h.handleUpdate(w, r, parts[1], parts[3])
+	case r.Method == "POST" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "delete":
+		h.handleDelete(w, r, parts[1], parts[3])
+	case r.Method == "POST" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "search":
+		h.handleSearch(w, r, parts[1], parts[3])
+	case r.Method == "POST" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "range":
+		h.handleRangeQuery(w, r, parts[1], parts[3])
+	case r.Method == "GET" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "tree":
+		h.handleGetTreeStructure(w, r, parts[1], parts[3])
+	case r.Method == "GET" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "wal":
+		h.handleGetWALInfo(w, r, parts[1], parts[3])
+	case r.Method == "GET" && len(parts) == 6 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "cache" && parts[5] == "pages":
+		h.handleGetCachePages(w, r, parts[1], parts[3])
+	case r.Method == "GET" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "cache":
+		h.handleGetCacheStats(w, r, parts[1], parts[3])
+	case r.Method == "GET" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "io":
+		h.handleGetIOReads(w, r, parts[1], parts[3])
+	case r.Method == "GET" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "config":
+		h.handleGetTreeConfig(w, r, parts[1], parts[3])
+	case r.Method == "GET" && len(parts) == 5 && parts[0] == "databases" && parts[2] == "tables" && parts[4] == "schema":
+		h.handleGetTableSchema(w, r, parts[1], parts[3])
 	default:
 		writeError(w, http.StatusNotFound, "Not found")
 	}
@@ -89,18 +98,12 @@ func (h *APIHandler) handleListDatabases(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-// handleCreateDatabase creates a new database
-// Architecture: 1 Database = 1 Table = 1 B+ Tree
-// Schema is mandatory - columns and primaryKey must be provided
+// handleCreateDatabase creates a new logical database (no tables yet).
+// Route: POST /api/databases
+// Payload: { "name": "my_db" }
 func (h *APIHandler) handleCreateDatabase(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		Name        string          `json:"name"`
-		Config      DatabaseConfig  `json:"config,omitempty"`
-		Columns     []struct {
-			Name string `json:"name"`
-			Type string `json:"type"` // "INT", "STRING", "FLOAT", "BOOL"
-		} `json:"columns"`
-		PrimaryKey  []string        `json:"primaryKey"`
+		Name string `json:"name"`
 	}
 
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -108,25 +111,98 @@ func (h *APIHandler) handleCreateDatabase(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	if req.Name == "" {
+	if strings.TrimSpace(req.Name) == "" {
 		writeError(w, http.StatusBadRequest, "Database name is required")
 		return
 	}
 
-	// Schema is mandatory - validate columns and primaryKey
-	if len(req.Columns) == 0 {
-		writeError(w, http.StatusBadRequest, "At least one column is required")
+	if err := h.dbManager.CreateDatabase(req.Name); err != nil {
+		// Distinguish "already exists" vs other errors if needed
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	if len(req.PrimaryKey) == 0 {
+	writeJSONResponse(w, http.StatusCreated, map[string]interface{}{
+		"success": true,
+		"name":    req.Name,
+	})
+}
+
+// handleListTables lists all tables in a database.
+// Route: GET /api/databases/:dbName/tables
+func (h *APIHandler) handleListTables(w http.ResponseWriter, r *http.Request, dbName string) {
+	tables, err := h.dbManager.ListTables(dbName)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+
+	writeJSONResponse(w, http.StatusOK, map[string]interface{}{
+		"tables": tables,
+	})
+}
+
+// handleCreateTable creates a new table in an existing database.
+// Route: POST /api/databases/:dbName/tables
+// Payload:
+// {
+//   "name": "users",
+//   "config": { ... },     // optional table-level config
+//   "schema": {
+//     "columns": [ { "name": "id", "type": "INT" }, ... ],
+//     "primaryKey": ["id"]
+//   }
+// }
+func (h *APIHandler) handleCreateTable(w http.ResponseWriter, r *http.Request, dbName string) {
+	var req struct {
+		Name   string         `json:"name"`
+		Config DatabaseConfig `json:"config,omitempty"`
+		Schema struct {
+			Columns []struct {
+				Name string `json:"name"`
+				Type string `json:"type"` // "INT", "STRING", "FLOAT", "BOOL"
+			} `json:"columns"`
+			PrimaryKey []string `json:"primaryKey"`
+		} `json:"schema"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid request: %v", err))
+		return
+	}
+
+	if strings.TrimSpace(dbName) == "" {
+		writeError(w, http.StatusBadRequest, "Database name is required in path")
+		return
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		writeError(w, http.StatusBadRequest, "Table name is required")
+		return
+	}
+
+	// Check that DB exists (distinct "Database not found" error)
+	if _, err := h.dbManager.GetDatabase(dbName); err != nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("Database '%s' not found", dbName))
+		return
+	}
+
+	// Validate schema: at least one column and PK
+	if len(req.Schema.Columns) == 0 {
+		writeError(w, http.StatusBadRequest, "At least one column is required in schema")
+		return
+	}
+	if len(req.Schema.PrimaryKey) == 0 {
 		writeError(w, http.StatusBadRequest, "At least one primary key column is required")
 		return
 	}
 
-	// Build schema from columns and primaryKey
-	columnDefs := make([]storage.ColumnDefinition, len(req.Columns))
-	for i, col := range req.Columns {
+	// Build storage.Schema from request
+	columnDefs := make([]storage.ColumnDefinition, len(req.Schema.Columns))
+	for i, col := range req.Schema.Columns {
 		var colType storage.ColumnType
 		switch col.Type {
 		case "INT":
@@ -138,7 +214,11 @@ func (h *APIHandler) handleCreateDatabase(w http.ResponseWriter, r *http.Request
 		case "BOOL":
 			colType = storage.TypeBool
 		default:
-			writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid column type '%s'. Must be INT, STRING, FLOAT, or BOOL", col.Type))
+			writeError(
+				w,
+				http.StatusBadRequest,
+				fmt.Sprintf("Invalid column type '%s'. Must be INT, STRING, FLOAT, or BOOL", col.Type),
+			)
 			return
 		}
 		columnDefs[i] = storage.ColumnDefinition{
@@ -147,39 +227,48 @@ func (h *APIHandler) handleCreateDatabase(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	schema, err := storage.NewSchema(columnDefs, req.PrimaryKey)
+	schema, err := storage.NewSchema(columnDefs, req.Schema.PrimaryKey)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("Invalid schema: %v", err))
 		return
 	}
 
-	// Verify all primary key columns exist in columns
+	// Verify that all PK columns exist in the column list
 	columnNames := make(map[string]bool)
 	for _, col := range columnDefs {
 		columnNames[col.Name] = true
 	}
-	for _, pkCol := range req.PrimaryKey {
+	for _, pkCol := range req.Schema.PrimaryKey {
 		if !columnNames[pkCol] {
 			writeError(w, http.StatusBadRequest, fmt.Sprintf("Primary key column '%s' does not exist in columns", pkCol))
 			return
 		}
 	}
 
-	if err := h.dbManager.CreateDatabase(req.Name, req.Config, schema); err != nil {
+	// Delegate to DatabaseManager.CreateTable
+	if err := h.dbManager.CreateTable(dbName, req.Name, req.Config, schema); err != nil {
+		// Distinct table vs database errors:
+		if strings.Contains(err.Error(), "database '") && strings.Contains(err.Error(), "' not found") {
+			writeError(w, http.StatusNotFound, err.Error()) // Database not found
+			return
+		}
+		if strings.Contains(err.Error(), "already exists in database") {
+			writeError(w, http.StatusBadRequest, err.Error()) // Table already exists
+			return
+		}
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	response := map[string]interface{}{
+	writeJSONResponse(w, http.StatusCreated, map[string]interface{}{
 		"success": true,
-		"name":    req.Name,
+		"database": dbName,
+		"name":     req.Name,
 		"schema": map[string]interface{}{
-			"columns": req.Columns,
-			"primaryKey": req.PrimaryKey,
+			"columns":    req.Schema.Columns,
+			"primaryKey": req.Schema.PrimaryKey,
 		},
-	}
-
-	writeJSONResponse(w, http.StatusCreated, response)
+	})
 }
 
 // handleConnectDatabase connects to an existing database (loads from disk)
@@ -292,17 +381,18 @@ func (h *APIHandler) handleCleanupAllDatabases(w http.ResponseWriter, r *http.Re
 }
 
 // handleInsert handles insert operations
+// Route: POST /api/databases/:dbName/tables/:tableName/insert
 // Accepts row data as JSON object, extracts key using schema
-func (h *APIHandler) handleInsert(w http.ResponseWriter, r *http.Request, dbName string) {
-	db, err := h.dbManager.GetDatabase(dbName)
+func (h *APIHandler) handleInsert(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	// Check if database has schema
-	if db.Schema == nil {
-		writeError(w, http.StatusBadRequest, "Database does not have a schema. Please create database with schema first.")
+	// Check if table has schema
+	if table.Schema == nil {
+		writeError(w, http.StatusBadRequest, "Table does not have a schema. Please create table with schema first.")
 		return
 	}
 
@@ -314,20 +404,20 @@ func (h *APIHandler) handleInsert(w http.ResponseWriter, r *http.Request, dbName
 	}
 
 	// Validate row against schema
-	if err := db.Schema.ValidateRow(rowData); err != nil {
+	if err := table.Schema.ValidateRow(rowData); err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("Row validation failed: %v", err))
 		return
 	}
 
 	// Extract key from row using schema
-	key, err := db.Schema.ExtractKey(rowData)
+	key, err := table.Schema.ExtractKey(rowData)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract key: %v", err))
 		return
 	}
 
 	// Convert row to Record
-	value, err := db.Schema.RowToRecord(rowData)
+	value, err := table.Schema.RowToRecord(rowData)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to convert row to record: %v", err))
 		return
@@ -336,7 +426,7 @@ func (h *APIHandler) handleInsert(w http.ResponseWriter, r *http.Request, dbName
 	// Parse enable_steps query parameter (default: false)
 	enableSteps := r.URL.Query().Get("enable_steps") == "true"
 
-	adapter := NewTreeAdapter(db.Tree)
+	adapter := NewTreeAdapter(table.Tree)
 	steps, err := adapter.Insert(key, value, enableSteps)
 
 	resp := OperationResponse{
@@ -354,7 +444,8 @@ func (h *APIHandler) handleInsert(w http.ResponseWriter, r *http.Request, dbName
 }
 
 // handleUpdate handles update operations
-func (h *APIHandler) handleUpdate(w http.ResponseWriter, r *http.Request, dbName string) {
+// Route: POST /api/databases/:dbName/tables/:tableName/update
+func (h *APIHandler) handleUpdate(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
 	var req struct {
 		Key   JSONCompositeKey `json:"key"`
 		Value JSONRecord       `json:"value"`
@@ -365,7 +456,7 @@ func (h *APIHandler) handleUpdate(w http.ResponseWriter, r *http.Request, dbName
 		return
 	}
 
-	db, err := h.dbManager.GetDatabase(dbName)
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -386,7 +477,7 @@ func (h *APIHandler) handleUpdate(w http.ResponseWriter, r *http.Request, dbName
 	// Parse enable_steps query parameter (default: false)
 	enableSteps := r.URL.Query().Get("enable_steps") == "true"
 
-	adapter := NewTreeAdapter(db.Tree)
+	adapter := NewTreeAdapter(table.Tree)
 	steps, err := adapter.Update(key, value, enableSteps)
 
 	resp := OperationResponse{
@@ -404,18 +495,19 @@ func (h *APIHandler) handleUpdate(w http.ResponseWriter, r *http.Request, dbName
 }
 
 // handleDelete handles delete operations
+// Route: POST /api/databases/:dbName/tables/:tableName/delete
 // Accepts composite key components as JSON object, constructs key using schema
 // Only validates primary key fields, ignores non-key attributes
-func (h *APIHandler) handleDelete(w http.ResponseWriter, r *http.Request, dbName string) {
-	db, err := h.dbManager.GetDatabase(dbName)
+func (h *APIHandler) handleDelete(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	// Check if database has schema
-	if db.Schema == nil {
-		writeError(w, http.StatusBadRequest, "Database does not have a schema. Please create database with schema first.")
+	// Check if table has schema
+	if table.Schema == nil {
+		writeError(w, http.StatusBadRequest, "Table does not have a schema. Please create table with schema first.")
 		return
 	}
 
@@ -427,7 +519,7 @@ func (h *APIHandler) handleDelete(w http.ResponseWriter, r *http.Request, dbName
 	}
 
 	// Extract key from key components using schema (key-only validation)
-	key, err := db.Schema.ExtractKeyFromKeyData(keyData)
+	key, err := table.Schema.ExtractKeyFromKeyData(keyData)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract key: %v", err))
 		return
@@ -436,7 +528,7 @@ func (h *APIHandler) handleDelete(w http.ResponseWriter, r *http.Request, dbName
 	// Parse enable_steps query parameter (default: false)
 	enableSteps := r.URL.Query().Get("enable_steps") == "true"
 
-	adapter := NewTreeAdapter(db.Tree)
+	adapter := NewTreeAdapter(table.Tree)
 	steps, err := adapter.Delete(key, enableSteps)
 
 	resp := OperationResponse{
@@ -454,18 +546,19 @@ func (h *APIHandler) handleDelete(w http.ResponseWriter, r *http.Request, dbName
 }
 
 // handleSearch handles search operations
+// Route: POST /api/databases/:dbName/tables/:tableName/search
 // Accepts composite key components as JSON object, constructs key using schema
 // Only validates primary key fields, ignores non-key attributes
-func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request, dbName string) {
-	db, err := h.dbManager.GetDatabase(dbName)
+func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	// Check if database has schema
-	if db.Schema == nil {
-		writeError(w, http.StatusBadRequest, "Database does not have a schema. Please create database with schema first.")
+	// Check if table has schema
+	if table.Schema == nil {
+		writeError(w, http.StatusBadRequest, "Table does not have a schema. Please create table with schema first.")
 		return
 	}
 
@@ -477,7 +570,7 @@ func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request, dbName
 	}
 
 	// Extract key from key components using schema (key-only validation)
-	key, err := db.Schema.ExtractKeyFromKeyData(keyData)
+	key, err := table.Schema.ExtractKeyFromKeyData(keyData)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract key: %v", err))
 		return
@@ -486,7 +579,7 @@ func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request, dbName
 	// Parse enable_steps query parameter (default: false)
 	enableSteps := r.URL.Query().Get("enable_steps") == "true"
 
-	adapter := NewTreeAdapter(db.Tree)
+	adapter := NewTreeAdapter(table.Tree)
 	value, steps, err := adapter.Search(key, enableSteps)
 
 	resp := OperationResponse{
@@ -506,9 +599,10 @@ func (h *APIHandler) handleSearch(w http.ResponseWriter, r *http.Request, dbName
 }
 
 // handleRangeQuery handles range query operations
+// Route: POST /api/databases/:dbName/tables/:tableName/range
 // Accepts key component maps (like Search/Delete), constructs keys using schema
 // Only validates primary key fields, ignores non-key attributes
-func (h *APIHandler) handleRangeQuery(w http.ResponseWriter, r *http.Request, dbName string) {
+func (h *APIHandler) handleRangeQuery(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
 	var req struct {
 		StartKey map[string]interface{} `json:"startKey"`
 		EndKey   map[string]interface{} `json:"endKey"`
@@ -519,26 +613,26 @@ func (h *APIHandler) handleRangeQuery(w http.ResponseWriter, r *http.Request, db
 		return
 	}
 
-	db, err := h.dbManager.GetDatabase(dbName)
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	// Check if database has schema
-	if db.Schema == nil {
-		writeError(w, http.StatusBadRequest, "Database does not have a schema. Please create database with schema first.")
+	// Check if table has schema
+	if table.Schema == nil {
+		writeError(w, http.StatusBadRequest, "Table does not have a schema. Please create table with schema first.")
 		return
 	}
 
 	// Extract keys from key component maps using schema (key-only validation)
-	startKey, err := db.Schema.ExtractKeyFromKeyData(req.StartKey)
+	startKey, err := table.Schema.ExtractKeyFromKeyData(req.StartKey)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract startKey: %v", err))
 		return
 	}
 
-	endKey, err := db.Schema.ExtractKeyFromKeyData(req.EndKey)
+	endKey, err := table.Schema.ExtractKeyFromKeyData(req.EndKey)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, fmt.Sprintf("Failed to extract endKey: %v", err))
 		return
@@ -547,7 +641,7 @@ func (h *APIHandler) handleRangeQuery(w http.ResponseWriter, r *http.Request, db
 	// Parse enable_steps query parameter (default: false)
 	enableSteps := r.URL.Query().Get("enable_steps") == "true"
 
-	adapter := NewTreeAdapter(db.Tree)
+	adapter := NewTreeAdapter(table.Tree)
 	keys, values, steps, err := adapter.SearchRange(startKey, endKey, enableSteps)
 
 	if err != nil {
@@ -575,18 +669,16 @@ func (h *APIHandler) handleRangeQuery(w http.ResponseWriter, r *http.Request, db
 }
 
 // handleGetTreeStructure returns tree structure for visualization
-// Architecture: 1 Database = 1 Table = 1 B+ Tree
-// Route: GET /api/databases/:dbName/tree
-func (h *APIHandler) handleGetTreeStructure(w http.ResponseWriter, r *http.Request, dbName string) {
-	// Get the database instance (must be connected)
-	db, err := h.dbManager.GetDatabase(dbName)
+// Route: GET /api/databases/:dbName/tables/:tableName/tree
+func (h *APIHandler) handleGetTreeStructure(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
-		writeError(w, http.StatusNotFound, fmt.Sprintf("Database '%s' not found or not connected. Please connect the database first.", dbName))
+		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	// Get tree structure from the single B+ Tree associated with this database
-	tree, err := GetTreeStructure(db.Tree)
+	// Get tree structure from the B+ Tree associated with this table
+	tree, err := GetTreeStructure(table.Tree)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to get tree structure: %v", err))
 		return
@@ -596,14 +688,15 @@ func (h *APIHandler) handleGetTreeStructure(w http.ResponseWriter, r *http.Reque
 }
 
 // handleGetWALInfo returns WAL information
-func (h *APIHandler) handleGetWALInfo(w http.ResponseWriter, r *http.Request, dbName string) {
-	db, err := h.dbManager.GetDatabase(dbName)
+// Route: GET /api/databases/:dbName/tables/:tableName/wal
+func (h *APIHandler) handleGetWALInfo(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	walInfo, err := GetWALInfo(db.Tree)
+	walInfo, err := GetWALInfo(table.Tree)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -613,56 +706,91 @@ func (h *APIHandler) handleGetWALInfo(w http.ResponseWriter, r *http.Request, db
 }
 
 // handleGetCacheStats returns cache statistics
-func (h *APIHandler) handleGetCacheStats(w http.ResponseWriter, r *http.Request, dbName string) {
-	db, err := h.dbManager.GetDatabase(dbName)
+// Route: GET /api/databases/:dbName/tables/:tableName/cache
+func (h *APIHandler) handleGetCacheStats(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	cacheStats := GetCacheStatsInfo(db.Tree)
+	cacheStats := GetCacheStatsInfo(table.Tree)
 	writeJSONResponse(w, http.StatusOK, cacheStats)
 }
 
 // handleGetCachePages returns list of pages currently in cache
-func (h *APIHandler) handleGetCachePages(w http.ResponseWriter, r *http.Request, dbName string) {
-	db, err := h.dbManager.GetDatabase(dbName)
+// Route: GET /api/databases/:dbName/tables/:tableName/cache/pages
+func (h *APIHandler) handleGetCachePages(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	cachePages := GetCachePagesInfo(db.Tree)
+	cachePages := GetCachePagesInfo(table.Tree)
 	writeJSONResponse(w, http.StatusOK, cachePages)
 }
 
 // handleGetIOReads returns I/O read statistics and details
-func (h *APIHandler) handleGetIOReads(w http.ResponseWriter, r *http.Request, dbName string) {
-	db, err := h.dbManager.GetDatabase(dbName)
+// Route: GET /api/databases/:dbName/tables/:tableName/io
+func (h *APIHandler) handleGetIOReads(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	ioInfo := GetIOReadInfo(db.Tree)
+	ioInfo := GetIOReadInfo(table.Tree)
 	writeJSONResponse(w, http.StatusOK, ioInfo)
 }
 
 // handleGetTreeConfig returns runtime B+Tree configuration
-func (h *APIHandler) handleGetTreeConfig(w http.ResponseWriter, r *http.Request, dbName string) {
-	db, err := h.dbManager.GetDatabase(dbName)
+// Route: GET /api/databases/:dbName/tables/:tableName/config
+func (h *APIHandler) handleGetTreeConfig(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
 
-	config, err := GetTreeConfigInfo(db.Tree)
+	config, err := GetTreeConfigInfo(table.Tree)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	writeJSONResponse(w, http.StatusOK, config)
+}
+
+// handleGetTableSchema returns the schema for a table
+// Route: GET /api/databases/:dbName/tables/:tableName/schema
+func (h *APIHandler) handleGetTableSchema(w http.ResponseWriter, r *http.Request, dbName, tableName string) {
+	table, err := h.dbManager.GetTable(dbName, tableName)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	if table.Schema == nil {
+		writeError(w, http.StatusNotFound, fmt.Sprintf("Table '%s' in database '%s' does not have a schema", tableName, dbName))
+		return
+	}
+
+	// Convert to API format
+	columns := make([]ColumnInfo, len(table.Schema.Columns))
+	for i, col := range table.Schema.Columns {
+		columns[i] = ColumnInfo{
+			Name: col.Name,
+			Type: col.Type.String(),
+		}
+	}
+
+	schemaInfo := SchemaInfo{
+		Columns:          columns,
+		PrimaryKeyColumns: table.Schema.PrimaryKeyColumns,
+	}
+
+	writeJSONResponse(w, http.StatusOK, schemaInfo)
 }
 
 // writeJSONResponse writes a JSON response with appropriate headers

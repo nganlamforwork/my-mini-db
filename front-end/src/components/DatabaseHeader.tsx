@@ -15,13 +15,15 @@ function getInitialTheme(): 'light' | 'dark' {
 }
 
 interface DatabaseHeaderProps {
-  databaseName: string
+  databaseName?: string // For backward compatibility - used when tableName is not provided
+  dbName?: string // Database name (when showing table detail)
+  tableName?: string // Table name (when showing table detail)
   onBackClick?: () => void
   showVisualizer?: boolean
   onVisualizerToggle?: (show: boolean) => void
 }
 
-export function DatabaseHeader({ databaseName, onBackClick, showVisualizer = false, onVisualizerToggle }: DatabaseHeaderProps) {
+export function DatabaseHeader({ databaseName, dbName, tableName, onBackClick, showVisualizer = false, onVisualizerToggle }: DatabaseHeaderProps) {
   const [theme, setTheme] = useState<'light' | 'dark'>(getInitialTheme)
   const navigate = useNavigate()
 
@@ -55,7 +57,16 @@ export function DatabaseHeader({ databaseName, onBackClick, showVisualizer = fal
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
-          <h1 className="text-lg font-semibold">{databaseName}</h1>
+          {tableName && dbName ? (
+            // Hierarchical layout for Table Detail page
+            <div className="flex flex-col items-start">
+              <span className="text-xs text-gray-500 font-medium">Database: {dbName}</span>
+              <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">{tableName}</h1>
+            </div>
+          ) : (
+            // Simple layout for Database Detail page (backward compatible)
+            <h1 className="text-lg font-semibold">{databaseName}</h1>
+          )}
         </div>
         <div className="flex items-center gap-4">
           {/* Visualizer Toggle */}

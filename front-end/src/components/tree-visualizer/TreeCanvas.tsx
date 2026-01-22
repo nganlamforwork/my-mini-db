@@ -37,10 +37,13 @@
 import React, { useEffect, useRef, useState, useMemo } from 'react';
 import type { TreeStructure, TreeNode, ExecutionStep, Schema } from '@/types/database';
 import { formatKey, compareKeys, formatNodeDataForGraph } from '@/lib/keyUtils';
-import { ZoomIn, ZoomOut, Download, RotateCcw, Info, FileImage, FileType, Image as ImageIcon } from 'lucide-react';
+import { ZoomIn, ZoomOut, Download, RotateCcw, Info, FileImage, FileType, Image as ImageIcon, Settings, X, Turtle, Rabbit } from 'lucide-react';
 import { Button } from '../ui/button';
 import { NodeDetailDialog } from '../NodeDetailDialog';
 import { extractPageId, drawRoundedRect, generateEdgeTooltipText, getThemeColors } from './helpers';
+import { Switch } from '../ui/switch';
+import { Slider } from '../ui/slider';
+import { Label } from '../ui/label';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -71,6 +74,10 @@ interface TreeCanvasProps {
     cacheSize?: number;
     walEnabled?: boolean;
   };
+  enableSteps?: boolean; // Enable/disable animation
+  onEnableStepsChange?: (enabled: boolean) => void; // Callback for animation toggle
+  currentSpeed?: number; // Current animation speed (10-100)
+  onSpeedChange?: (speed: number) => void; // Callback for speed change
 }
 
 interface NodePosition {
@@ -93,7 +100,11 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   currentStep = null,
   onStepComplete,
   animationSpeed = 50,
-  config
+  config,
+  enableSteps = true,
+  onEnableStepsChange,
+  currentSpeed = 50,
+  onSpeedChange
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -106,6 +117,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   const hoveredNodeRef = useRef<number | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<{ parentId: number; childIndex: number; tooltipText: string } | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+  const [isAnimationWidgetExpanded, setIsAnimationWidgetExpanded] = useState(false);
   
   // Real-time edge position tracking - stores current visual positions for edges
   const edgePositionsRef = useRef<Map<string, { startX: number; startY: number; endX: number; endY: number }>>(new Map());
@@ -2015,6 +2027,82 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           <span>Click on any node to view details</span>
         </div>
       </div>
+
+      {/* Animation Widget */}
+      {onEnableStepsChange && onSpeedChange && (
+        <div className="absolute bottom-6 right-6 z-10 pointer-events-auto">
+          {isAnimationWidgetExpanded ? (
+            <div className="bg-white dark:bg-[#0d1117] border border-gray-100 dark:border-[#30363d] rounded-lg shadow-md p-4 w-64 transition-all duration-300 ease-in-out backdrop-blur-md">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold">Animation Settings</h3>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => setIsAnimationWidgetExpanded(false)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              </div>
+              
+              {/* Enable Toggle */}
+              <div className="flex items-center justify-between mb-4">
+                <Label htmlFor="enable-animation" className="text-sm cursor-pointer">
+                  Enable Animation
+                </Label>
+                <Switch
+                  id="enable-animation"
+                  checked={enableSteps}
+                  onCheckedChange={onEnableStepsChange}
+                />
+              </div>
+
+              {/* Speed Slider */}
+              {enableSteps && (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground mb-1">
+                    <div className="flex items-center gap-1">
+                      <Turtle className="h-3 w-3" />
+                      <span>Slow</span>
+                    </div>
+                    <div className="flex items-center gap-1">
+                      <span>Fast</span>
+                      <Rabbit className="h-3 w-3" />
+                    </div>
+                  </div>
+                  
+                  <Slider
+                    min={10}
+                    max={100}
+                    step={10}
+                    value={[currentSpeed]}
+                    onValueChange={(values) => {
+                      onSpeedChange(values[0]);
+                    }}
+                    className="w-full"
+                  />
+                  
+                  <div className="flex items-center justify-center">
+                    <span className="text-sm font-medium">
+                      Speed: {currentSpeed}%
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <Button
+              variant="default"
+              size="icon"
+              className="h-12 w-12 rounded-full shadow-md transition-all duration-300 ease-in-out hover:scale-105"
+              onClick={() => setIsAnimationWidgetExpanded(true)}
+              title="Animation Settings"
+            >
+              <Settings className="h-5 w-5" />
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Node Detail Dialog */}
       <NodeDetailDialog
