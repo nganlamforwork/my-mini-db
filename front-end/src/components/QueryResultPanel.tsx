@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState } from 'react';
 import { ChevronDown, ChevronUp, CheckCircle2, XCircle, Star } from 'lucide-react';
 import { Button } from './ui/button';
 import {
@@ -98,27 +98,6 @@ export function QueryResultPanel({
   defaultExpanded = false 
 }: QueryResultPanelProps) {
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
-  
-  // Track previous result timestamp to detect new results
-  const prevTimestampRef = useRef<Date | null>(null);
-  
-  // Auto-expand when a new result arrives (if not locked open)
-  useEffect(() => {
-    if (result && !isLockedOpen) {
-      const currentTimestamp = result.timestamp;
-      const prevTimestamp = prevTimestampRef.current;
-      
-      // Check if this is a new result (different timestamp)
-      if (!prevTimestamp || currentTimestamp.getTime() !== prevTimestamp.getTime()) {
-        // New result arrived - auto-expand to show it
-        setIsExpanded(true);
-        prevTimestampRef.current = currentTimestamp;
-      }
-    } else if (!result) {
-      // Reset timestamp when result is cleared
-      prevTimestampRef.current = null;
-    }
-  }, [result, isLockedOpen]);
   
   // Force expanded state when locked open
   const effectiveExpanded = isLockedOpen ? true : isExpanded;

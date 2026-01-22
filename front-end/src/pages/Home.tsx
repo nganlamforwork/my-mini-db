@@ -1,377 +1,313 @@
-import { useState } from 'react'
-import * as React from 'react'
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { useNavigate } from 'react-router-dom'
-import { Plus, Database, Trash2 } from 'lucide-react'
-import { toast } from 'sonner'
-import { createDatabaseSchema, type CreateDatabaseInput } from '@/lib/validations'
-import { useDatabases } from '@/hooks/useDatabases'
-import { useDeleteDatabase, useClearAllDatabases } from '@/hooks/useDatabaseMutations'
+import { z } from 'zod'
 import { Button } from '@/components/ui/button'
-import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from '@/components/ui/dialog'
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from '@/components/ui/form'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter, DialogTrigger } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-  AlertDialogTrigger,
-} from '@/components/ui/alert-dialog'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+import { Form, FormControl, FormDescription, FormField, FormItem, FormLabel, FormMessage } from '@/components/ui/form'
+import { Plus, Trash2, Network } from 'lucide-react'
+import { api } from '@/lib/api'
+import { toast } from 'sonner'
+
+// Zod schema for tree name validation
+const createTreeSchema = z.object({
+  treeName: z
+    .string()
+    .min(1, 'Tree name is required')
+    .min(2, 'Tree name must be at least 2 characters')
+    .max(50, 'Tree name must be at most 50 characters')
+})
+
+type CreateTreeFormValues = z.infer<typeof createTreeSchema>
 
 export function Home() {
   const navigate = useNavigate()
-  const [open, setOpen] = useState(false)
+  const [trees, setTrees] = useState<Array<{ name: string; metadata: any }>>([])
+  const [createDialogOpen, setCreateDialogOpen] = useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = useState<string | null>(null)
-  const [clearAllDialogOpen, setClearAllDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
-  const [connectingDbName, setConnectingDbName] = useState<string | null>(null)
 
-  // Fetch databases list
-  const { data: databases = [], isLoading } = useDatabases()
+  // Load trees
+  useEffect(() => {
+    loadTrees()
+  }, [])
 
-  // Mutations (createMutation removed - using direct API calls for synchronous flow)
-  const deleteMutation = useDeleteDatabase()
-  const clearAllMutation = useClearAllDatabases()
+  const loadTrees = () => {
+    const allTrees = api.getAllTrees()
+    setTrees(allTrees)
+  }
 
-  // Form setup with zod validation
-  const form = useForm<CreateDatabaseInput>({
-    resolver: zodResolver(createDatabaseSchema),
-    mode: 'onBlur',
+  const form = useForm<CreateTreeFormValues>({
+    resolver: zodResolver(createTreeSchema),
     defaultValues: {
-      name: '',
-    },
+      treeName: ''
+    }
   })
 
-  const handleCreateDatabase = async (data: CreateDatabaseInput) => {
-    // Set loading state
-    setIsCreating(true)
+  const handleCreateTree = async (values: CreateTreeFormValues) => {
+    if (trees.length >= 6) {
+      toast.error('Maximum 6 trees allowed')
+      return
+    }
+
+    const trimmedName = values.treeName.trim()
     
+    // Check for duplicate names
+    if (trees.some(t => t.name === trimmedName)) {
+      form.setError('treeName', {
+        type: 'manual',
+        message: 'Tree with this name already exists'
+      })
+      return
+    }
+
+    setIsCreating(true)
     try {
-      // Step 1: Create database (name only)
-      const createResponse = await api.createDatabase({
-        name: data.name,
-      })
-      
-      // Check if creation was successful
-      if (!createResponse.success) {
-        throw new Error('Database creation failed')
-      }
-      
-      // Step 2: Connect to the newly created database
-      const connectResponse = await api.connectDatabase({
-        name: data.name,
-        config: { cacheSize: 100 },
-      })
-      
-      // Check if connection was successful
-      if (!connectResponse.success) {
-        throw new Error(connectResponse.message || 'Failed to connect to database')
-      }
-      
-      // Step 3: Only navigate on success
-      // Close dialog and reset form
-      setOpen(false)
+      api.createTree(trimmedName)
+      api.setCurrentTreeName(trimmedName)
+      setCreateDialogOpen(false)
       form.reset()
-      
-      // Navigate to database detail page (where user can create tables)
-      navigate(`/databases/${data.name}`)
-      
+      loadTrees()
+      navigate(`/tree/${encodeURIComponent(trimmedName)}`)
+      toast.success('Tree created successfully')
     } catch (error) {
-      // Show error toast and stop - do NOT redirect
-      const errorMessage = error instanceof Error ? error.message : 'An error occurred while creating the database.'
-      toast.error('Failed to create database', {
-        description: errorMessage,
-      })
+      toast.error(error instanceof Error ? error.message : 'Failed to create tree')
     } finally {
-      // Always reset loading state
       setIsCreating(false)
     }
   }
 
-  const handleDialogOpenChange = (isOpen: boolean) => {
-    setOpen(isOpen)
-    if (!isOpen) {
-      // Reset state when dialog closes
+  const handleDialogOpenChange = (open: boolean) => {
+    setCreateDialogOpen(open)
+    if (!open) {
       form.reset()
     }
   }
 
-  // Handle database card click - connect before navigating
-  const handleDatabaseClick = async (dbName: string) => {
-    // Set loading state for this specific database
-    setConnectingDbName(dbName)
-    
+  const handleDeleteTree = (name: string) => {
     try {
-      // Await connection API call - strictly synchronous
-      const connectResponse = await api.connectDatabase({
-        name: dbName,
-        config: { cacheSize: 100 },
-      })
-      
-      // Check if connection was successful
-      if (!connectResponse.success) {
-        throw new Error(connectResponse.message || 'Failed to connect to database')
-      }
-      
-      // ONLY navigate after successful connection (strictly after await)
-      navigate(`/databases/${dbName}`)
-      
+      api.deleteTree(name)
+      loadTrees()
+      setDeleteDialogOpen(null)
+      toast.success('Tree deleted successfully')
     } catch (error) {
-      // Show error toast and stop - do NOT redirect
-      const errorMessage = error instanceof Error ? error.message : 'An error occurred while connecting to the database.'
-      toast.error('Failed to connect to database', {
-        description: errorMessage,
-      })
-    } finally {
-      // Always reset loading state
-      setConnectingDbName(null)
+      toast.error(error instanceof Error ? error.message : 'Failed to delete tree')
     }
   }
 
-  const isFormValid = form.formState.isValid
-
-  const handleDelete = (name: string, e?: React.MouseEvent) => {
-    e?.preventDefault()
-    e?.stopPropagation()
-    deleteMutation.mutate(name, {
-      onSuccess: () => {
-        setDeleteDialogOpen(null)
-      },
-    })
+  const handleOpenTree = (name: string) => {
+    api.setCurrentTreeName(name)
+    navigate(`/tree/${encodeURIComponent(name)}`)
   }
 
-  const handleClearAll = () => {
-    clearAllMutation.mutate(undefined, {
-      onSuccess: () => {
-        setClearAllDialogOpen(false)
-      },
-    })
-  }
+  const canCreate = trees.length < 6
 
   return (
-    <>
-      <Dialog open={open} onOpenChange={handleDialogOpenChange}>
-        <div className="flex flex-col min-h-[calc(100vh-3.5rem)]">
-          {/* Hero Section */}
-          <section className="container mx-auto px-4 py-16 text-center">
-            <h1 className="text-4xl md:text-5xl font-bold mb-4 bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
-              MiniDB
-            </h1>
-            <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-8">
-              A lightweight, educational B+Tree database implementation with step-by-step
-              visualization. Explore how databases work under the hood with real-time
-              tree operations and execution traces.
-            </p>
-          </section>
+    <div className="flex flex-col min-h-[calc(100vh-3.5rem)]">
+      {/* Hero Section */}
+      <section className="container mx-auto px-4 py-16 text-center">
+        <h1 className="text-4xl md:text-5xl font-bold mb-4 bg-gradient-to-r from-primary to-primary/60 bg-clip-text text-transparent">
+          MiniDB B+Tree Visualizer
+        </h1>
+        <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-8">
+          Interactive B+Tree visualization tool. Create and manage multiple B+Tree visualizations for presentations.
+          Explore how B+Tree operations work with real-time tree visualization and step-by-step execution traces.
+        </p>
+      </section>
 
-          {/* Databases List Section */}
-          <section className="container mx-auto px-4 pb-16 flex-1">
-            <div className="max-w-4xl mx-auto">
-              <div className="flex items-center justify-between mb-6">
-                <h2 className="text-2xl font-semibold">Your Databases</h2>
-                <div className="flex items-center gap-2">
-                  {databases.length > 0 && (
-                    <AlertDialog open={clearAllDialogOpen} onOpenChange={setClearAllDialogOpen}>
+      {/* Trees Management Section */}
+      <section className="container mx-auto px-4 pb-16 flex-1">
+        <div className="max-w-4xl mx-auto">
+          {trees.length > 0 && (
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-2xl font-semibold">Your B+Tree Visualizations</h2>
+              <Dialog open={createDialogOpen} onOpenChange={handleDialogOpenChange}>
+                <DialogTrigger asChild>
+                  <Button disabled={!canCreate} className="gap-2">
+                    <Plus className="h-4 w-4" />
+                    Create New Tree
+                  </Button>
+                </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Create New B+Tree</DialogTitle>
+                  <DialogDescription>
+                    Create a new B+Tree visualization. You can have up to 6 trees.
+                  </DialogDescription>
+                </DialogHeader>
+                <Form {...form}>
+                  <form onSubmit={form.handleSubmit(handleCreateTree)} className="space-y-4">
+                    <FormField
+                      control={form.control}
+                      name="treeName"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel required>Tree Name</FormLabel>
+                          <FormControl>
+                            <Input
+                              placeholder="My Presentation Tree"
+                              disabled={isCreating}
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Choose a descriptive name for your tree visualization
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    <DialogFooter>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        onClick={() => handleDialogOpenChange(false)}
+                        disabled={isCreating}
+                      >
+                        Cancel
+                      </Button>
+                      <Button type="submit" disabled={isCreating}>
+                        {isCreating ? 'Creating...' : 'Create'}
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </Form>
+              </DialogContent>
+            </Dialog>
+          </div>
+          )}
+
+          {trees.length === 0 ? (
+            <div className="text-center py-12 border border-dashed rounded-lg">
+              <Network className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
+              <p className="text-muted-foreground mb-4">No trees yet</p>
+              <Dialog open={createDialogOpen} onOpenChange={handleDialogOpenChange}>
+                <DialogTrigger asChild>
+                  <Button variant="outline">
+                    <Plus className="h-4 w-4 mr-2" />
+                    Create your first tree
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>Create New B+Tree</DialogTitle>
+                    <DialogDescription>
+                      Create a new B+Tree visualization. You can have up to 6 trees.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <Form {...form}>
+                    <form onSubmit={form.handleSubmit(handleCreateTree)} className="space-y-4">
+                      <FormField
+                        control={form.control}
+                        name="treeName"
+                        render={({ field }) => (
+                          <FormItem>
+                            <FormLabel required>Tree Name</FormLabel>
+                            <FormControl>
+                              <Input
+                                placeholder="My Presentation Tree"
+                                disabled={isCreating}
+                                {...field}
+                              />
+                            </FormControl>
+                            <FormDescription>
+                              Choose a descriptive name for your tree visualization
+                            </FormDescription>
+                            <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                      <DialogFooter>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => handleDialogOpenChange(false)}
+                          disabled={isCreating}
+                        >
+                          Cancel
+                        </Button>
+                        <Button type="submit" disabled={isCreating}>
+                          {isCreating ? 'Creating...' : 'Create'}
+                        </Button>
+                      </DialogFooter>
+                    </form>
+                  </Form>
+                </DialogContent>
+              </Dialog>
+            </div>
+          ) : (
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+              {trees.map((tree) => (
+                <div
+                  key={tree.name}
+                  className="border rounded-lg p-4 transition-colors hover:border-primary/50 cursor-pointer group relative"
+                  onClick={() => handleOpenTree(tree.name)}
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-3">
+                      <Network className="h-5 w-5 text-primary" />
+                      <h3 className="font-semibold text-lg">{tree.name}</h3>
+                    </div>
+                    <AlertDialog open={deleteDialogOpen === tree.name} onOpenChange={(open) => setDeleteDialogOpen(open ? tree.name : null)}>
                       <AlertDialogTrigger asChild>
-                        <Button variant="ghost" disabled={clearAllMutation.isPending}>
-                          <Trash2 className="h-4 w-4 mr-2" />
-                          {clearAllMutation.isPending ? 'Clearing...' : 'Clear All'}
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setDeleteDialogOpen(tree.name)
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
                       </AlertDialogTrigger>
                       <AlertDialogContent>
                         <AlertDialogHeader>
-                          <AlertDialogTitle>Are you absolutely sure?</AlertDialogTitle>
+                          <AlertDialogTitle>Are you sure?</AlertDialogTitle>
                           <AlertDialogDescription>
-                            This action cannot be undone. This will permanently delete all {databases.length} database{databases.length !== 1 ? 's' : ''} from the system.
+                            This action cannot be undone. This will permanently delete the tree "{tree.name}".
                           </AlertDialogDescription>
                         </AlertDialogHeader>
                         <AlertDialogFooter>
-                          <AlertDialogCancel disabled={clearAllMutation.isPending}>
-                            Cancel
-                          </AlertDialogCancel>
+                          <AlertDialogCancel>Cancel</AlertDialogCancel>
                           <AlertDialogAction
-                            onClick={handleClearAll}
-                            disabled={clearAllMutation.isPending}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              handleDeleteTree(tree.name)
+                            }}
                           >
-                            {clearAllMutation.isPending ? 'Clearing...' : 'Clear All'}
+                            Delete
                           </AlertDialogAction>
                         </AlertDialogFooter>
                       </AlertDialogContent>
                     </AlertDialog>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    Click to open and visualize
+                  </p>
+                  {tree.metadata && (
+                    <p className="text-xs text-muted-foreground mt-2">
+                      Updated: {new Date(tree.metadata.updatedAt).toLocaleDateString()}
+                    </p>
                   )}
-                  <DialogTrigger asChild>
-                    <Button  className="gap-2">
-                      <Plus className="h-4 w-4" />
-                      Create Database
-                    </Button>
-                  </DialogTrigger>
                 </div>
-              </div>
-              
-              {isLoading ? (
-                <div className="text-center py-12 text-muted-foreground">
-                  Loading databases...
-                </div>
-              ) : databases.length === 0 ? (
-                <div className="text-center py-12 border border-dashed rounded-lg">
-                  <Database className="h-12 w-12 mx-auto mb-4 text-muted-foreground opacity-50" />
-                  <p className="text-muted-foreground mb-4">No databases yet</p>
-                  <DialogTrigger asChild>
-                    <Button variant="outline">
-                      <Plus className="h-4 w-4 mr-2" />
-                      Create your first database
-                    </Button>
-                  </DialogTrigger>
-                </div>
-              ) : (
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                  {databases.map((dbName) => {
-                    const isConnecting = connectingDbName === dbName
-                    return (
-                      <div
-                        key={dbName}
-                        className={cn(
-                          "border rounded-lg p-4 transition-colors group relative",
-                          isConnecting ? "cursor-wait opacity-75" : "hover:border-primary/50 cursor-pointer"
-                        )}
-                        onClick={() => !isConnecting && handleDatabaseClick(dbName)}
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <div className="flex items-center gap-3">
-                            {isConnecting ? (
-                              <div className="h-5 w-5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                            ) : (
-                              <Database className="h-5 w-5 text-primary" />
-                            )}
-                            <h3 className="font-semibold text-lg">{dbName}</h3>
-                          </div>
-                          <AlertDialog open={deleteDialogOpen === dbName} onOpenChange={(open) => setDeleteDialogOpen(open ? dbName : null)}>
-                            <AlertDialogTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 opacity-0 group-hover:opacity-100 transition-opacity"
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  setDeleteDialogOpen(dbName)
-                                }}
-                                disabled={isConnecting}
-                              >
-                                <Trash2 className="h-4 w-4 text-destructive" />
-                              </Button>
-                            </AlertDialogTrigger>
-                            <AlertDialogContent>
-                              <AlertDialogHeader>
-                                <AlertDialogTitle>Are you sure?</AlertDialogTitle>
-                                <AlertDialogDescription>
-                                  This action cannot be undone. This will permanently delete the database "{dbName}" from the system.
-                                </AlertDialogDescription>
-                              </AlertDialogHeader>
-                              <AlertDialogFooter>
-                                <AlertDialogCancel disabled={deleteMutation.isPending}>
-                                  Cancel
-                                </AlertDialogCancel>
-                                <AlertDialogAction
-                                  onClick={(e) => {
-                                    e.preventDefault()
-                                    e.stopPropagation()
-                                    handleDelete(dbName, e)
-                                  }}
-                                  disabled={deleteMutation.isPending}
-                                >
-                                  {deleteMutation.isPending ? 'Deleting...' : 'Delete'}
-                                </AlertDialogAction>
-                              </AlertDialogFooter>
-                            </AlertDialogContent>
-                          </AlertDialog>
-                        </div>
-                        <p className="text-sm text-muted-foreground">
-                          {isConnecting ? 'Connecting...' : 'Click to view details'}
-                        </p>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
+              ))}
             </div>
-          </section>
-        </div>
+          )}
 
-        <DialogContent>
-          <Form {...form}>
-            <form onSubmit={form.handleSubmit(handleCreateDatabase)}>
-              <DialogHeader>
-                <DialogTitle>Create New Database</DialogTitle>
-                <DialogDescription>
-                  Create a new empty database. You'll be able to create tables with schemas after creation. Only letters, numbers, underscores, and hyphens are allowed for the name.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <FormField
-                  control={form.control}
-                  name="name"
-                  render={({ field }) => (
-                    <FormItem>
-                      <FormLabel required>Database Name</FormLabel>
-                      <FormControl>
-                        <Input
-                          placeholder="mydb"
-                          disabled={isCreating}
-                          autoFocus
-                          {...field}
-                        />
-                      </FormControl>
-                      <FormMessage />
-                    </FormItem>
-                  )}
-                />
-              </div>
-              <DialogFooter>
-                <Button
-                  type="button"
-                  variant="outline"
-                  onClick={() => {
-                    setOpen(false)
-                    form.reset()
-                  }}
-                  disabled={isCreating}
-                >
-                  Cancel
-                </Button>
-                <Button 
-                  type="submit" 
-                  disabled={isCreating || !isFormValid}
-                >
-                  {isCreating ? 'Creating...' : 'Create'}
-                </Button>
-              </DialogFooter>
-            </form>
-          </Form>
-        </DialogContent>
-      </Dialog>
-    </>
+          {!canCreate && (
+            <div className="mt-4 p-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-lg">
+              <p className="text-sm text-amber-800 dark:text-amber-400">
+                Maximum number of trees (6) reached. Delete a tree to create a new one.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+    </div>
   )
 }

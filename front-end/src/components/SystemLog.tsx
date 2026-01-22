@@ -236,7 +236,7 @@ export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, on
 
   return (
     <>
-      <div className={`${fullView ? 'h-full max-h-[80vh]' : 'h-48'} flex flex-col`}>
+      <div className={`${fullView ? 'h-full max-h-[80vh]' : 'h-full'} flex flex-col`}>
         <LogContent containerRef={scrollContainerRef} contentRef={contentRef} isFullView={fullView} />
       </div>
 
