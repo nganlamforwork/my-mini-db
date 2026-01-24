@@ -25,14 +25,16 @@ export const useTreeInteraction = ({
   const lastMouse = useRef({ x: 0, y: 0 });
   
   const [selectedNode, setSelectedNode] = useState<TreeNode | null>(null);
+  const [selectedKeyIndex, setSelectedKeyIndex] = useState<number | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   
   const hoveredNodeRef = useRef<number | null>(null);
+  const hoveredKeyRef = useRef<number | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<{ parentId: number; childIndex: number; tooltipText: string } | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
 
-  // Helper to find node at canvas coordinates
-  const findNodeAtPosition = (clientX: number, clientY: number): number | null => {
+  // Helper to find node (and specific key) at canvas coordinates
+  const findNodeAtPosition = (clientX: number, clientY: number): { nodeId: number; keyIndex: number | null } | null => {
     if (!containerRef.current || !canvasRef.current) return null;
 
     const rect = containerRef.current.getBoundingClientRect();
@@ -50,7 +52,6 @@ export const useTreeInteraction = ({
       if (!nodeData.keys || !Array.isArray(nodeData.keys) || nodeData.keys.length === 0) continue;
 
       // Use truncated keys for width calculation (matches visual rendering)
-      // Note: The actual node data passed to modal is still full (looked up by nodeId)
       const keyTexts = formatNodeDataForGraph(nodeData.keys);
       if (keyTexts.length === 0) continue;
 
@@ -61,6 +62,9 @@ export const useTreeInteraction = ({
       const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
       const rectW = Math.max(100, totalKeyWidth);
       const rectH = 50;
+      
+      const nodeLeft = pos.x - rectW / 2;
+      const padding = (rectW - totalKeyWidth) / 2;
 
       // Check if click is within node bounds
       if (
@@ -69,7 +73,20 @@ export const useTreeInteraction = ({
         treeY >= pos.y - rectH / 2 &&
         treeY <= pos.y + rectH / 2
       ) {
-        return nodeId;
+        // Hit test for specific keys
+        let currentKeyX = nodeLeft + padding;
+        let foundKeyIndex: number | null = null;
+        
+        for (let i = 0; i < keyWidths.length; i++) {
+          const keyW = keyWidths[i];
+          if (treeX >= currentKeyX && treeX <= currentKeyX + keyW) {
+             foundKeyIndex = i;
+             break;
+          }
+          currentKeyX += keyW;
+        }
+        
+        return { nodeId, keyIndex: foundKeyIndex };
       }
     }
 
@@ -78,6 +95,7 @@ export const useTreeInteraction = ({
 
   // Helper to find edge at canvas coordinates
   const findEdgeAtPosition = (clientX: number, clientY: number): { parentId: number; childIndex: number; tooltipText: string } | null => {
+    // ... exact logic as before, just kept for context validity if needed by tool
     if (!containerRef.current || !canvasRef.current) return null;
 
     const rect = containerRef.current.getBoundingClientRect();
@@ -204,11 +222,13 @@ export const useTreeInteraction = ({
 
   // Interaction Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
-    const clickedNodeId = findNodeAtPosition(e.clientX, e.clientY);
-    if (clickedNodeId !== null) {
-      const node = treeData.nodes[clickedNodeId.toString()];
+    const result = findNodeAtPosition(e.clientX, e.clientY);
+    if (result) {
+      const { nodeId, keyIndex } = result;
+      const node = treeData.nodes[nodeId.toString()];
       if (node) {
         setSelectedNode(node);
+        setSelectedKeyIndex(typeof keyIndex === 'number' ? keyIndex : null);
         setDialogOpen(true);
         setHoveredEdge(null);
         setTooltipPosition(null);
@@ -224,13 +244,13 @@ export const useTreeInteraction = ({
 
   const handleMouseMove = (e: React.MouseEvent) => {
     // Update hover state - triggers re-render for smooth visual transition
-    const hoveredNodeId = findNodeAtPosition(e.clientX, e.clientY);
-    if (hoveredNodeId !== hoveredNodeRef.current) {
+    const result = findNodeAtPosition(e.clientX, e.clientY);
+    const hoveredNodeId = result ? result.nodeId : null;
+    const hoveredKeyIndex = result ? result.keyIndex : null;
+
+    if (hoveredNodeId !== hoveredNodeRef.current || hoveredKeyIndex !== hoveredKeyRef.current) {
       hoveredNodeRef.current = hoveredNodeId;
-      // Force re-render to show hover effect smoothly via requestAnimationFrame
-      if (canvasRef.current) {
-        // Re-render will happen automatically on next frame
-      }
+      hoveredKeyRef.current = hoveredKeyIndex;
       
       // Update cursor with transition
       if (containerRef.current) {
@@ -349,6 +369,9 @@ export const useTreeInteraction = ({
     handleZoomOut,
     handleResetView,
     isDragging,
-    hoveredNodeRef
+    hoveredNodeRef,
+    selectedKeyIndex,
+    setSelectedKeyIndex,
+    hoveredKeyRef
   };
 };

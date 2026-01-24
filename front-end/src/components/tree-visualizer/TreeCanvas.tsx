@@ -29,6 +29,12 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   treeData,
   schema,
   config,
+  activeStep,
+  hasPendingOperation,
+  isPlaying,
+  onPlayPause,
+  playbackSpeed,
+  onPlaybackSpeedChange,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -53,7 +59,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     handleZoomOut,
     handleResetView,
     isDragging,
-    hoveredNodeRef
+    hoveredNodeRef,
+    hoveredKeyRef
   } = useTreeInteraction({
     treeData,
     layout,
@@ -73,7 +80,10 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     isEmptyTree,
     hoveredEdge,
     tooltipPosition,
-    hoveredNodeRef
+    hoveredNodeRef,
+    hoveredKeyRef,
+
+    activeStep, // Pass activeStep to renderer
   });
 
   // 4. Handle Export
@@ -112,10 +122,6 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
         onMouseUp={() => isDragging.current = false}
         onMouseLeave={() => {
           isDragging.current = false;
-          // Note: we can't easily reset hoveredEdge from here without exposing setHoveredEdge
-          // But useTreeInteraction handles mouse leave via its own logic if needed, 
-          // essentially the mouse leave on div might be redundant if the hook logic covers it.
-          // The hook resets dragging. 
         }}
         onWheel={handleWheel}
         style={{ backgroundImage: `radial-gradient(${patternColor} 1px, transparent 1px)`, backgroundSize: '24px 24px' }}
@@ -167,6 +173,12 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
           onResetView={handleResetView}
           onDownload={handleDownloadImage}
           zoomLevel={camera.zoom}
+          // Playback controls
+          isPlaying={isPlaying}
+          onPlayPause={onPlayPause}
+          playbackSpeed={playbackSpeed}
+          onPlaybackSpeedChange={onPlaybackSpeedChange}
+          hasPendingOperation={hasPendingOperation}
         />
       </div>
     </TooltipProvider>

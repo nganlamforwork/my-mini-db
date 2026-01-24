@@ -1,9 +1,11 @@
 import { useEffect, type RefObject } from 'react';
-import type { TreeStructure } from '@/types/database';
+import type { TreeStructure, VisualizationStep } from '@/types/database';
 import type { NodePosition } from '../types';
 import type { LayoutNode } from './useTreeLayout';
 import { formatNodeDataForGraph } from '@/lib/keyUtils';
-import { drawRoundedRect, getThemeColors } from '../helpers';
+import { drawRoundedRect, getThemeColors, drawLeafSiblingLinks } from '../helpers';
+import { compareKeys, extractKeyValues } from '@/lib/keyUtils';
+import confetti from 'canvas-confetti';
 
 interface UseTreeRendererProps {
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -16,6 +18,8 @@ interface UseTreeRendererProps {
   hoveredEdge: { parentId: number; childIndex: number; tooltipText: string } | null;
   tooltipPosition: { x: number; y: number } | null;
   hoveredNodeRef: React.MutableRefObject<number | null>;
+  hoveredKeyRef: React.MutableRefObject<number | null>;
+  activeStep?: VisualizationStep;
 }
 
 export const useTreeRenderer = ({
@@ -28,14 +32,22 @@ export const useTreeRenderer = ({
   isEmptyTree,
   hoveredEdge,
   tooltipPosition,
-  hoveredNodeRef
+  hoveredNodeRef,
+  hoveredKeyRef,
+  activeStep
 }: UseTreeRendererProps) => {
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
+    
+    // Capture start time of this effect cycle (resets when activeStep changes)
+    const startTime = Date.now();
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
+
+    // Create lookup map to retrieve node width without recalculation
+    const layoutNodeMap = new Map(layout.map(n => [n.id, n]));
 
     let animationFrame: number;
     let themeObserver: MutationObserver | null = null;
@@ -51,6 +63,7 @@ export const useTreeRenderer = ({
       }
 
       const colors = getThemeColors();
+      const isDark = document.documentElement.classList.contains('dark');
 
       // Real-time position tracking: Update node positions with faster lerp for smoother edge tracking
       const LERP_FACTOR = 0.2;
@@ -83,50 +96,23 @@ export const useTreeRenderer = ({
       ctx.translate(width / 2 + camera.x, 100 + camera.y);
       ctx.scale(camera.zoom, camera.zoom);
 
-      // Draw Leaf Node Sibling Links (dashed green lines)
-      ctx.save();
-      ctx.lineWidth = 2;
-      const isDark = document.documentElement.classList.contains('dark');
-      ctx.strokeStyle = isDark ? '#10b981' : '#059669'; // green-500 or green-600
-      ctx.setLineDash([5, 5]); // Dashed line pattern
-      
       // Explicitly set font for measurement to match node rendering
       ctx.font = 'bold 14px "JetBrains Mono", monospace';
       
-      const measureNodeWidth = (nodeData: any) => {
-        if (!nodeData || !nodeData.keys) return 100;
-        const keyTexts = formatNodeDataForGraph(nodeData.keys);
-        const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
-        const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
-        return Math.max(100, totalKeyWidth);
-      };
-      
-      layout.forEach(node => {
-        const nodeData = treeData.nodes[node.id.toString()];
-        if (!nodeData || nodeData.type !== 'leaf' || !nodeData.nextPage) return;
-        
-        // Check if next page exists in current tree
-        const nextNodeData = treeData.nodes[nodeData.nextPage.toString()];
-         // We need positions for both nodes
-        const currentPos = positionsRef.current.get(node.id);
-        const nextPos = positionsRef.current.get(nodeData.nextPage);
-        
-        if (!currentPos || !nextPos) return;
+      // Draw Leaf Node Sibling Links (dashed green lines)
+      drawLeafSiblingLinks(
+        ctx,
+        layout,
+        treeData,
+        (id) => {
+          const pos = positionsRef.current.get(id);
+          const layoutNode = layoutNodeMap.get(id);
+          if (!pos || !layoutNode) return null;
+          
+          return { x: pos.x, y: pos.y, width: layoutNode.width };
+        }
+      );
 
-        // Calculate precise widths using the current render context
-        const currentWidth = measureNodeWidth(nodeData);
-        const nextWidth = nextNodeData ? measureNodeWidth(nextNodeData) : 100;
-
-        const rightX = currentPos.x + currentWidth / 2;
-        const leftX = nextPos.x - nextWidth / 2;
-        
-        ctx.beginPath();
-        ctx.moveTo(rightX, currentPos.y);
-        ctx.lineTo(leftX, nextPos.y);
-        ctx.stroke();
-      });
-      ctx.restore();
-      
       // Draw Connections with key-aligned anchor points
       ctx.lineWidth = 2;
       ctx.strokeStyle = colors.connectionLine;
@@ -266,16 +252,190 @@ export const useTreeRenderer = ({
         const isHovered = hoveredNodeRef.current === pos.id;
         const isRoot = pos.id === treeData.rootPage;
         
+        // --- VISUALIZATION OVERRIDES ---
+        let isActive = false;
+        let activeNodeFill = '';
+        let activeStroke = '';
+        const activeKeyIndices = new Set<number>();
+        let foundKeyIndex = -1; // Specific index for exact match (Green)
+
+        if (activeStep && activeStep.pageId === pos.id) {
+          isActive = true;
+          const timeSinceStart = Date.now() - startTime;
+          const KEY_SCAN_DURATION = 600; // ms per key
+
+          // Set highlight colors based on action
+          switch (activeStep.action) {
+            case 'NODE_VISIT': // Blue
+              // Explicitly blue for visit
+              activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; // blue-900/100
+              activeStroke = isDark ? '#3b82f6' : '#2563eb';   // blue-500/600
+              break;
+
+            case 'COMPARE_RANGE': 
+              activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; // Blue base while comparing
+              activeStroke = isDark ? '#3b82f6' : '#2563eb'; 
+              
+              if ('selectedChildIndex' in activeStep && typeof activeStep.selectedChildIndex === 'number') {
+                 const childIdx = activeStep.selectedChildIndex;
+
+                 
+                 // If we selected childIdx, it means we passed keys 0 to childIdx-1 (inclusive)
+                 // because they were <= SearchKey.
+                 // Key[childIdx] was > SearchKey (or end of list), so we stopped before it.
+                 // Highlight only the keys we "accepted" as <= SearchKey.
+                 const limit = childIdx - 1;
+                 
+                 // Only add if currentIndex >= 0 (e.g. childIdx=0 -> limit=-1 -> loop doesn't run)
+                 // And ensure we don't go beyond our limit
+                 // Correction: Use simple loop based on time-stepped index
+                 if (limit >= 0) {
+                     // We want to animate from 0 to limit.
+                     // The max index we can show right now is 'currentIndex'.
+                     // But strictly up to 'limit'.
+                     const maxToShow = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), limit);
+                     for (let i = 0; i <= maxToShow; i++) {
+                         activeKeyIndices.add(i);
+                     }
+                 }
+              }
+              break;
+
+            case 'SCAN_KEYS': 
+              activeNodeFill = isDark ? '#134e4a' : '#ccfbf1'; // teal base (or maybe blue per request?)
+              // User said "traverse key -> blue". 
+              // "search" usually scans keys. 
+              // Let's use blue base for the node, but maybe Cyan for the active operation?
+              // User: "traverse key -> blue", "founded key -> green".
+              
+              activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
+              activeStroke = isDark ? '#3b82f6' : '#2563eb';
+              
+              if ('foundAtIndex' in activeStep && typeof activeStep.foundAtIndex === 'number') {
+                  const foundIdx = activeStep.foundAtIndex;
+                  if (foundIdx !== -1) {
+                    // Start 0 -> foundIdx
+                    const currentIndex = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), foundIdx);
+                    activeKeyIndices.add(currentIndex);
+                    
+                    // If we reached the target and it is found
+                    if (currentIndex === foundIdx) {
+                       foundKeyIndex = foundIdx; // Turns Green
+                       
+                       // Fire confetti ONCE when we hit the key
+                       // To avoid infinite confetti in the render loop, we need a flag or check time
+                       // Actually, we can just fire it if timeSinceStart / Duration is roughly just reached.
+                       // Or better, checking if we just transitioned. 
+                       // Render loop runs 60fps.
+                       // We can use a ref to track if we fired for this step?
+                       // We don't have a stable step ID to reference easily without a specialized hook.
+                       
+                       // Simplification: Fire every frame? No.
+                       // Let's just calculate random chance? No.
+                       
+                       // How about: 
+                       const justReached = Math.floor(timeSinceStart / KEY_SCAN_DURATION) === foundIdx;
+                       const stepElapsed = timeSinceStart % KEY_SCAN_DURATION;
+                       // Fire at the start of the key highlight (first 100ms)
+                       if (justReached && stepElapsed < 50) {
+                           // Calculate screen coordinates
+                           // Canvas center = width/2, 100
+                           // Node position = pos.x, pos.y relative to canvas origin
+                           // Transform: (pos.x * zoom + centerX + cameraX), (pos.y * zoom + centerY + cameraY)
+                           
+                           const centerX = width / 2;
+                           const visualX = (pos.x * camera.zoom) + centerX + (camera.x * camera.zoom);
+                           const visualY = (pos.y * camera.zoom) + 100 + (camera.y * camera.zoom);
+                           
+                           // Normalize to 0-1 for confetti
+                           const normX = visualX / window.innerWidth;
+                           const normY = visualY / window.innerHeight;
+                           
+                           if (Math.random() > 0.8) { // Throttle slightly
+                               confetti({
+                                   particleCount: 5,
+                                   spread: 30,
+                                   origin: { x: normX, y: normY },
+                                   colors: ['#22c55e', '#3b82f6'], // Green and Blue
+                                   disableForReducedMotion: true,
+                                   zIndex: 9999
+                               });
+                           }
+                       }
+                    }
+                  } else {
+                     // Not found: scanned all
+                     const numKeys = nodeData.keys?.length || 0;
+                     const currentIndex = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), numKeys - 1);
+                     if (currentIndex >= 0 && currentIndex < numKeys) {
+                         activeKeyIndices.add(currentIndex);
+                     }
+                  }
+              }
+              break;
+
+            case 'FIND_POS': 
+              activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
+              activeStroke = isDark ? '#3b82f6' : '#2563eb'; 
+              if ('targetIndex' in activeStep && typeof activeStep.targetIndex === 'number') {
+                 const target = activeStep.targetIndex;
+                 const numKeys = nodeData.keys?.length || 0;
+                 const limit = Math.min(target, numKeys - 1);
+                 
+                 const currentIndex = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), limit);
+                 if (currentIndex >= 0 && currentIndex <= limit) {
+                     activeKeyIndices.add(currentIndex);
+                 }
+              }
+              break;
+
+            case 'CHECK_OVERFLOW': 
+              if ('isOverflow' in activeStep && activeStep.isOverflow) {
+                 activeNodeFill = isDark ? '#7f1d1d' : '#fee2e2'; 
+                 activeStroke = isDark ? '#ef4444' : '#dc2626';
+              } else {
+                 activeNodeFill = isDark ? '#064e3b' : '#d1fae5'; 
+                 activeStroke = isDark ? '#10b981' : '#059669';
+              }
+              break;
+             default:
+               isActive = false;
+          }
+        }
+        
+        // --- END OVERRIDES ---
+
         const nodeLeft = pos.x - rectW / 2;
         let currentKeyX = nodeLeft + padding;
         
+        // Determine fills/strokes
+        // Priority: Active Step > Hover > Root/Default
+        
+        const shouldUseActive = isActive && activeNodeFill && activeStroke;
+        
         if (isRoot) {
-          const rootFill = isDark ? '#78350f' : '#fef3c7'; // amber-900/50 or amber-100
-          const rootStroke = isDark ? '#f59e0b' : '#d97706'; // amber-500 or amber-600
+          const rootFill = shouldUseActive ? activeNodeFill : (isDark ? '#78350f' : '#fef3c7'); 
+          const rootStroke = shouldUseActive ? activeStroke : (isDark ? '#f59e0b' : '#d97706');
           
           keyTexts.forEach((_keyText, idx) => {
             const keyW = keyWidths[idx];
-            ctx.fillStyle = rootFill;
+            
+            // Highlight specific key if active
+            const isKeyActive = isActive && activeKeyIndices.has(idx);
+            const isKeyFound = idx === foundKeyIndex;
+            const isKeyHovered = isHovered && hoveredKeyRef.current === idx;
+            
+            let fill = rootFill;
+            if (isKeyFound) {
+                 fill = isDark ? '#22c55e' : '#4ade80'; // Green
+            } else if (isKeyActive) {
+                 // URGENT: ALWAYS BLUE for active traversing keys
+                 fill = isDark ? '#3b82f6' : '#93c5fd'; // Blue
+            } else if (isKeyHovered) {
+                 fill = isDark ? '#f59e0b' : '#fcd34d';
+            }
+
+            ctx.fillStyle = fill;
             ctx.fillRect(currentKeyX, pos.y - rectH/2, keyW, rectH);
             currentKeyX += keyW;
           });
@@ -284,11 +444,11 @@ export const useTreeRenderer = ({
           const nodeBottom = pos.y + rectH/2;
           const nodeLeftX = nodeLeft + padding;
           const radius = 6;
-          const lineWidth = isRoot ? (isHovered ? 3 : 2) : (isHovered ? 3 : 1.5);
+          const lineWidth = (isHovered || isActive) ? 3 : (isRoot ? 2 : 1.5);
           
-          if (isHovered) {
+          if (isHovered || isActive) {
             ctx.shadowBlur = 12;
-            ctx.shadowColor = isDark ? 'rgba(245, 158, 11, 0.6)' : 'rgba(217, 119, 6, 0.5)';
+            ctx.shadowColor = rootStroke + '80'; // Add transparency
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 2;
           } else {
@@ -303,10 +463,7 @@ export const useTreeRenderer = ({
           drawRoundedRect(ctx, nodeLeftX, nodeTop, totalKeyWidth, rectH, radius);
           ctx.stroke();
           
-          ctx.shadowBlur = 0;
-          ctx.shadowOffsetX = 0;
-          ctx.shadowOffsetY = 0;
-          
+          // Dividers
           currentKeyX = nodeLeft + padding;
           keyTexts.forEach((_keyText, idx) => {
             const keyW = keyWidths[idx];
@@ -321,11 +478,33 @@ export const useTreeRenderer = ({
             currentKeyX += keyW;
           });
         } else {
-          const nodeFill = isLeaf ? colors.leafFill : colors.internalFill;
+          // Normal Node or Leaf
+          const defaultFill = isLeaf ? colors.leafFill : colors.internalFill;
+          const defaultStroke = isLeaf ? colors.leafStroke : colors.internalStroke;
           
+          const nodeFill = shouldUseActive ? activeNodeFill : defaultFill;
+          // Don't override stroke if not active, keeps Leaf vs Internal distinction? 
+          // Actually if active, we want to pop.
+          const strokeColor = shouldUseActive ? activeStroke : defaultStroke;
+
           keyTexts.forEach((_keyText, idx) => {
             const keyW = keyWidths[idx];
-            ctx.fillStyle = nodeFill;
+            
+            const isKeyActive = isActive && activeKeyIndices.has(idx);
+            const isKeyFound = idx === foundKeyIndex;
+            const isKeyHovered = isHovered && hoveredKeyRef.current === idx;
+            
+            let fill = nodeFill;
+            if (isKeyFound) {
+                 fill = isDark ? '#22c55e' : '#4ade80'; // Green for found
+            } else if (isKeyActive) {
+                 // URGENT: ALWAYS BLUE for active traversing keys
+                 fill = isDark ? '#3b82f6' : '#93c5fd'; // Blue
+            } else if (isKeyHovered) {
+                 fill = isDark ? '#3b82f6' : '#93c5fd';
+            }
+            
+            ctx.fillStyle = fill;
             ctx.fillRect(currentKeyX, pos.y - rectH/2, keyW, rectH);
             currentKeyX += keyW;
           });
@@ -334,31 +513,24 @@ export const useTreeRenderer = ({
           const nodeBottom = pos.y + rectH/2;
           const nodeLeftX = nodeLeft + padding;
           const radius = 6;
-          const lineWidth = isHovered ? 3 : 1.5;
+          const lineWidth = (isHovered || isActive) ? 3 : 1.5;
           
-          if (isHovered) {
-            ctx.shadowBlur = 12;
-            ctx.shadowColor = isLeaf 
-              ? (isDark ? 'rgba(16, 185, 129, 0.6)' : 'rgba(5, 150, 105, 0.5)') 
-              : (isDark ? 'rgba(100, 116, 139, 0.6)' : 'rgba(71, 85, 105, 0.5)');
-            ctx.shadowOffsetX = 0;
-            ctx.shadowOffsetY = 2;
+          if (isHovered || isActive) {
+             ctx.shadowBlur = 12;
+             ctx.shadowColor = strokeColor + '80';
+             ctx.shadowOffsetX = 0;
+             ctx.shadowOffsetY = 2;
           } else {
             ctx.shadowBlur = 0;
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 0;
           }
           
-          const strokeColor = isLeaf ? colors.leafStroke : colors.internalStroke;
           ctx.strokeStyle = strokeColor;
           ctx.lineWidth = lineWidth;
           ctx.beginPath();
           drawRoundedRect(ctx, nodeLeftX, nodeTop, totalKeyWidth, rectH, radius);
           ctx.stroke();
-          
-          ctx.shadowBlur = 0;
-          ctx.shadowOffsetX = 0;
-          ctx.shadowOffsetY = 0;
           
           currentKeyX = nodeLeft + padding;
           keyTexts.forEach((_keyText, idx) => {
@@ -367,7 +539,7 @@ export const useTreeRenderer = ({
               ctx.beginPath();
               ctx.moveTo(currentKeyX + keyW, nodeTop);
               ctx.lineTo(currentKeyX + keyW, nodeBottom);
-              ctx.strokeStyle = isLeaf ? colors.leafStroke : colors.internalStroke;
+              ctx.strokeStyle = strokeColor;
               ctx.lineWidth = 1;
               ctx.stroke();
             }
@@ -417,5 +589,5 @@ export const useTreeRenderer = ({
       cancelAnimationFrame(animationFrame);
       if (themeObserver) themeObserver.disconnect();
     };
-  }, [layout, camera, treeData, isEmptyTree, hoveredEdge, tooltipPosition]);
+  }, [layout, camera, treeData, isEmptyTree, hoveredEdge, tooltipPosition, activeStep]); // Added activeStep dependency
 };

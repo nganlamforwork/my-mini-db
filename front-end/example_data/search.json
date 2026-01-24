@@ -1,0 +1,132 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "keyValues": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 136
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 203
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 78
+        }
+      ]
+    },
+    "selectedChildIndex": 1,
+    "nextPageId": 16,
+    "description": "Compare 78 vs [73, 136, 203] -> 78 >= 73 -> Next: page 16"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 16,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 16"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 16,
+    "keyValues": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 121
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 78
+        }
+      ]
+    },
+    "selectedChildIndex": 0,
+    "nextPageId": 6,
+    "description": "Compare 78 vs [121] -> 78 < 121 -> Next: page 6"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 6,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 6"
+  },
+  {
+    "step": 6,
+    "action": "SCAN_KEYS",
+    "pageId": 6,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 78
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 108
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 78
+        }
+      ]
+    },
+    "foundAtIndex": 1,
+    "description": "Scan [73, 78, 108] -> Found 78 at index 1"
+  }
+]

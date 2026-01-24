@@ -2,7 +2,7 @@ import type { TreeStructure } from '@/types/database';
 import type { NodePosition } from '../types';
 import type { LayoutNode } from './useTreeLayout';
 import { formatNodeDataForGraph } from '@/lib/keyUtils';
-import { drawRoundedRect, getThemeColors } from '../helpers';
+import { drawRoundedRect, getThemeColors, drawLeafSiblingLinks } from '../helpers';
 
 interface UseTreeExportProps {
   layout: LayoutNode[];
@@ -46,7 +46,7 @@ export const useTreeExport = ({
 
   const drawTreeOnCanvas = (ctx: CanvasRenderingContext2D, padding: number, minX: number, minY: number, withBackground: boolean) => {
     const colors = getThemeColors();
-    const isDark = document.documentElement.classList.contains('dark');
+
 
     if (withBackground) {
       // Background
@@ -69,25 +69,21 @@ export const useTreeExport = ({
     ctx.translate(padding - minX, padding - minY);
 
     // Draw Leaf Node Sibling Links (dashed green lines)
-    ctx.save();
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = isDark ? '#10b981' : '#059669';
-    ctx.setLineDash([5, 5]);
-    
+
+    // Draw Leaf Node Sibling Links (dashed green lines)
     const layoutNodeMap = new Map(layout.map(n => [n.id, n]));
-    layout.forEach(node => {
-      const nodeData = treeData.nodes[node.id.toString()];
-      if (!nodeData || nodeData.type !== 'leaf' || !nodeData.nextPage) return;
-      const nextLayoutNode = layoutNodeMap.get(nodeData.nextPage);
-      if (!nextLayoutNode) return;
-      const rightX = node.x + node.width / 2;
-      const leftX = nextLayoutNode.x - nextLayoutNode.width / 2;
-      ctx.beginPath();
-      ctx.moveTo(rightX, node.y);
-      ctx.lineTo(leftX, nextLayoutNode.y);
-      ctx.stroke();
-    });
-    ctx.restore();
+    drawLeafSiblingLinks(
+      ctx,
+      layout,
+      treeData,
+      (id) => {
+        // useTreeExport uses static layout positions logic for the canvas draw function
+        const node = layoutNodeMap.get(id);
+        if (!node) return null;
+        return { x: node.x, y: node.y, width: node.width };
+      }
+    );
+
 
     // Draw connections with key-aligned anchor points
     ctx.lineWidth = 2;

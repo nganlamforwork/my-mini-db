@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { LogEntry, ExecutionStep } from '@/types/database';
-import { formatKey } from '@/lib/keyUtils';
+import type { LogEntry, VisualizationStep, StepAction } from '@/types/database';
 import { Button } from '@/components/ui/button';
 import { Maximize2, Download } from 'lucide-react';
 import {
@@ -15,73 +14,44 @@ interface SystemLogProps {
   fullView?: boolean; // If true, use full height (for dialog), otherwise use compact height (for sidebar)
   onFullView?: () => void; // Callback for opening full view (deprecated - using internal state now)
   onDownload?: () => void; // Callback for downloading logs
+  currentStep?: number; // Current visualization step to limit display
 }
 
-const getStepColor = (stepType: string): string => {
-  switch (stepType) {
-    case 'TRAVERSE_NODE':
+const getStepColor = (stepAction: StepAction): string => {
+  switch (stepAction) {
+    case 'NODE_VISIT':
       return 'text-[#0969da] dark:text-[#58a6ff]'; // Blue
-    case 'INSERT_KEY':
+    case 'INSERT_LEAF':
+    case 'INSERT_INTERNAL':
       return 'text-emerald-600 dark:text-emerald-400'; // Green
-    case 'UPDATE_KEY':
+    case 'COMPARE_RANGE':
       return 'text-yellow-600 dark:text-yellow-400'; // Amber/Yellow
-    case 'DELETE_KEY':
-      return 'text-red-600 dark:text-red-400'; // Red
+    case 'CHECK_OVERFLOW':
+      return 'text-orange-600 dark:text-orange-400'; // Orange
     case 'SPLIT_NODE':
       return 'text-purple-600 dark:text-purple-400'; // Purple
-    case 'MERGE_NODE':
+    case 'CREATE_ROOT':
       return 'text-pink-600 dark:text-pink-400'; // Pink
-    case 'BORROW_FROM_LEFT':
-    case 'BORROW_FROM_RIGHT':
+    case 'SCAN_KEYS':
+    case 'FIND_POS':
       return 'text-cyan-600 dark:text-cyan-400'; // Cyan
-    case 'WAL_APPEND':
-      return 'text-yellow-600 dark:text-yellow-400'; // Yellow
-    case 'PAGE_LOAD':
-    case 'PAGE_FLUSH':
-      return 'text-[#656d76] dark:text-[#6e7681]'; // Gray
-    case 'CACHE_HIT':
-      return 'text-emerald-600 dark:text-emerald-400'; // Green
-    case 'CACHE_MISS':
-      return 'text-orange-600 dark:text-orange-400'; // Orange
-    case 'EVICT_PAGE':
-      return 'text-rose-600 dark:text-rose-400'; // Rose
     default:
       return 'text-[#656d76] dark:text-[#6e7681]'; // Gray
   }
 };
 
-const formatStep = (step: ExecutionStep, index: number): string => {
-  const stepNum = String(index + 1).padStart(3, '0');
-  let message = `[${stepNum}] ${step.type}`;
+const formatStep = (step: VisualizationStep, index: number): string => {
+  const stepNum = String(step.step || index + 1).padStart(2, '0');
   
-  if (step.nodeId) {
-    message += ` → ${step.nodeId}`;
+  // New steps have explicit description field
+  if (step.description) {
+    return `[${stepNum}] ${step.description}`;
   }
   
-  if (step.pageId !== undefined) {
-    message += ` (Page #${step.pageId})`;
-  }
-  
-  if (step.lsn !== undefined) {
-    message += ` [LSN: ${step.lsn}]`;
-  }
-  
-  if (step.key) {
-    const keyStr = formatKey(step.key);
-    if (keyStr) {
-      message += ` | Key: ${keyStr}`;
-    }
-  }
-  
-  if (step.highlightKey) {
-    const keyStr = step.highlightKey.values.map(v => String(v.value)).join(', ');
-    message += ` | Highlight: ${keyStr}`;
-  }
-  
-  return message;
+  return `[${stepNum}] ${step.action}`;
 };
 
-export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, onDownload }) => {
+export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, onDownload, currentStep }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fullViewScrollContainerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -196,7 +166,20 @@ export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, on
         {logs.length === 0 ? (
           <div className="text-[#656d76] dark:text-gray-500 italic tracking-wider">Waiting for system events...</div>
         ) : (
-          logs.map(log => (
+          logs.map(log => {
+             // Filter steps if currentStep is provided
+             const visibleSteps = log.steps 
+                ? (currentStep !== undefined 
+                    ? log.steps.filter(s => (s.step || 0) <= currentStep)
+                    : log.steps)
+                : undefined;
+
+             // If log has steps but none are visible, and it's not a generic message, maybe we should hide it?
+             if (log.steps && log.steps.length > 0 && visibleSteps && visibleSteps.length === 0) {
+                 return null;
+             }
+
+             return (
             <div key={log.id} className="space-y-0.5">
               {/* Main log message */}
               <div className="flex gap-2 items-start">
@@ -212,12 +195,12 @@ export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, on
               </div>
               
               {/* Execution steps */}
-              {log.steps && log.steps.length > 0 && (
+              {visibleSteps && visibleSteps.length > 0 && (
                 <div className="ml-8 space-y-0.5">
-                  {log.steps.map((step, idx) => (
+                  {visibleSteps.map((step, idx) => (
                     <div 
                       key={idx} 
-                      className={`${getStepColor(step.type)} font-mono text-[10px]`}
+                      className={`${getStepColor(step.action)} font-mono text-[10px]`}
                     >
                       {formatStep(step, idx)}
                     </div>
@@ -225,7 +208,8 @@ export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, on
                 </div>
               )}
             </div>
-          ))
+          );
+          })
         )}
         <div className="mt-1 flex items-center gap-1">
           <span className="text-emerald-600 dark:text-emerald-400 animate-pulse">_</span>

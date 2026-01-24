@@ -1,4 +1,4 @@
-import type { TreeStructure, Schema } from '@/types/database';
+import type { TreeStructure, Schema, VisualizationStep } from '@/types/database';
 
 export interface TreeCanvasProps {
   treeData: TreeStructure;
@@ -14,6 +14,18 @@ export interface TreeCanvasProps {
   currentStep?: number;
   onStepComplete?: () => void;
   animationSpeed?: number;
+  
+  // Playback control props
+  isPlaying?: boolean;
+  onPlayPause?: () => void;
+  onStepForward?: () => void;
+  onStepBack?: () => void;
+  playbackSpeed?: number;
+  onPlaybackSpeedChange?: (speed: number) => void;
+  
+  // Active step for highlighting
+  activeStep?: VisualizationStep;
+  hasPendingOperation?: boolean;
 }
 
 export interface NodePosition {
