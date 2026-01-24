@@ -105,10 +105,16 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                      ...original, // Copy props like type
                      pageId: step.newPageId,
                      keys: step.rightKeys,
-                     children: [], // Children/values will need to be populated if data available
+                     children: step.rightChildren || [], // Use captured right children
                      values: []
                  };
                  hasChanges = true;
+                 
+                 // Update Left Node Children if available
+                 if (step.leftChildren && newNodes[targetId]) {
+                     ensureMutable(targetId);
+                     newNodes[targetId].children = step.leftChildren;
+                 }
                  
                  // 3. Link to Parent (Structural Link)
                  // If we have parentId, insert into parent's children list
@@ -123,7 +129,38 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                              newChildren.splice(idx + 1, 0, step.newPageId);
                              parent.children = newChildren;
                          }
+                         
+                         // Mark this edge as pending (don't draw yet) until INSERT_INTERNAL
+                         // We attach a temporary property to the node (casting to any to avoid type errors in TS for ephemeral props)
+                         const parentAny = parent as any;
+                         if (!parentAny.pendingChildren) parentAny.pendingChildren = [];
+                         parentAny.pendingChildren.push(step.newPageId);
                      }
+                 } else if (step.pageId === rootPage) {
+                      // Handle Root Split (No Parent yet): Create transient ghost root to hold both halves
+                      // This ensures the Right Node (orphan) is visible and connected during the split animation
+                      const ghostRootId = -9999;
+                      newNodes[ghostRootId] = {
+                           pageId: ghostRootId,
+                           type: 'internal',
+                           keys: [], // Empty (visual only container)
+                           children: [step.pageId, step.newPageId],
+                           values: []
+                      };
+                      
+                      // Also mark pending for Ghost Root if desired? 
+                      // User said "only after insert into internal complete". 
+                      // For Root Split, the "complete" is CREATE_ROOT which replaces this entire node.
+                      // So we can arguably leave it visible or hide it. 
+                      // Given user intent: "new node don't have EDGE connect... only when parent finished".
+                      // Ghost Root IS the parent here (albeit temporary). 
+                      // Let's hide it too for consistency.
+                      const ghostAny = newNodes[ghostRootId] as any;
+                      ghostAny.pendingChildren = [step.newPageId];
+                      
+                      rootPage = ghostRootId;
+                      height++;
+                      hasChanges = true;
                  }
              }
          }
@@ -137,6 +174,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                      keys: step.keys || [],
                      children: step.children
                  };
+                 // No pendingChildren on new root (fresh start)
                  rootPage = step.pageId;
                  height++;
                  hasChanges = true;
@@ -149,6 +187,15 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
                  ensureMutable(targetId);
                  newNodes[targetId].keys = step.newKeys;
                  hasChanges = true;
+                 
+                 // If INSERT_INTERNAL, this implies the key insertion logic is done.
+                 // We should finalize/commit any pending children edges on this node.
+                 if (step.action === 'INSERT_INTERNAL') {
+                     const nodeAny = newNodes[targetId] as any;
+                     if (nodeAny.pendingChildren) {
+                         delete nodeAny.pendingChildren; // Clear pending status, edges will now draw
+                     }
+                 }
              }
              // NOTE: INSERT_INTERNAL usually implies adding a child pointer too. 
              // Visualization of keys is enough for most cases, but strict layout might need child count match.

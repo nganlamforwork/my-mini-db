@@ -151,6 +151,8 @@ export interface SplitNodeStep extends CommonStepBase {
   splitKey: CompositeKey;
   leftKeys: CompositeKey[];
   rightKeys: CompositeKey[];
+  leftChildren?: number[]; // Added for Internal Split
+  rightChildren?: number[]; // Added for Internal Split
   promoteKey: CompositeKey;
 }
 

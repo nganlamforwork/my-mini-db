@@ -145,8 +145,15 @@ export const useTreeRenderer = ({
         const parentX = parentPos.x;
         const parentY = parentPos.y;
         
-        // Get parent node data to calculate key positions
+        // Check for SPLIT_NODE suppression: Hide edge for the new split node
+        // OLD: if (activeStep && activeStep.action === 'SPLIT_NODE' && 'newPageId' in activeStep) ...
+        // NEW: Check if this child is marked as "pending" in the parent node (via TreeCanvas logic)
         const parentNodeData = treeData.nodes[node.parentId.toString()];
+        const parentAny = parentNodeData as any;
+        if (parentAny && parentAny.pendingChildren && parentAny.pendingChildren.includes(node.id)) {
+            return; // Edge is pending, do not draw yet
+        }
+
         if (!parentNodeData || parentNodeData.type !== 'internal') {
           // Fallback for non-internal or missing parent - use current visual positions
           ctx.beginPath();
@@ -257,7 +264,7 @@ export const useTreeRenderer = ({
         let shakeOffsetY = 0; // New Y-axis shake
         let shakeAngle = 0; // Rotation for error
 
-        if (activeStep && activeStep.pageId === pos.id) {
+        if (activeStep && (activeStep.pageId === pos.id || (activeStep.action === 'SPLIT_NODE' && activeStep.newPageId === pos.id))) {
           isActive = true;
           const timeSinceStart = Date.now() - startTime;
           // ADAPTIVE TIMING LOGIC
@@ -271,10 +278,15 @@ export const useTreeRenderer = ({
           } else if ('keyValues' in activeStep && activeStep.keyValues) {
               // COMPARE_RANGE uses keyValues
               currentKeys = activeStep.keyValues;
-          } else if ('leftKeys' in activeStep && activeStep.leftKeys && 'rightKeys' in activeStep && activeStep.rightKeys) {
-              // For SPLIT_NODE, the current node is the LEFT node.
-              // The RIGHT node is handled by the visual tree patching in TreeCanvas.
-              currentKeys = activeStep.leftKeys; // WAS: [...activeStep.leftKeys, ...activeStep.rightKeys];
+          } else if (activeStep.action === 'SPLIT_NODE' && activeStep.leftKeys && activeStep.rightKeys) {
+              // Handle Split logic:
+              // If this is the Left Node (original pageId), show leftKeys
+              // If this is the Right Node (newPageId), show rightKeys
+              if (pos.id === activeStep.pageId) {
+                  currentKeys = activeStep.leftKeys;
+              } else if (pos.id === activeStep.newPageId) {
+                  currentKeys = activeStep.rightKeys;
+              }
           }
 
           const numKeys = currentKeys?.length || 0;
@@ -306,9 +318,9 @@ export const useTreeRenderer = ({
                  const childIdx = activeStep.selectedChildIndex;
                  const limit = childIdx - 1;
                  
-                 if (limit < 0 && numKeys > 0) {
-                     amberKeyIndices.add(0);
-                 } else if (limit >= 0) {
+                 // Only highlight "passed" keys (previous ones). 
+                 // If limit < 0 (first child), we highlight nothing inside the node, just the node itself.
+                 if (limit >= 0) {
                      const maxToShow = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), limit);
                      for (let i = 0; i <= maxToShow; i++) {
                          activeKeyIndices.add(i);
@@ -364,14 +376,13 @@ export const useTreeRenderer = ({
                 }
               } else {
                  // Scan until target (finding position or not found)
-                 // Limit scan to targetIdx
-                 const limit = targetIdx === -1 ? numKeys - 1 : Math.min(targetIdx, numKeys - 1);
+                 // Limit scan to targetIdx - 1 (only highlight PASSED keys, not the one we stop at)
+                 let limit = targetIdx === -1 ? numKeys - 1 : targetIdx - 1;
+                 // Clamp limit (if target is 0, limit is -1, highlight nothing)
+                 limit = Math.min(limit, numKeys - 1);
                  
                  const currentIndex = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), limit);
-                 if (currentIndex >= 0 && currentIndex <= limit) {
-                     // If finding position (insert), we might scan PAST the last key if inserting at end?
-                     // No, finding pos usually stops at first key > searchKey.
-                     // Just highlight up to currentIndex.
+                 if (currentIndex >= 0 && limit >= 0) { // Check limit >= 0
                      for (let k=0; k<=currentIndex; k++) {
                          activeKeyIndices.add(k);
                      }
@@ -413,9 +424,9 @@ export const useTreeRenderer = ({
                break;
 
             case 'SPLIT_NODE':
-               // Purple highlight for split
-               activeNodeFill = isDark ? '#581c87' : '#f3e8ff'; // Purple
-               activeStroke = isDark ? '#a855f7' : '#9333ea';
+               // Blue highlight for split
+               activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; // Blue
+               activeStroke = isDark ? '#3b82f6' : '#2563eb';
                break;
                
             case 'CHECK_OVERFLOW': 

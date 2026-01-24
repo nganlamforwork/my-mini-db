@@ -284,6 +284,9 @@ export function insert(treeName: string, key: CompositeKey, value: DBRecord): Op
          splitKey: splitKey,
          leftKeys: JSON.parse(JSON.stringify(leftKeys)),
          rightKeys: JSON.parse(JSON.stringify(rightKeys)),
+         // Snapshot the specific slices for left/right children (arrays of numbers)
+         leftChildren: currentNode.children ? [...currentNode.children.slice(0, mid + 1)] : undefined,
+         rightChildren: newRightNode.children ? [...newRightNode.children] : undefined,
          promoteKey: splitKey,
          description: `Split Page ${currentNodeId} -> Left: [${leftStr}], Right: [${rightStr}] -> ${isLeaf ? 'Copy' : 'Move'} ${promoteStr} up`
      });
