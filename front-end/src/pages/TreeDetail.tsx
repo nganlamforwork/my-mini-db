@@ -128,74 +128,91 @@ export function TreeDetail() {
     return lastLog.steps?.length || 0;
   };
 
+  // Ref to prevent double-firing of finalization
+  const isFinalizingRef = useRef(false);
+
   // Finalize the operation after visualization completes
   const finishPendingOperation = async () => {
-    if (!pendingOperation) return;
+    if (!pendingOperation || isFinalizingRef.current) return;
+    isFinalizingRef.current = true;
 
     const { response, operation, startTime } = pendingOperation;
+    // Clear pending operation immediately
+    setPendingOperation(null);
+
     const executionTime = startTime ? Date.now() - startTime : undefined;
-
-    // Finalize logs/results immediately so user sees success
-    if (
-      operation === "INSERT" ||
-      operation === "UPDATE" ||
-      operation === "DELETE"
-    ) {
-      const keyStr = formatKeyForMessage(response.key);
-      setQueryResult({
-        operation: operation as "INSERT" | "UPDATE" | "DELETE",
-        success: true,
-        message: `${operation === "INSERT" ? "Key" : operation === "UPDATE" ? "Key" : "Key"} ${keyStr} ${operation === "INSERT" ? "inserted" : operation === "UPDATE" ? "updated" : "deleted"} successfully.`,
-        executionTime,
-        key: response.key,
-        value: response.value,
-        timestamp: new Date(),
-      });
-    } else if (operation === "SEARCH") {
-      if (response.value) {
-        setQueryResult({
-          operation: "SEARCH",
-          success: true,
-          message: `Search completed. Found 1 record.`,
-          executionTime,
-          key: response.key,
-          value: response.value,
-          timestamp: new Date(),
-        });
-      } else {
-        const keyStr = formatKeyForMessage(response.key);
-        setQueryResult({
-          operation: "SEARCH",
-          success: true,
-          message: `Search completed. Key ${keyStr} not found.`,
-          executionTime,
-          key: response.key,
-          timestamp: new Date(),
-        });
-      }
-    } else if (operation === "RANGE_QUERY") {
-      const count = response.keys?.length || 0;
-      setQueryResult({
-        operation: "RANGE_QUERY",
-        success: true,
-        message: `Range query completed. Found ${count} record(s).`,
-        executionTime,
-        keys: response.keys,
-        values: response.values,
-        timestamp: new Date(),
-      });
-    }
     
-    toast.success(`${operation} visualization complete. Tree updated.`);
+    let isSuccess = response.success;
+    let message = "Operation completed.";
+    
+    // Helper to format value
+    const formatValue = (v: any) => {
+      if (!v) return "null";
+      // Handle various structures (Key object with values, or Row object with columns)
+      const parts = v.values || v.columns;
+      if (Array.isArray(parts)) {
+        const joined = parts.map((p: any) => p.value).join(", ");
+        return `(${joined})`;
+      }
+      return JSON.stringify(v);
+    };
 
-    // Delay highlight removal to let user see the final state for 3s
+    // Determine success/failure specifics for logging/results
+    if (operation === "SEARCH") {
+      if (response.value) {
+        isSuccess = true;
+        message = `Search completed. Found value: ${formatValue(response.value)}.`;
+      } else {
+        // Search "failed" to find key
+        isSuccess = false; 
+        message = `Search completed. Key not found.`;
+      }
+    } else if (operation === "INSERT") {
+       if (isSuccess) message = `Key inserted successfully.`;
+       else message = `Insert failed: ${response.error || "Unknown error"}`;
+    } else {
+       if (isSuccess) message = `${operation} completed successfully.`;
+       else message = `${operation} failed: ${response.error || "Unknown error"}`;
+    }
+
+    // Set query result
+    setQueryResult({
+      operation: operation as any,
+      success: isSuccess,
+      message: message,
+      executionTime,
+      key: response.key,
+      value: response.values || response.value,
+      timestamp: new Date(),
+      error: !isSuccess ? (response.error || "Not found") : undefined
+    });
+
+    // Add Completion Log
+    addLog(
+       message,
+       isSuccess ? "success" : "error",
+       [], 
+       operation as LogEntry["operation"]
+    );
+    
+    if (isSuccess) {
+        toast.success(message);
+    } else {
+        toast.error(message);
+    }
+
+    // Delay highlight removal and Tree Update to let user see the final state for 3s
     setTimeout(async () => {
        await loadTreeStructure();
-       setPendingOperation(null);
        // Set to a high number to show all logs but match no specific step (clearing highlights)
        setPlaybackStep(Number.MAX_SAFE_INTEGER);
+       isFinalizingRef.current = false; // Reset for safety, though handled on new op usually
     }, 3000);
   };
+  
+ // ... (rest of file) ...
+ 
+
 
   const addLog = (
     message: string,
@@ -347,7 +364,9 @@ export function TreeDetail() {
   ) => {
     const executionTime = startTime ? Date.now() - startTime : undefined;
 
-    if (response.success) {
+    // If we have visualization steps, we enter "Pending/Visualizing" mode generally
+    // regardless of whether the logical operation "succeeded" (e.g. Search Found) or "failed" (e.g. Not Found).
+    if (response.steps && response.steps.length > 0) {
       // Store pending operation to finalize later (after visualization)
       setPendingOperation({
         response,
@@ -359,39 +378,43 @@ export function TreeDetail() {
       addLog(
         `${operation} operation started - Click Start to visualize`,
         "info",
-        response.steps, // Pass steps to initialize visualizer
+        response.steps, 
         operation as LogEntry["operation"],
       );
       
-      // We do NOT loadTreeStructure() here. 
-      // The user sees the old tree until the animation finishes.
-
-      // We do NOT setQueryResult() here yet? 
-      // User said "save operation and updated tree" when reaching last step.
-      // But query result panel might be useful to see "what will happen"?
-      // Actually, standard behavior is to show result. 
-      // But let's defer everything that "commits" the change.
+      // We wait for user to click play. 
+      // The "Play" button will pulse because pendingOperation is set.
       
     } else {
-      // Operation failed - show immediately
-      addLog(
-        `${operation} operation failed: ${response.error || "Unknown error"}`,
-        "error",
-        response.steps || [],
-        operation as LogEntry["operation"],
-      );
-
+      // No visualization steps (e.g. pure error, or instant op). Handle immediately.
+      if (response.success) {
+        await loadTreeStructure();
+        addLog(
+          `${operation} operation completed successfully`,
+          "success",
+          [], 
+          operation as LogEntry["operation"],
+        );
+        // ... (We could duplicate the SetQueryResult logic here for instant ops, but usually we have steps)
+         toast.success("Operation completed");
+      } else {
+        // Operation failed without steps
+        addLog(
+          `${operation} operation failed: ${response.error || "Unknown error"}`,
+          "error",
+          [],
+          operation as LogEntry["operation"],
+        );
+        toast.error(response.error || "Operation failed");
+      }
+      
+      // Set generic query result for immediate non-visual ops
       setQueryResult({
-        operation: operation as
-          | "INSERT"
-          | "UPDATE"
-          | "DELETE"
-          | "SEARCH"
-          | "RANGE_QUERY",
-        success: false,
-        message: `${operation} operation failed.`,
+        operation: operation as any,
+        success: response.success,
+        message: response.success ? "Operation completed" : (response.error || "Failed"),
         executionTime,
-        error: response.error || "Unknown error",
+        error: response.error,
         timestamp: new Date(),
       });
     }
@@ -518,7 +541,7 @@ export function TreeDetail() {
   // onStepForward/Back removed as per request
 
   return (
-    <div className="flex flex-col min-h-screen">
+    <div className="flex flex-col h-screen overflow-hidden">
       {/* Simple Header */}
       <header className="border-b px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -623,7 +646,7 @@ export function TreeDetail() {
             {/* System Log */}
             <div className="flex-1 min-h-0 flex flex-col mt-2">
               <CollapsibleSection title="System Log" defaultOpen={true}>
-                <div className="flex-1 min-h-0">
+                <div className="flex-1 min-h-0 flex flex-col">
                   <SystemLog
                     logs={displayLogs}
                     fullView={false}

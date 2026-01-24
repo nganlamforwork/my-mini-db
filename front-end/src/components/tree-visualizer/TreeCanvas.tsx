@@ -84,6 +84,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     hoveredKeyRef,
 
     activeStep, // Pass activeStep to renderer
+    playbackSpeed: playbackSpeed || 1, // Pass playbackSpeed for adaptive timing
   });
 
   // 4. Handle Export

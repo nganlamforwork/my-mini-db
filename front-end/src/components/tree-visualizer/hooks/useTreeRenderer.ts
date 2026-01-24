@@ -20,6 +20,7 @@ interface UseTreeRendererProps {
   hoveredNodeRef: React.MutableRefObject<number | null>;
   hoveredKeyRef: React.MutableRefObject<number | null>;
   activeStep?: VisualizationStep;
+  playbackSpeed: number; // Add playbackSpeed prop
 }
 
 export const useTreeRenderer = ({
@@ -34,7 +35,8 @@ export const useTreeRenderer = ({
   tooltipPosition,
   hoveredNodeRef,
   hoveredKeyRef,
-  activeStep
+  activeStep,
+  playbackSpeed = 1
 }: UseTreeRendererProps) => {
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -233,8 +235,13 @@ export const useTreeRenderer = ({
 
       // Draw Nodes
       positionsRef.current.forEach(pos => {
+        ctx.save(); // Save context state for each node (handles transforms etc)
+        
         const nodeData = treeData.nodes[pos.id.toString()];
-        if (!nodeData) return;
+        if (!nodeData) {
+            ctx.restore();
+            return;
+        }
 
         const isLeaf = nodeData.type === 'leaf';
         
@@ -259,11 +266,32 @@ export const useTreeRenderer = ({
         const activeKeyIndices = new Set<number>();
         const amberKeyIndices = new Set<number>(); // New: For "First Child" comparison check
         let foundKeyIndex = -1; // Specific index for exact match (Green)
+        let shakeOffset = 0; 
+        let shakeOffsetY = 0; // New Y-axis shake
+        let shakeAngle = 0; // Rotation for error
 
         if (activeStep && activeStep.pageId === pos.id) {
           isActive = true;
           const timeSinceStart = Date.now() - startTime;
-          const KEY_SCAN_DURATION = 600; // ms per key
+          // ADAPTIVE TIMING LOGIC
+          // ADAPTIVE TIMING LOGIC
+          const stepDuration = 1000 / playbackSpeed;
+          const numKeys = nodeData.keys?.length || 0;
+          
+          // Guarantee significant time for the result state (Shake or Found)
+          // Reserve 50% of the step or 1000ms, whichever is smaller (but at least 500ms)
+          // Actually, we want to see the shake.. so let's reserve a good chunk.
+          // If slow speed (2000ms): Reserve 1000ms.
+          // If fast speed (500ms): Reserve 250ms.
+          const reserveResultTime = Math.max(stepDuration * 0.5, 500); 
+          const availableForScan = Math.max(stepDuration - reserveResultTime, 100);
+          
+          // Calculate duration per key
+          const adaptiveScanDuration = numKeys > 0 
+              ? Math.max(30, Math.min(300, availableForScan / numKeys))
+              : 300;
+
+          const KEY_SCAN_DURATION = adaptiveScanDuration; 
 
           // Set highlight colors based on action
           switch (activeStep.action) {
@@ -280,22 +308,11 @@ export const useTreeRenderer = ({
               if ('selectedChildIndex' in activeStep && typeof activeStep.selectedChildIndex === 'number') {
                  const childIdx = activeStep.selectedChildIndex;
                  const numKeys = nodeData.keys?.length || 0;
-                 
-                 // If we selected childIdx, it means we passed keys 0 to childIdx-1 (inclusive)
-                 // because they were <= SearchKey.
-                 // Key[childIdx] was > SearchKey (or end of list), so we stopped before it.
-                 // Highlight only the keys we "accepted" as <= SearchKey.
                  const limit = childIdx - 1;
                  
-                 // SPECIAL CASE: If going to first child (index 0), we compared with Key 0 
-                 // and found SearchKey < Key[0]. 
-                 // We highlight Key 0 in AMBER to show we checked it but rejected it.
                  if (limit < 0 && numKeys > 0) {
                      amberKeyIndices.add(0);
                  } else if (limit >= 0) {
-                     // We want to animate from 0 to limit.
-                     // The max index we can show right now is 'currentIndex'.
-                     // But strictly up to 'limit'.
                      const maxToShow = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), limit);
                      for (let i = 0; i <= maxToShow; i++) {
                          activeKeyIndices.add(i);
@@ -305,8 +322,7 @@ export const useTreeRenderer = ({
               break;
 
             case 'SCAN_KEYS': 
-              activeNodeFill = isDark ? '#134e4a' : '#ccfbf1'; // teal base (or maybe blue per request?)
-              // User said "traverse key -> blue", "founded key -> green".
+              activeNodeFill = isDark ? '#134e4a' : '#ccfbf1'; // teal base
               
               activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
               activeStroke = isDark ? '#3b82f6' : '#2563eb';
@@ -322,41 +338,23 @@ export const useTreeRenderer = ({
                     if (currentIndex === foundIdx) {
                        foundKeyIndex = foundIdx; // Turns Green
                        
-                       // Fire confetti ONCE when we hit the key
-                       // To avoid infinite confetti in the render loop, we need a flag or check time
-                       // Actually, we can just fire it if timeSinceStart / Duration is roughly just reached.
-                       // Or better, checking if we just transitioned. 
-                       // Render loop runs 60fps.
-                       // We can use a ref to track if we fired for this step?
-                       // We don't have a stable step ID to reference easily without a specialized hook.
-                       
-                       // Simplification: Fire every frame? No.
-                       // Let's just calculate random chance? No.
-                       
-                       // How about: 
                        const justReached = Math.floor(timeSinceStart / KEY_SCAN_DURATION) === foundIdx;
                        const stepElapsed = timeSinceStart % KEY_SCAN_DURATION;
                        // Fire at the start of the key highlight (first 100ms)
                        if (justReached && stepElapsed < 50) {
-                           // Calculate screen coordinates
-                           // Canvas center = width/2, 100
-                           // Node position = pos.x, pos.y relative to canvas origin
-                           // Transform: (pos.x * zoom + centerX + cameraX), (pos.y * zoom + centerY + cameraY)
-                           
                            const centerX = width / 2;
                            const visualX = (pos.x * camera.zoom) + centerX + (camera.x * camera.zoom);
                            const visualY = (pos.y * camera.zoom) + 100 + (camera.y * camera.zoom);
                            
-                           // Normalize to 0-1 for confetti
                            const normX = visualX / window.innerWidth;
                            const normY = visualY / window.innerHeight;
                            
-                           if (Math.random() > 0.8) { // Throttle slightly
+                           if (Math.random() > 0.8) { 
                                confetti({
                                    particleCount: 5,
                                    spread: 30,
                                    origin: { x: normX, y: normY },
-                                   colors: ['#22c55e', '#3b82f6'], // Green and Blue
+                                   colors: ['#22c55e', '#3b82f6'], 
                                    disableForReducedMotion: true,
                                    zIndex: 9999
                                });
@@ -366,9 +364,26 @@ export const useTreeRenderer = ({
                   } else {
                      // Not found: scanned all
                      const numKeys = nodeData.keys?.length || 0;
+                     const finishTime = numKeys * KEY_SCAN_DURATION;
+                     const isFinished = timeSinceStart > finishTime;
+                     
                      const currentIndex = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), numKeys - 1);
                      if (currentIndex >= 0 && currentIndex < numKeys) {
-                         activeKeyIndices.add(currentIndex);
+                         for (let k=0; k<=currentIndex; k++) {
+                             activeKeyIndices.add(k);
+                         }
+                     }
+
+                     if (isFinished) {
+                         activeNodeFill = isDark ? '#7f1d1d' : '#fee2e2'; 
+                         activeStroke = isDark ? '#ef4444' : '#dc2626';
+                         
+                         // Increase shake amplitude
+                         const SHAKE_AMPLITUDE = 8;
+                         shakeOffset = 0; 
+                         shakeOffsetY = Math.sin(timeSinceStart / 30) * SHAKE_AMPLITUDE;
+                         
+                         shakeAngle = Math.cos(timeSinceStart / 30) * 0.05;
                      }
                   }
               }
@@ -404,6 +419,13 @@ export const useTreeRenderer = ({
         }
         
         // --- END OVERRIDES ---
+        
+        // Apply Shake/Rotate Transform
+        if (shakeOffset !== 0 || shakeOffsetY !== 0 || shakeAngle !== 0) {
+            ctx.translate(pos.x + shakeOffset, pos.y + shakeOffsetY);
+            ctx.rotate(shakeAngle);
+            ctx.translate(-pos.x, -pos.y);
+        }
 
         const nodeLeft = pos.x - rectW / 2;
         let currentKeyX = nodeLeft + padding;
@@ -573,6 +595,8 @@ export const useTreeRenderer = ({
         ctx.fillStyle = colors.textSecondary;
         ctx.font = '10px sans-serif';
         ctx.fillText(`P${pos.id}`, nodeLeft + 15, pos.y - rectH/2 - 8);
+        
+        ctx.restore(); // Restore context state
       });
       
       ctx.restore();
@@ -595,5 +619,5 @@ export const useTreeRenderer = ({
       cancelAnimationFrame(animationFrame);
       if (themeObserver) themeObserver.disconnect();
     };
-  }, [layout, camera, treeData, isEmptyTree, hoveredEdge, tooltipPosition, activeStep]); // Added activeStep dependency
+  }, [layout, camera, treeData, isEmptyTree, hoveredEdge, tooltipPosition, activeStep, playbackSpeed]); // Added activeStep, playbackSpeed dependency
 };

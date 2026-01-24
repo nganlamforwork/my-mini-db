@@ -141,11 +141,10 @@ export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, on
     };
   }, [isFullViewOpen]);
 
-  // Render log content (reusable)
   const LogContent = ({ containerRef, contentRef, isFullView }: { containerRef: React.RefObject<HTMLDivElement | null>, contentRef: React.RefObject<HTMLDivElement | null>, isFullView: boolean }) => (
     <div
       ref={containerRef}
-      className={`${isFullView ? 'h-full min-h-100' : 'flex-1'} bg-gray-50 dark:bg-[#0d1117] rounded-lg border border-gray-200 dark:border-gray-800 overflow-y-auto relative [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full dark:[&::-webkit-scrollbar-thumb]:bg-gray-700 hover:[&::-webkit-scrollbar-thumb]:bg-gray-400 dark:hover:[&::-webkit-scrollbar-thumb]:bg-gray-600`}
+      className={`${isFullView ? 'h-full' : 'flex-1 min-h-0'} bg-gray-50 dark:bg-[#0d1117] rounded-lg border border-gray-200 dark:border-gray-800 overflow-y-auto relative [&::-webkit-scrollbar]:w-2 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-gray-300 [&::-webkit-scrollbar-thumb]:rounded-full dark:[&::-webkit-scrollbar-thumb]:bg-gray-700 hover:[&::-webkit-scrollbar-thumb]:bg-gray-400 dark:hover:[&::-webkit-scrollbar-thumb]:bg-gray-600`}
       style={{
         scrollbarWidth: 'thin',
         scrollbarColor: '#cbd5e1 transparent',
@@ -220,7 +219,7 @@ export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, on
 
   return (
     <>
-      <div className={`${fullView ? 'h-full max-h-[80vh]' : 'h-full'} flex flex-col`}>
+      <div className={`${fullView ? 'h-full max-h-[80vh]' : 'flex-1 min-h-0'} flex flex-col`}>
         <LogContent containerRef={scrollContainerRef} contentRef={contentRef} isFullView={fullView} />
       </div>
 
