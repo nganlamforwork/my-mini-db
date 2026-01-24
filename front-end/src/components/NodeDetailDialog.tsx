@@ -8,18 +8,9 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Badge } from '@/components/ui/badge';
-import { Database, FileText, ArrowRight, ArrowLeft, Crown, Star, Info } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Database, FileText, ArrowRight, ArrowLeft, Crown } from 'lucide-react';
+import { formatKey } from '@/lib/keyUtils';
 
 interface NodeDetailDialogProps {
   node: TreeNode | null;
@@ -28,8 +19,6 @@ interface NodeDetailDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }
-
-import { formatKey } from '@/lib/keyUtils';
 
 // Helper to format a single column value for display (simplified, no quotes)
 const formatColumnValue = (value: any): string => {
@@ -45,53 +34,28 @@ const formatColumnValue = (value: any): string => {
   return String(value);
 };
 
-// Helper to check if a column is part of the primary key
-const isPrimaryKeyColumn = (columnName: string, schema: Schema | null | undefined): boolean => {
-  if (!schema || !schema.primaryKey) return false;
-  return schema.primaryKey.includes(columnName);
-};
-
-// Helper to parse Record to a row object mapping column names to values
-const parseRecordToRow = (record: { columns: Array<{ type: string; value: any }> }, schema: Schema | null | undefined): { [key: string]: any } => {
-  const row: { [key: string]: any } = {};
-  
-  if (!schema || !record.columns) {
-    return {};
+// Helper to format key values as (x) or (x, y, z)
+const formatKeyValues = (key: { values: Array<{ type: string; value: any }> }): string => {
+  if (!key || !key.values || key.values.length === 0) return '()';
+  const values = key.values.map(v => formatColumnValue(v.value));
+  if (values.length === 1) {
+    return `(${values[0]})`;
   }
-  
-  // Record.columns are in the same order as schema.columns
-  schema.columns.forEach((colDef, index) => {
-    if (record.columns[index]) {
-      row[colDef.name] = record.columns[index].value;
-    } else {
-      row[colDef.name] = null;
-    }
-  });
-  
-  return row;
+  return `(${values.join(', ')})`;
 };
 
-// Helper to extract key values as a row object (for display in table)
-const parseKeyToRow = (key: { values: Array<{ type: string; value: any }> }, schema: Schema | null | undefined): { [key: string]: any } => {
-  const row: { [key: string]: any } = {};
-  
-  if (!schema || !key.values) {
-    return {};
+// Helper to format record columns as (y) or (y, z, k)
+const formatRecordValues = (record: { columns: Array<{ type: string; value: any }> } | undefined): string => {
+  if (!record || !record.columns || record.columns.length === 0) return '()';
+  const values = record.columns.map(col => formatColumnValue(col.value));
+  if (values.length === 1) {
+    return `(${values[0]})`;
   }
-  
-  // Key values are in the order of schema.primaryKey
-  schema.primaryKey.forEach((pkColName, index) => {
-    if (key.values[index]) {
-      row[pkColName] = key.values[index].value;
-    } else {
-      row[pkColName] = null;
-    }
-  });
-  
-  return row;
+  return `(${values.join(', ')})`;
 };
 
-export const NodeDetailDialog: React.FC<NodeDetailDialogProps> = ({ node, schema, isRoot = false, open, onOpenChange }) => {
+
+export const NodeDetailDialog: React.FC<NodeDetailDialogProps> = ({ node, schema: _schema, isRoot = false, open, onOpenChange }) => {
   if (!node) return null;
 
   const isInternal = node.type === 'internal';
@@ -150,7 +114,7 @@ export const NodeDetailDialog: React.FC<NodeDetailDialogProps> = ({ node, schema
         <ScrollArea className="max-h-[calc(85vh-120px)] pr-4">
           <div className="space-y-6 mt-4">
 
-          {/* Leaf Node: Stored Records - Table Layout */}
+          {/* Leaf Node: Stored Records - Simple Format */}
           {!isInternal && node.values && (
             <div className="space-y-3">
               <h3 className="font-semibold text-sm uppercase text-muted-foreground flex items-center gap-2">
@@ -158,125 +122,24 @@ export const NodeDetailDialog: React.FC<NodeDetailDialogProps> = ({ node, schema
                 Stored Records ({node.keys.length})
               </h3>
               
-              {/* Primary Key Description Alert */}
-              {schema && schema.primaryKey && schema.primaryKey.length > 0 && (
-                <Alert variant="info">
-                  <Info size={16} />
-                  <AlertDescription className="text-sm flex items-center gap-2">
-                    Columns marked with <Star className="inline h-3 w-3 text-red-600 dark:text-red-400 fill-red-600 dark:fill-red-400" /> represent the Primary Key.
-                  </AlertDescription>
-                </Alert>
-              )}
-              
-              {schema && schema.columns && schema.columns.length > 0 ? (
-                // Schema-based table rendering using Shadcn Table components
-                <div className="overflow-x-auto border rounded-lg">
-                  <Table className="text-xs">
-                    <TableHeader className="bg-muted/50">
-                      <TableRow>
-                        {schema.columns.map((colDef) => {
-                          const isPK = isPrimaryKeyColumn(colDef.name, schema);
-                          return (
-                            <TableHead
-                              key={colDef.name}
-                              className={cn(
-                                "text-left px-3 py-2 h-auto",
-                                isPK ? "text-red-600 dark:text-red-400" : "text-muted-foreground"
-                              )}
-                            >
-                              <div className="flex items-center gap-1.5 text-left">
-                                {isPK && (
-                                  <Star 
-                                    size={12} 
-                                    className="text-red-600 dark:text-red-400 fill-red-600 dark:fill-red-400 flex-shrink-0" 
-                                  />
-                                )}
-                                <span className="text-left">{colDef.name}</span>
-                              </div>
-                            </TableHead>
-                          );
-                        })}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {node.keys.map((key, idx) => {
-                        const record = node.values?.[idx];
-                        if (!record) return null;
-                        
-                        const keyRow = parseKeyToRow(key, schema);
-                        const valueRow = parseRecordToRow(record, schema);
-                        // Merge key and value rows (key values take precedence for PK columns)
-                        const mergedRow = { ...valueRow, ...keyRow };
-                        
-                        return (
-                          <TableRow key={idx}>
-                            {schema.columns.map((colDef) => {
-                              const isPK = isPrimaryKeyColumn(colDef.name, schema);
-                              const cellValue = mergedRow[colDef.name];
-                              return (
-                                <TableCell
-                                  key={colDef.name}
-                                  className={cn(
-                                    "text-left px-3 py-1.5 font-mono",
-                                    isPK && "font-bold text-red-600 dark:text-red-400"
-                                  )}
-                                >
-                                  {formatColumnValue(cellValue)}
-                                </TableCell>
-                              );
-                            })}
-                          </TableRow>
-                        );
-                      })}
-                    </TableBody>
-                  </Table>
-                </div>
-              ) : (
-                // Fallback: Legacy card layout when schema is not available
-                <div className="space-y-3">
-                  {node.keys.map((key, idx) => {
-                    const record = node.values?.[idx];
-                    return (
-                      <div
-                        key={idx}
-                        className="bg-background border rounded-lg p-4 space-y-3"
-                      >
-                        {/* Key */}
-                        <div className="flex items-center gap-2 pb-2 border-b border-border">
-                          <span className="text-muted-foreground text-xs font-semibold">Key #{idx + 1}:</span>
-                          <span className="font-mono font-semibold text-sm">{formatKey(key)}</span>
-                          <div className="ml-auto text-xs text-muted-foreground">
-                            {key.values.map((val, vIdx) => (
-                              <span key={vIdx} className="ml-2">
-                                <span className="capitalize">{val.type}</span>
-                                <span className="mx-1">→</span>
-                                <span>{formatColumnValue(val)}</span>
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                        {/* Value */}
-                        {record && (
-                          <div className="space-y-2">
-                            <span className="text-muted-foreground text-xs font-semibold">Value:</span>
-                            <div className="grid grid-cols-1 gap-2 ml-4">
-                              {record.columns.map((col, colIdx) => (
-                                <div
-                                  key={colIdx}
-                                  className="flex items-start gap-3 text-sm"
-                                >
-                                  <span className="text-muted-foreground min-w-[60px] capitalize">{col.type}:</span>
-                                  <span className="font-mono">{formatColumnValue(col)}</span>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+              <div className="space-y-2">
+              {node.keys.map((key, idx) => {
+                const record = node.values?.[idx];
+                const keyStr = formatKeyValues(key);
+                const valueStr = formatRecordValues(record);
+                
+                return (
+                  <div
+                    key={idx}
+                    className="bg-background border rounded-lg p-3 font-mono text-sm hover:bg-muted/50 transition-colors"
+                  >
+                    <span className="text-foreground">{keyStr}</span>
+                    <span className="mx-2 text-muted-foreground">→</span>
+                    <span className="text-muted-foreground">{valueStr}</span>
+                  </div>
+                );
+              })}
+              </div>
             </div>
           )}
 

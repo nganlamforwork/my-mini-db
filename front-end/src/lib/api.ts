@@ -15,6 +15,8 @@ import {
   canCreateTree,
   getCurrentTreeName,
   setCurrentTreeName,
+  initWithRandomData,
+  DEFAULT_COUNT,
   type TreeStructure,
   type OperationResponse,
   type TreeMetadata
@@ -82,74 +84,32 @@ export const api = {
   },
 
   // Insert a key-value pair
-  async insert(treeName: string, key: CompositeKey, value: Record, enableSteps: boolean = false): Promise<OperationResponse> {
-    const result = insert(treeName, key, value);
-    if (enableSteps) {
-      // Add simple steps for visualization
-      result.steps = [
-        { step_id: 1, type: 'TRAVERSE_START', node_id: 'N1', depth: 0, key },
-        { step_id: 2, type: 'INSERT_ENTRY', node_id: 'N1', depth: 0, key, value },
-        { step_id: 3, type: 'OPERATION_COMPLETE', node_id: 'N1', depth: 0 }
-      ];
-    }
-    return result;
+  async insert(treeName: string, key: CompositeKey, value: Record): Promise<OperationResponse> {
+    return insert(treeName, key, value);
   },
 
   // Update a key-value pair
-  async update(treeName: string, key: CompositeKey, value: Record, enableSteps: boolean = false): Promise<OperationResponse> {
-    const result = update(treeName, key, value);
-    if (enableSteps) {
-      result.steps = [
-        { step_id: 1, type: 'TRAVERSE_START', node_id: 'N1', depth: 0, key },
-        { step_id: 2, type: 'UPDATE_ENTRY', node_id: 'N1', depth: 0, key, value },
-        { step_id: 3, type: 'OPERATION_COMPLETE', node_id: 'N1', depth: 0 }
-      ];
-    }
-    return result;
+  async update(treeName: string, key: CompositeKey, value: Record): Promise<OperationResponse> {
+    return update(treeName, key, value);
   },
 
   // Delete a key-value pair
-  async delete(treeName: string, key: CompositeKey, enableSteps: boolean = false): Promise<OperationResponse> {
-    const result = deleteKey(treeName, key);
-    if (enableSteps) {
-      result.steps = [
-        { step_id: 1, type: 'TRAVERSE_START', node_id: 'N1', depth: 0, key },
-        { step_id: 2, type: 'DELETE_ENTRY', node_id: 'N1', depth: 0, key },
-        { step_id: 3, type: 'OPERATION_COMPLETE', node_id: 'N1', depth: 0 }
-      ];
-    }
-    return result;
+  async delete(treeName: string, key: CompositeKey): Promise<OperationResponse> {
+    return deleteKey(treeName, key);
   },
 
   // Search for a key
-  async search(treeName: string, key: CompositeKey, enableSteps: boolean = false): Promise<OperationResponse> {
-    const result = search(treeName, key);
-    if (enableSteps) {
-      result.steps = [
-        { step_id: 1, type: 'TRAVERSE_START', node_id: 'N1', depth: 0, key },
-        { step_id: 2, type: result.success ? 'SEARCH_FOUND' : 'SEARCH_NOT_FOUND', node_id: 'N1', depth: 0, key },
-        { step_id: 3, type: 'OPERATION_COMPLETE', node_id: 'N1', depth: 0 }
-      ];
-    }
-    return result;
+  async search(treeName: string, key: CompositeKey): Promise<OperationResponse> {
+    return search(treeName, key);
   },
 
   // Range query
   async rangeQuery(
     treeName: string,
     startKey: CompositeKey,
-    endKey: CompositeKey,
-    enableSteps: boolean = false
+    endKey: CompositeKey
   ): Promise<OperationResponse> {
-    const result = rangeQuery(treeName, startKey, endKey);
-    if (enableSteps) {
-      result.steps = [
-        { step_id: 1, type: 'TRAVERSE_START', node_id: 'N1', depth: 0, key: startKey },
-        { step_id: 2, type: 'RANGE_SCAN', node_id: 'N1', depth: 0 },
-        { step_id: 3, type: 'OPERATION_COMPLETE', node_id: 'N1', depth: 0 }
-      ];
-    }
-    return result;
+    return rangeQuery(treeName, startKey, endKey);
   },
 
   // Clear tree
@@ -161,5 +121,10 @@ export const api = {
   // Initialize tree
   initTree(treeName: string) {
     return initTree(treeName);
-  }
+  },
+
+  // Reset tree and fill with random int keys (for demo / init)
+  initWithRandomData(treeName: string, count: number = DEFAULT_COUNT): OperationResponse {
+    return initWithRandomData(treeName, count);
+  },
 };
