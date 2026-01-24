@@ -25,6 +25,7 @@ export interface TreeCanvasProps {
   
   // Active step for highlighting
   activeStep?: VisualizationStep;
+  steps?: VisualizationStep[]; // Full list of steps for replay
   hasPendingOperation?: boolean;
 }
 

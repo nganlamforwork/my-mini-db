@@ -244,21 +244,8 @@ export const useTreeRenderer = ({
         }
 
         const isLeaf = nodeData.type === 'leaf';
-        
-        ctx.font = 'bold 14px "JetBrains Mono", monospace';
-        const keyTexts = formatNodeDataForGraph(nodeData.keys);
-        
-        const keyWidths = keyTexts.map(keyText => Math.max(60, ctx.measureText(keyText).width + 20));
-        const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
-        const rectW = Math.max(100, totalKeyWidth);
-        const rectH = 50;
-        const padding = (rectW - totalKeyWidth) / 2;
+        let currentKeys = nodeData.keys; // Default to treeData keys
 
-        ctx.globalAlpha = pos.alpha;
-        
-        const isHovered = hoveredNodeRef.current === pos.id;
-        const isRoot = pos.id === treeData.rootPage;
-        
         // --- VISUALIZATION OVERRIDES ---
         let isActive = false;
         let activeNodeFill = '';
@@ -274,15 +261,25 @@ export const useTreeRenderer = ({
           isActive = true;
           const timeSinceStart = Date.now() - startTime;
           // ADAPTIVE TIMING LOGIC
-          // ADAPTIVE TIMING LOGIC
           const stepDuration = 1000 / playbackSpeed;
-          const numKeys = nodeData.keys?.length || 0;
+          
+          // Override keys if step provides them (for Insert/Split visualization on stale tree)
+          if ('newKeys' in activeStep && activeStep.newKeys) {
+              currentKeys = activeStep.newKeys;
+          } else if ('keys' in activeStep && activeStep.keys) {
+              currentKeys = activeStep.keys;
+          } else if ('keyValues' in activeStep && activeStep.keyValues) {
+              // COMPARE_RANGE uses keyValues
+              currentKeys = activeStep.keyValues;
+          } else if ('leftKeys' in activeStep && activeStep.leftKeys && 'rightKeys' in activeStep && activeStep.rightKeys) {
+              // For SPLIT_NODE, the current node is the LEFT node.
+              // The RIGHT node is handled by the visual tree patching in TreeCanvas.
+              currentKeys = activeStep.leftKeys; // WAS: [...activeStep.leftKeys, ...activeStep.rightKeys];
+          }
+
+          const numKeys = currentKeys?.length || 0;
           
           // Guarantee significant time for the result state (Shake or Found)
-          // Reserve 50% of the step or 1000ms, whichever is smaller (but at least 500ms)
-          // Actually, we want to see the shake.. so let's reserve a good chunk.
-          // If slow speed (2000ms): Reserve 1000ms.
-          // If fast speed (500ms): Reserve 250ms.
           const reserveResultTime = Math.max(stepDuration * 0.5, 500); 
           const availableForScan = Math.max(stepDuration - reserveResultTime, 100);
           
@@ -307,7 +304,6 @@ export const useTreeRenderer = ({
               
               if ('selectedChildIndex' in activeStep && typeof activeStep.selectedChildIndex === 'number') {
                  const childIdx = activeStep.selectedChildIndex;
-                 const numKeys = nodeData.keys?.length || 0;
                  const limit = childIdx - 1;
                  
                  if (limit < 0 && numKeys > 0) {
@@ -322,88 +318,106 @@ export const useTreeRenderer = ({
               break;
 
             case 'SCAN_KEYS': 
-              activeNodeFill = isDark ? '#134e4a' : '#ccfbf1'; // teal base
-              
+            case 'FIND_POS': // FIND_POS behaves similar to SCAN_KEYS for visualization
               activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
               activeStroke = isDark ? '#3b82f6' : '#2563eb';
               
-              if ('foundAtIndex' in activeStep && typeof activeStep.foundAtIndex === 'number') {
-                  const foundIdx = activeStep.foundAtIndex;
-                  if (foundIdx !== -1) {
-                    // Start 0 -> foundIdx
-                    const currentIndex = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), foundIdx);
-                    activeKeyIndices.add(currentIndex);
-                    
-                    // If we reached the target and it is found
-                    if (currentIndex === foundIdx) {
-                       foundKeyIndex = foundIdx; // Turns Green
-                       
-                       const justReached = Math.floor(timeSinceStart / KEY_SCAN_DURATION) === foundIdx;
-                       const stepElapsed = timeSinceStart % KEY_SCAN_DURATION;
-                       // Fire at the start of the key highlight (first 100ms)
-                       if (justReached && stepElapsed < 50) {
-                           const centerX = width / 2;
-                           const visualX = (pos.x * camera.zoom) + centerX + (camera.x * camera.zoom);
-                           const visualY = (pos.y * camera.zoom) + 100 + (camera.y * camera.zoom);
-                           
-                           const normX = visualX / window.innerWidth;
-                           const normY = visualY / window.innerHeight;
-                           
-                           if (Math.random() > 0.8) { 
-                               confetti({
-                                   particleCount: 5,
-                                   spread: 30,
-                                   origin: { x: normX, y: normY },
-                                   colors: ['#22c55e', '#3b82f6'], 
-                                   disableForReducedMotion: true,
-                                   zIndex: 9999
-                               });
-                           }
-                       }
-                    }
-                  } else {
-                     // Not found: scanned all
-                     const numKeys = nodeData.keys?.length || 0;
-                     const finishTime = numKeys * KEY_SCAN_DURATION;
-                     const isFinished = timeSinceStart > finishTime;
-                     
-                     const currentIndex = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), numKeys - 1);
-                     if (currentIndex >= 0 && currentIndex < numKeys) {
-                         for (let k=0; k<=currentIndex; k++) {
-                             activeKeyIndices.add(k);
-                         }
-                     }
+              // Helper vars
+              let targetIdx = -1;
+              let foundIdx = -1;
 
-                     if (isFinished) {
-                         activeNodeFill = isDark ? '#7f1d1d' : '#fee2e2'; 
-                         activeStroke = isDark ? '#ef4444' : '#dc2626';
-                         
-                         // Increase shake amplitude
-                         const SHAKE_AMPLITUDE = 8;
-                         shakeOffset = 0; 
-                         shakeOffsetY = Math.sin(timeSinceStart / 30) * SHAKE_AMPLITUDE;
-                         
-                         shakeAngle = Math.cos(timeSinceStart / 30) * 0.05;
-                     }
-                  }
+              if (activeStep.action === 'SCAN_KEYS' && 'foundAtIndex' in activeStep) {
+                 foundIdx = activeStep.foundAtIndex ?? -1;
+                 targetIdx = foundIdx; // Stop at found
+              } else if (activeStep.action === 'FIND_POS') {
+                 targetIdx = activeStep.targetIndex;
+                 // If FIND_POS has 'foundAtIndex' (duplicate), mark it
+                 if ('foundAtIndex' in activeStep && typeof activeStep.foundAtIndex === 'number' && activeStep.foundAtIndex !== -1) {
+                    foundIdx = activeStep.foundAtIndex;
+                    targetIdx = foundIdx;
+                 }
               }
-              break;
 
-            case 'FIND_POS': 
-              activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
-              activeStroke = isDark ? '#3b82f6' : '#2563eb'; 
-              if ('targetIndex' in activeStep && typeof activeStep.targetIndex === 'number') {
-                 const target = activeStep.targetIndex;
-                 const numKeys = nodeData.keys?.length || 0;
-                 const limit = Math.min(target, numKeys - 1);
+              if (foundIdx !== -1) {
+                // Key FOUND (Green)
+                const currentIndex = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), foundIdx);
+                activeKeyIndices.add(currentIndex);
+                
+                if (currentIndex === foundIdx) {
+                   foundKeyIndex = foundIdx; // Turns Green
+                   
+                   const justReached = Math.floor(timeSinceStart / KEY_SCAN_DURATION) === foundIdx;
+                   const stepElapsed = timeSinceStart % KEY_SCAN_DURATION;
+                   if (justReached && stepElapsed < 50) {
+                        const centerX = width / 2;
+                        const visualX = (pos.x * camera.zoom) + centerX + (camera.x * camera.zoom);
+                        const visualY = (pos.y * camera.zoom) + 100 + (camera.y * camera.zoom);
+                        const normX = visualX / window.innerWidth;
+                        const normY = visualY / window.innerHeight;
+                        if (Math.random() > 0.8) { 
+                            confetti({
+                                particleCount: 5, spread: 30, origin: { x: normX, y: normY },
+                                colors: ['#22c55e', '#3b82f6'], disableForReducedMotion: true, zIndex: 9999
+                            });
+                        }
+                   }
+                }
+              } else {
+                 // Scan until target (finding position or not found)
+                 // Limit scan to targetIdx
+                 const limit = targetIdx === -1 ? numKeys - 1 : Math.min(targetIdx, numKeys - 1);
                  
                  const currentIndex = Math.min(Math.floor(timeSinceStart / KEY_SCAN_DURATION), limit);
                  if (currentIndex >= 0 && currentIndex <= limit) {
-                     activeKeyIndices.add(currentIndex);
+                     // If finding position (insert), we might scan PAST the last key if inserting at end?
+                     // No, finding pos usually stops at first key > searchKey.
+                     // Just highlight up to currentIndex.
+                     for (let k=0; k<=currentIndex; k++) {
+                         activeKeyIndices.add(k);
+                     }
+                 }
+                 
+                 // If we failed to find (SCAN_KEYS) and completed scan
+                 if (activeStep.action === 'SCAN_KEYS' && foundIdx === -1) {
+                      const finishTime = numKeys * KEY_SCAN_DURATION;
+                      if (timeSinceStart > finishTime) {
+                         activeNodeFill = isDark ? '#7f1d1d' : '#fee2e2'; 
+                         activeStroke = isDark ? '#ef4444' : '#dc2626';
+                         const SHAKE_AMPLITUDE = 8;
+                         shakeOffsetY = Math.sin(timeSinceStart / 30) * SHAKE_AMPLITUDE;
+                         shakeAngle = Math.cos(timeSinceStart / 30) * 0.05;
+                      }
                  }
               }
               break;
 
+            case 'INSERT_FAIL':
+              // Reuse failure visualization
+              activeNodeFill = isDark ? '#7f1d1d' : '#fee2e2'; 
+              activeStroke = isDark ? '#ef4444' : '#dc2626';
+              const SHAKE_AMPLITUDE = 8;
+              shakeOffsetY = Math.sin(timeSinceStart / 30) * SHAKE_AMPLITUDE;
+              shakeAngle = Math.cos(timeSinceStart / 30) * 0.05;
+              break;
+
+            case 'INSERT_LEAF': 
+            case 'INSERT_INTERNAL':
+               // Highlight the new node/key
+               activeNodeFill = isDark ? '#064e3b' : '#d1fae5'; // Green base 
+               activeStroke = isDark ? '#10b981' : '#059669';
+               
+               if ('atIndex' in activeStep && typeof activeStep.atIndex === 'number') {
+                   // Highlight the inserted key in Green
+                   foundKeyIndex = activeStep.atIndex; 
+               }
+               break;
+
+            case 'SPLIT_NODE':
+               // Purple highlight for split
+               activeNodeFill = isDark ? '#581c87' : '#f3e8ff'; // Purple
+               activeStroke = isDark ? '#a855f7' : '#9333ea';
+               break;
+               
             case 'CHECK_OVERFLOW': 
               if ('isOverflow' in activeStep && activeStep.isOverflow) {
                  activeNodeFill = isDark ? '#7f1d1d' : '#fee2e2'; 
@@ -413,6 +427,7 @@ export const useTreeRenderer = ({
                  activeStroke = isDark ? '#10b981' : '#059669';
               }
               break;
+              
              default:
                isActive = false;
           }
@@ -427,24 +442,39 @@ export const useTreeRenderer = ({
             ctx.translate(-pos.x, -pos.y);
         }
 
+        ctx.font = 'bold 14px "JetBrains Mono", monospace';
+        // Use currentKeys (potentially overridden)
+        const keyTexts = formatNodeDataForGraph(currentKeys);
+        
+        const keyWidths = keyTexts.map(keyText => Math.max(60, ctx.measureText(keyText).width + 20));
+        const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
+        const rectW = Math.max(100, totalKeyWidth);
+        const rectH = 50;
+        const padding = (rectW - totalKeyWidth) / 2;
+
+        ctx.globalAlpha = pos.alpha;
+        
+        const isHovered = hoveredNodeRef.current === pos.id;
+        const isRoot = pos.id === treeData.rootPage;
+        
         const nodeLeft = pos.x - rectW / 2;
         let currentKeyX = nodeLeft + padding;
         
-        // Determine fills/strokes
-        // Priority: Active Step > Hover > Root/Default
+        // Determine fills/strokes ...
+        // (Similar to before but using currentKeys logic for loops)
         
         const shouldUseActive = isActive && activeNodeFill && activeStroke;
-        
+        // ... (rest of rendering logic reusing computed values)
+
         if (isRoot) {
           const rootFill = shouldUseActive ? activeNodeFill : (isDark ? '#78350f' : '#fef3c7'); 
           const rootStroke = shouldUseActive ? activeStroke : (isDark ? '#f59e0b' : '#d97706');
           
           keyTexts.forEach((_keyText, idx) => {
             const keyW = keyWidths[idx];
-            
             // Highlight specific key if active
             const isKeyActive = isActive && activeKeyIndices.has(idx);
-            const isKeyAmber = isActive && amberKeyIndices.has(idx); // Amber check
+            const isKeyAmber = isActive && amberKeyIndices.has(idx); 
             const isKeyFound = idx === foundKeyIndex;
             const isKeyHovered = isHovered && hoveredKeyRef.current === idx;
             
@@ -452,9 +482,8 @@ export const useTreeRenderer = ({
             if (isKeyFound) {
                  fill = isDark ? '#22c55e' : '#4ade80'; // Green
             } else if (isKeyAmber) {
-                 fill = isDark ? '#f59e0b' : '#fcd34d'; // Amber for "Checked but failed"
+                 fill = isDark ? '#f59e0b' : '#fcd34d'; 
             } else if (isKeyActive) {
-                 // URGENT: ALWAYS BLUE for active traversing keys
                  fill = isDark ? '#3b82f6' : '#93c5fd'; // Blue
             } else if (isKeyHovered) {
                  fill = isDark ? '#f59e0b' : '#fcd34d';
@@ -473,7 +502,7 @@ export const useTreeRenderer = ({
           
           if (isHovered || isActive) {
             ctx.shadowBlur = 12;
-            ctx.shadowColor = rootStroke + '80'; // Add transparency
+            ctx.shadowColor = rootStroke + '80'; 
             ctx.shadowOffsetX = 0;
             ctx.shadowOffsetY = 2;
           } else {
@@ -508,25 +537,22 @@ export const useTreeRenderer = ({
           const defaultStroke = isLeaf ? colors.leafStroke : colors.internalStroke;
           
           const nodeFill = shouldUseActive ? activeNodeFill : defaultFill;
-          // Don't override stroke if not active, keeps Leaf vs Internal distinction? 
-          // Actually if active, we want to pop.
           const strokeColor = shouldUseActive ? activeStroke : defaultStroke;
 
           keyTexts.forEach((_keyText, idx) => {
             const keyW = keyWidths[idx];
             
             const isKeyActive = isActive && activeKeyIndices.has(idx);
-            const isKeyAmber = isActive && amberKeyIndices.has(idx); // Amber check
+            const isKeyAmber = isActive && amberKeyIndices.has(idx); 
             const isKeyFound = idx === foundKeyIndex;
             const isKeyHovered = isHovered && hoveredKeyRef.current === idx;
             
             let fill = nodeFill;
             if (isKeyFound) {
-                 fill = isDark ? '#22c55e' : '#4ade80'; // Green for found
+                 fill = isDark ? '#22c55e' : '#4ade80'; 
             } else if (isKeyAmber) {
-                 fill = isDark ? '#f59e0b' : '#fcd34d'; // Amber
+                 fill = isDark ? '#f59e0b' : '#fcd34d'; 
             } else if (isKeyActive) {
-                 // URGENT: ALWAYS BLUE for active traversing keys
                  fill = isDark ? '#3b82f6' : '#93c5fd'; // Blue
             } else if (isKeyHovered) {
                  fill = isDark ? '#3b82f6' : '#93c5fd';

@@ -116,7 +116,19 @@ export function TreeDetail() {
   // Playback State
   const [playbackStep, setPlaybackStep] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playbackSpeed, setPlaybackSpeed] = useState(0.5);
+  const [playbackSpeed, setPlaybackSpeed] = useState(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("minidb-playback-speed");
+      if (stored) return parseFloat(stored);
+    }
+    return 0.5;
+  });
+
+  const handlePlaybackSpeedChange = (speed: number) => {
+    setPlaybackSpeed(speed);
+    localStorage.setItem("minidb-playback-speed", speed.toString());
+  };
+
   const playbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Query result state
@@ -138,7 +150,7 @@ export function TreeDetail() {
 
     const { response, operation, startTime } = pendingOperation;
     // Clear pending operation immediately
-    setPendingOperation(null);
+
 
     const executionTime = startTime ? Date.now() - startTime : undefined;
     
@@ -204,6 +216,8 @@ export function TreeDetail() {
     // Delay highlight removal and Tree Update to let user see the final state for 3s
     setTimeout(async () => {
        await loadTreeStructure();
+       // Clear pending operation ONLY after tree is reloaded and we are ready to switch
+       setPendingOperation(null);
        // Set to a high number to show all logs but match no specific step (clearing highlights)
        setPlaybackStep(Number.MAX_SAFE_INTEGER);
        isFinalizingRef.current = false; // Reset for safety, though handled on new op usually
@@ -259,13 +273,28 @@ export function TreeDetail() {
 
   // Calculate the active step object for the canvas visualization
   const activeStep = useMemo(() => {
-    if (logs.length === 0) return undefined;
-    const lastLog = logs[logs.length - 1];
-    if (!lastLog.steps || lastLog.steps.length === 0) return undefined;
+    // 1. Initial State: Before playback starts
+    if (playbackStep === 0) return undefined;
+
+    // 2. Pending Operation Source (Priority)
+    // If we have a pending operation (even if waiting for cleanup), use its steps.
+    // This allows us to persist the state even after the main logs have updated with "Success".
+    const steps = pendingOperation?.response?.steps || (logs.length > 0 ? logs[logs.length - 1].steps : []);
     
-    // Find step with step number === playbackStep
-    return lastLog.steps.find((s) => s.step === playbackStep);
-  }, [logs, playbackStep]);
+    if (!steps || steps.length === 0) return undefined;
+
+    // 3. Find matching step
+    const step = steps.find((s: VisualizationStep) => s.step === playbackStep);
+    
+    // 4. End State Persistence
+    // If we are past the last step (animation finished), return the LAST step
+    // so the visualization holds its final state until pendingOperation is cleared.
+    if (!step && playbackStep > steps.length) {
+        return steps[steps.length - 1];
+    }
+    
+    return step;
+  }, [logs, playbackStep, pendingOperation]);
 
   // Animation Loop
   useEffect(() => {
@@ -668,8 +697,10 @@ export function TreeDetail() {
                    isPlaying={isPlaying}
                    onPlayPause={handlePlayPause}
                    playbackSpeed={playbackSpeed}
-                   onPlaybackSpeedChange={setPlaybackSpeed}
+                   onPlaybackSpeedChange={handlePlaybackSpeedChange}
+
                    activeStep={activeStep}
+                   steps={pendingOperation?.response?.steps} // Pass full steps for cumulative state
                    hasPendingOperation={!!pendingOperation}
                 />
               </div>

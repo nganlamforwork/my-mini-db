@@ -83,7 +83,8 @@ export type StepAction =
   | 'INSERT_INTERNAL' // Add key into internal node (highlighting key inserted).
   | 'CHECK_OVERFLOW'  // Highlighting node to checkoverflow. Overflow => red,  no overflow =>green
   | 'SPLIT_NODE' // Split into 2 nodes (still connect 2 nodes by parent node)
-  | 'CREATE_ROOT';  // Create root node
+  | 'CREATE_ROOT'  // Create root node
+  | 'INSERT_FAIL'; // Duplicate key or other error
 
 export interface CommonStepBase {
   step: number;
@@ -118,6 +119,7 @@ export interface FindPosStep extends CommonStepBase {
   searchKey?: CompositeKey;
   keys?: CompositeKey[];
   targetIndex: number;
+  foundAtIndex?: number;
 }
 
 export interface InsertLeafStep extends CommonStepBase {
@@ -139,11 +141,13 @@ export interface CheckOverflowStep extends CommonStepBase {
   currentSize: number;
   maxSize: number;
   isOverflow: boolean;
+  keys?: CompositeKey[]; // Added keys
 }
 
 export interface SplitNodeStep extends CommonStepBase {
   action: 'SPLIT_NODE';
   newPageId: number;
+  parentId?: number; // Added parentId
   splitKey: CompositeKey;
   leftKeys: CompositeKey[];
   rightKeys: CompositeKey[];
@@ -156,6 +160,11 @@ export interface CreateRootStep extends CommonStepBase {
   children: number[];
 }
 
+export interface InsertFailStep extends CommonStepBase {
+  action: 'INSERT_FAIL';
+  reason: string;
+}
+
 export type VisualizationStep = 
   | NodeVisitStep
   | CompareRangeStep
@@ -165,7 +174,8 @@ export type VisualizationStep =
   | InsertInternalStep
   | CheckOverflowStep
   | SplitNodeStep
-  | CreateRootStep;
+  | CreateRootStep
+  | InsertFailStep;
 
 export interface LogEntry {
   id: string;

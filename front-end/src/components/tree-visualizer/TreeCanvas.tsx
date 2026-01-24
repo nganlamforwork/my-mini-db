@@ -33,15 +33,156 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   hasPendingOperation,
   isPlaying,
   onPlayPause,
+
   playbackSpeed,
   onPlaybackSpeedChange,
+  steps, // Add steps to destructuring
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const positionsRef = useRef<Map<number, NodePosition>>(new Map());
 
-  // 1. Calculate Layout
-  const { layout, isEmptyTree } = useTreeLayout(treeData);
+
+
+  // 1. Calculate Layout (with CUMULATIVE Step-based overrides)
+  // We need to replay steps up to the current active step to build the correct ephemeral tree structure.
+  const visualTreeData = React.useMemo(() => {
+     if (!activeStep || !treeData) return treeData;
+     
+     // 1. Start with a clone of the base tree
+     const newNodes = { ...treeData.nodes };
+     // Deep clone keys/values of mutable nodes is expensive, but necessary for structural changes.
+     // Optimization: Only clone nodes we touch.
+     
+     let rootPage = treeData.rootPage;
+     let height = treeData.height;
+     let hasChanges = false;
+     
+     // 2. Identify the range of steps to replay
+     // If we have 'steps' prop, use it. Otherwise, we can only do single-step override (legacy).
+     const stepsList = steps || [];
+     const targetStepIndex = activeStep.step; // 1-based index
+     
+     if (stepsList.length === 0) {
+         // Fallback to single-step override logic (previous implementation)
+         // ... (Keep existing simple override logic if no steps provided)
+         // For brevity, using the same logic block below but just for activeStep if stepsList empty?
+         // No, simpler to just use activeStep as single item array if missing stepsList, 
+         // BUT stepsList is required for history.
+     }
+     
+     // Filter steps up to current
+     const stepsToReplay = stepsList.filter((s: any) => s.step <= targetStepIndex);
+     
+     // If no full history, fallback to just activeStep (will lose history but better than nothing)
+     const sequence = stepsToReplay.length > 0 ? stepsToReplay : [activeStep];
+
+     // 3. Replay Sequence
+     for (const step of sequence) {
+         const targetId = step.pageId;
+         
+         // Helper to ensure we have a mutable copy of the node
+         const ensureMutable = (id: number) => {
+             if (newNodes[id]) {
+                 newNodes[id] = { ...newNodes[id] }; // Shallow copy node structure
+             }
+         };
+
+         if (step.action === 'SPLIT_NODE') {
+             // Permanent structural change (until end of animation)
+             // 1. Update Left Node (current)
+             if (newNodes[targetId] && step.leftKeys) {
+                 ensureMutable(targetId);
+                 newNodes[targetId].keys = step.leftKeys; // Update keys to post-split state
+                 hasChanges = true;
+             }
+             
+             // 2. Create Right Node (new)
+             if (step.newPageId && step.rightKeys) {
+                 const original = newNodes[targetId];
+                 // Infer type from original
+                 newNodes[step.newPageId] = {
+                     ...original, // Copy props like type
+                     pageId: step.newPageId,
+                     keys: step.rightKeys,
+                     children: [], // Children/values will need to be populated if data available
+                     values: []
+                 };
+                 hasChanges = true;
+                 
+                 // 3. Link to Parent (Structural Link)
+                 // If we have parentId, insert into parent's children list
+                 if (step.parentId && newNodes[step.parentId]) {
+                     ensureMutable(step.parentId);
+                     const parent = newNodes[step.parentId];
+                     if (parent.children) {
+                         const newChildren = [...parent.children];
+                         // Find insertion point: after targetId
+                         const idx = newChildren.indexOf(targetId);
+                         if (idx !== -1 && !newChildren.includes(step.newPageId)) {
+                             newChildren.splice(idx + 1, 0, step.newPageId);
+                             parent.children = newChildren;
+                         }
+                     }
+                 }
+             }
+         }
+         
+         else if (step.action === 'CREATE_ROOT') {
+             // New Root
+             if (step.pageId && step.children) {
+                 newNodes[step.pageId] = {
+                     pageId: step.pageId,
+                     type: 'internal',
+                     keys: step.keys || [],
+                     children: step.children
+                 };
+                 rootPage = step.pageId;
+                 height++;
+                 hasChanges = true;
+             }
+         }
+         
+         else if (step.action === 'INSERT_LEAF' || step.action === 'INSERT_INTERNAL') {
+             // Update keys
+             if (step.newKeys && newNodes[targetId]) {
+                 ensureMutable(targetId);
+                 newNodes[targetId].keys = step.newKeys;
+                 hasChanges = true;
+             }
+             // NOTE: INSERT_INTERNAL usually implies adding a child pointer too. 
+             // Visualization of keys is enough for most cases, but strict layout might need child count match.
+             // Our layout engine usually handles mismatch gracefully (rendering curves).
+         }
+         
+         // Transient overrides for the FINAL step (CHECK_OVERFLOW, FIND_POS)
+         // These shouldn't permanently mutate the tree for *future* steps if we were replaying past them,
+         // but since we stop AT activeStep, we apply them last.
+         if (step === activeStep) {
+             if (step.action === 'CHECK_OVERFLOW' && step.keys) {
+                  if (newNodes[targetId]) {
+                      ensureMutable(targetId);
+                      newNodes[targetId].keys = step.keys; // Show overflow state
+                      hasChanges = true;
+                  }
+             }
+             // For FIND_POS, we might want to show the "search state" keys if provided?
+             // Usually FIND_POS keys == current node keys.
+         }
+     }
+
+     if (!hasChanges) return treeData;
+
+     return {
+         ...treeData,
+         nodes: newNodes,
+         rootPage,
+         height
+     };
+
+  }, [treeData, activeStep, steps]);
+
+  const { layout, isEmptyTree } = useTreeLayout(visualTreeData);
 
   // 2. Handle Interactions (Camera, Selection, Hover)
   const {
@@ -62,7 +203,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     hoveredNodeRef,
     hoveredKeyRef
   } = useTreeInteraction({
-    treeData,
+    treeData: visualTreeData, // Use visualTreeData
     layout,
     positionsRef,
     containerRef,
@@ -76,7 +217,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     camera,
     layout,
     positionsRef,
-    treeData,
+    treeData: visualTreeData, // Use visualTreeData
     isEmptyTree,
     hoveredEdge,
     tooltipPosition,

@@ -1,8 +1,8 @@
 // Type definitions for B+Tree operations
-import type { TreeNode, TreeStructure, CompositeKey, Record as DBRecord } from '@/types/database';
+import type { TreeNode, TreeStructure, CompositeKey, Record as DBRecord, VisualizationStep } from '@/types/database';
 
 // Re-export for compatibility
-export type { TreeNode, TreeStructure, CompositeKey, DBRecord };
+export type { TreeNode, TreeStructure, CompositeKey, DBRecord, VisualizationStep };
 
 export interface OperationResponse {
   success: boolean;
@@ -11,7 +11,7 @@ export interface OperationResponse {
   value?: DBRecord;
   keys?: CompositeKey[];
   values?: DBRecord[];
-  steps?: any[];
+  steps?: VisualizationStep[];
   error?: string;
 }
 
