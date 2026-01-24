@@ -1,7 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { LogEntry, VisualizationStep, StepAction } from '@/types/database';
-import { Button } from '@/components/ui/button';
-import { Maximize2, Download } from 'lucide-react';
+import { Maximize2 } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -13,7 +12,6 @@ interface SystemLogProps {
   logs: LogEntry[];
   fullView?: boolean;
   onFullView?: () => void;
-  onDownload?: () => void;
   currentStep?: number;
 }
 
@@ -138,7 +136,7 @@ const LogContent: React.FC<LogContentProps> = ({
   );
 };
 
-export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, onDownload, currentStep }) => {
+export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, currentStep }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const fullViewScrollContainerRef = useRef<HTMLDivElement>(null);
   const contentRef = useRef<HTMLDivElement>(null);
@@ -213,20 +211,9 @@ export const SystemLog: React.FC<SystemLogProps> = ({ logs, fullView = false, on
 
       {!fullView && (
         <Dialog open={isFullViewOpen} onOpenChange={setIsFullViewOpen}>
-          <DialogContent className="max-w-4xl max-h-[85vh] flex flex-col">
+          <DialogContent className="max-w-4xl max-h-[85vh] min-h-[50vh] flex flex-col">
             <DialogHeader className="flex flex-col items-start gap-2 justify-between ">
               <DialogTitle>System Log History</DialogTitle>
-              {onDownload && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={onDownload}
-                  className="gap-2"
-                >
-                  <Download className="h-4 w-4" />
-                  Export to CSV
-                </Button>
-              )}
             </DialogHeader>
             <div className="flex-1 overflow-hidden min-h-0">
                <LogContent 

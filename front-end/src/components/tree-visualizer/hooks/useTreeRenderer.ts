@@ -4,7 +4,6 @@ import type { NodePosition } from '../types';
 import type { LayoutNode } from './useTreeLayout';
 import { formatNodeDataForGraph } from '@/lib/keyUtils';
 import { drawRoundedRect, getThemeColors, drawLeafSiblingLinks } from '../helpers';
-import { compareKeys, extractKeyValues } from '@/lib/keyUtils';
 import confetti from 'canvas-confetti';
 
 interface UseTreeRendererProps {
@@ -560,13 +559,13 @@ export const useTreeRenderer = ({
             
             let fill = nodeFill;
             if (isKeyFound) {
-                 fill = isDark ? '#22c55e' : '#4ade80'; 
+                 fill = isDark ? 'rgba(34, 197, 94, 0.2)' : '#4ade80'; // Green (transparent in dark)
             } else if (isKeyAmber) {
-                 fill = isDark ? '#f59e0b' : '#fcd34d'; 
+                 fill = isDark ? 'rgba(245, 158, 11, 0.2)' : '#fcd34d'; // Amber (transparent in dark)
             } else if (isKeyActive) {
-                 fill = isDark ? '#3b82f6' : '#93c5fd'; // Blue
+                 fill = isDark ? 'rgba(59, 130, 246, 0.2)' : '#93c5fd'; // Blue (transparent in dark)
             } else if (isKeyHovered) {
-                 fill = isDark ? '#3b82f6' : '#93c5fd';
+                 fill = isDark ? 'rgba(59, 130, 246, 0.2)' : '#93c5fd';
             }
             
             ctx.fillStyle = fill;

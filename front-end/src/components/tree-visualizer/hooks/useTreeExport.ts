@@ -2,7 +2,7 @@ import type { TreeStructure } from '@/types/database';
 import type { NodePosition } from '../types';
 import type { LayoutNode } from './useTreeLayout';
 import { formatNodeDataForGraph } from '@/lib/keyUtils';
-import { drawRoundedRect, getThemeColors, drawLeafSiblingLinks } from '../helpers';
+import { getThemeColors } from '../helpers';
 
 interface UseTreeExportProps {
   layout: LayoutNode[];
@@ -44,225 +44,17 @@ export const useTreeExport = ({
     return { minX, maxX, minY, maxY };
   };
 
-  const drawTreeOnCanvas = (ctx: CanvasRenderingContext2D, padding: number, minX: number, minY: number, withBackground: boolean) => {
-    const colors = getThemeColors();
-
-
-    if (withBackground) {
-      // Background
-      ctx.fillStyle = colors.bg;
-      ctx.fillRect(0, 0, ctx.canvas.width / 2, ctx.canvas.height / 2);
-
-      // Draw pattern
-      for (let x = 0; x < ctx.canvas.width / 2; x += 24) {
-        for (let y = 0; y < ctx.canvas.height / 2; y += 24) {
-          ctx.fillStyle = colors.bgPattern;
-          ctx.beginPath();
-          ctx.arc(x, y, 1, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
-    }
-
-    // Translate to center the tree
-    ctx.save();
-    ctx.translate(padding - minX, padding - minY);
-
-    // Draw Leaf Node Sibling Links (dashed green lines)
-
-    // Draw Leaf Node Sibling Links (dashed green lines)
-    const layoutNodeMap = new Map(layout.map(n => [n.id, n]));
-    drawLeafSiblingLinks(
-      ctx,
-      layout,
-      treeData,
-      (id) => {
-        // useTreeExport uses static layout positions logic for the canvas draw function
-        const node = layoutNodeMap.get(id);
-        if (!node) return null;
-        return { x: node.x, y: node.y, width: node.width };
-      }
-    );
-
-
-    // Draw connections with key-aligned anchor points
-    ctx.lineWidth = 2;
-    ctx.strokeStyle = colors.connectionLine;
-    ctx.setLineDash([]);
-    
-    const parentChildrenMap = new Map<number, number[]>();
-    layout.forEach(node => {
-      if (node.parentId !== null) {
-        if (!parentChildrenMap.has(node.parentId)) {
-          parentChildrenMap.set(node.parentId, []);
-        }
-        parentChildrenMap.get(node.parentId)!.push(node.id);
-      }
-    });
-    
-    layout.forEach(node => {
-      const pos = positionsRef.current.get(node.id);
-      if (!pos || !node.parentId) return;
-      const parentPos = positionsRef.current.get(node.parentId);
-      if (!parentPos) return;
-      
-      const parentNodeData = treeData.nodes[node.parentId.toString()];
-      if (!parentNodeData || parentNodeData.type !== 'internal') {
-        ctx.beginPath();
-        ctx.moveTo(parentPos.x, parentPos.y + 25);
-        ctx.bezierCurveTo(parentPos.x, parentPos.y + 70, pos.x, pos.y - 70, pos.x, pos.y - 25);
-        ctx.stroke();
-        return;
-      }
-      
-      const parentChildren = parentChildrenMap.get(node.parentId) || [];
-      const childIndex = parentChildren.indexOf(node.id);
-      if (childIndex === -1) {
-        ctx.beginPath();
-        ctx.moveTo(parentPos.x, parentPos.y + 25);
-        ctx.bezierCurveTo(parentPos.x, parentPos.y + 70, pos.x, pos.y - 70, pos.x, pos.y - 25);
-        ctx.stroke();
-        return;
-      }
-      
-      if (!parentNodeData.keys || !Array.isArray(parentNodeData.keys)) return;
-      const numKeys = parentNodeData.keys.length;
-      const numChildren = parentChildren.length;
-      
-      ctx.font = 'bold 14px "JetBrains Mono", monospace';
-      
-      const keyTexts = formatNodeDataForGraph(parentNodeData.keys);
-      
-      const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
-      const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
-      const nodeWidth = Math.max(100, totalKeyWidth);
-      const nodeLeft = parentPos.x - nodeWidth / 2;
-      const nodeRight = parentPos.x + nodeWidth / 2;
-      const padding = (nodeWidth - totalKeyWidth) / 2;
-      const contentStartX = nodeLeft + padding;
-      
-      let anchorX: number;
-      if (numKeys === 0) {
-        const childSpacing = nodeWidth / (numChildren + 1);
-        anchorX = nodeLeft + childSpacing * (childIndex + 1);
-      } else if (numKeys === 1) {
-        const keyW = keyWidths[0];
-        const keyLeft = contentStartX;
-        const keyRight = keyLeft + keyW;
-        if (childIndex === 0) {
-          anchorX = keyLeft;
-        } else {
-          anchorX = keyRight;
-        }
-      } else {
-        const dividerPositions: number[] = [];
-        let currentX = contentStartX;
-        keyWidths.forEach((keyWidth, idx) => {
-          currentX += keyWidth;
-          if (idx < numKeys - 1) {
-            dividerPositions.push(currentX);
-          }
-        });
-        
-        if (childIndex === 0) {
-          anchorX = contentStartX;
-        } else if (childIndex === numChildren - 1) {
-          anchorX = contentStartX + totalKeyWidth;
-        } else {
-          const dividerIdx = childIndex - 1;
-          if (dividerIdx < dividerPositions.length) {
-            anchorX = dividerPositions[dividerIdx];
-          } else {
-            anchorX = nodeRight - padding / 2;
-          }
-        }
-      }
-      
-      ctx.beginPath();
-      ctx.moveTo(anchorX, parentPos.y + 25);
-      ctx.bezierCurveTo(anchorX, parentPos.y + 70, pos.x, pos.y - 70, pos.x, pos.y - 25);
-      ctx.stroke();
-    });
-
-    // Draw nodes
-    positionsRef.current.forEach(pos => {
-      const nodeData = treeData.nodes[pos.id.toString()];
-      if (!nodeData) return;
-      if (!nodeData.keys || !Array.isArray(nodeData.keys) || nodeData.keys.length === 0) return;
-
-      const isLeaf = nodeData.type === 'leaf';
-      
-      ctx.font = 'bold 14px "JetBrains Mono", monospace';
-      const keyTexts = formatNodeDataForGraph(nodeData.keys);
-      if (keyTexts.length === 0) return;
-
-      const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
-      const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
-      const rectW = Math.max(100, totalKeyWidth);
-      const rectH = 50;
-      const padding = (rectW - totalKeyWidth) / 2;
-
-      const nodeLeft = pos.x - rectW / 2;
-      let currentKeyX = nodeLeft + padding;
-
-      ctx.fillStyle = isLeaf ? colors.leafFill : colors.internalFill;
-      ctx.strokeStyle = isLeaf ? colors.leafStroke : colors.internalStroke;
-      ctx.lineWidth = 1.5;
-
-      keyTexts.forEach((_keyText, idx) => {
-        const keyW = keyWidths[idx];
-        const isFirst = idx === 0;
-        const isLast = idx === keyTexts.length - 1;
-        const radius = 6;
-        
-        if (isFirst && isLast) {
-          drawRoundedRect(ctx, currentKeyX, pos.y - rectH/2, keyW, rectH, radius);
-        } else if (isFirst) {
-          drawRoundedRect(ctx, currentKeyX, pos.y - rectH/2, keyW, rectH, radius, { topLeft: true, bottomLeft: true });
-        } else if (isLast) {
-          drawRoundedRect(ctx, currentKeyX, pos.y - rectH/2, keyW, rectH, radius, { topRight: true, bottomRight: true });
-        } else {
-          drawRoundedRect(ctx, currentKeyX, pos.y - rectH/2, keyW, rectH, 0);
-        }
-        
-        ctx.fill();
-        ctx.stroke();
-        
-        if (!isLast) {
-          ctx.beginPath();
-          ctx.moveTo(currentKeyX + keyW, pos.y - rectH/2);
-          ctx.lineTo(currentKeyX + keyW, pos.y + rectH/2);
-          ctx.strokeStyle = isLeaf ? colors.leafStroke : colors.internalStroke;
-          ctx.lineWidth = 1;
-          ctx.stroke();
-        }
-        
-        currentKeyX += keyW;
-      });
-
-      ctx.fillStyle = colors.textPrimary;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      currentKeyX = nodeLeft + padding;
-      keyTexts.forEach((keyText, idx) => {
-        const keyW = keyWidths[idx];
-        ctx.fillText(keyText, currentKeyX + keyW / 2, pos.y);
-        currentKeyX += keyW;
-      });
-
-      ctx.fillStyle = colors.textSecondary;
-      ctx.font = '10px sans-serif';
-      ctx.fillText(`P${pos.id}`, nodeLeft + 15, pos.y - rectH/2 - 8);
-    });
-
-    ctx.restore();
-  };
-
-  const handleDownloadSVG = (minX: number, minY: number, treeWidth: number, treeHeight: number, padding: number) => {
+  const generateSVGString = (minX: number, minY: number, treeWidth: number, treeHeight: number, padding: number) => {
     const colors = getThemeColors();
     const isDark = document.documentElement.classList.contains('dark');
     
     let svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${treeWidth}" height="${treeHeight}" viewBox="0 0 ${treeWidth} ${treeHeight}">`;
+    
+    // Add background rect for SVG if it's going to be converted to JPG (client requirement: "with background")
+    // But since we control the conversion process, we can handle background in canvas for JPG.
+    // However, users might want the SVG itself to have a background? 
+    // Usually SVG export is transparent. Let's keep SVG transparent.
+    // We can add a "style" block for fonts if needed, but let's stick to inline attributes as before.
     
     const parentChildrenMap = new Map<number, number[]>();
     layout.forEach(node => {
@@ -446,16 +238,7 @@ export const useTreeExport = ({
     });
 
     svg += '</svg>';
-
-    const blob = new Blob([svg], { type: 'image/svg+xml' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `tree-visualization-${new Date().toISOString().slice(0, 10)}.svg`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    return svg;
   };
 
   const handleDownloadImage = (format: 'jpg' | 'png' | 'svg') => {
@@ -466,38 +249,83 @@ export const useTreeExport = ({
     const treeWidth = maxX - minX + padding * 2;
     const treeHeight = maxY - minY + padding * 2;
 
+    const svgContent = generateSVGString(minX, minY, treeWidth, treeHeight, padding);
+    
+    // Download SVG immediately
     if (format === 'svg') {
-      handleDownloadSVG(minX, minY, treeWidth, treeHeight, padding);
-      return;
+       const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+       const url = URL.createObjectURL(blob);
+       const a = document.createElement('a');
+       a.href = url;
+       a.download = `tree-visualization-${new Date().toISOString().slice(0, 10)}.svg`;
+       document.body.appendChild(a);
+       a.click();
+       document.body.removeChild(a);
+       URL.revokeObjectURL(url);
+       return;
     }
 
-    const scale = 2;
-    const tempCanvas = document.createElement('canvas');
-    const ctx = tempCanvas.getContext('2d');
-    if (!ctx) return;
+    // Convert to Image for JPG/PNG
+    const img = new Image();
+    const svgBlob = new Blob([svgContent], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
 
-    tempCanvas.width = treeWidth * scale;
-    tempCanvas.height = treeHeight * scale;
-    ctx.scale(scale, scale);
+    img.onload = () => {
+      const scale = 2; // High resolution
+      const canvas = document.createElement('canvas');
+      canvas.width = treeWidth * scale; // Scale for quality
+      canvas.height = treeHeight * scale;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      
+      ctx.scale(scale, scale);
 
-    const withBackground = format === 'jpg';
-    
-    drawTreeOnCanvas(ctx, padding, minX, minY, withBackground);
+      // Handle Background
+      if (format === 'jpg') {
+        const colors = getThemeColors();
+        ctx.fillStyle = colors.bg;
+        ctx.fillRect(0, 0, treeWidth, treeHeight);
+        
+        // Optional Pattern for JPG
+        const patternCanvas = document.createElement('canvas');
+        patternCanvas.width = 24;
+        patternCanvas.height = 24;
+        const pCtx = patternCanvas.getContext('2d');
+        if (pCtx) {
+            pCtx.fillStyle = colors.bg;
+            pCtx.fillRect(0,0,24,24);
+            pCtx.fillStyle = colors.bgPattern;
+            pCtx.beginPath();
+            pCtx.arc(0,0,1,0, Math.PI * 2);
+            pCtx.fill();
+            const pattern = ctx.createPattern(patternCanvas, 'repeat');
+            if (pattern) {
+                ctx.fillStyle = pattern;
+                ctx.fillRect(0,0,treeWidth, treeHeight);
+            }
+        }
+      }
 
-    const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
-    const quality = format === 'jpg' ? 0.92 : undefined;
-    
-    tempCanvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `tree-visualization-${new Date().toISOString().slice(0, 10)}.${format}`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    }, mimeType, quality);
+      ctx.drawImage(img, 0, 0);
+
+      const mimeType = format === 'jpg' ? 'image/jpeg' : 'image/png';
+      const quality = format === 'jpg' ? 0.92 : undefined;
+      
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const downloadUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = `tree-visualization-${new Date().toISOString().slice(0, 10)}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(downloadUrl);
+        URL.revokeObjectURL(url); // Clean up SVG URL
+      }, mimeType, quality);
+    };
+
+    img.src = url;
   };
 
   return { handleDownloadImage };

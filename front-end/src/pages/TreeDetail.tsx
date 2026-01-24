@@ -588,11 +588,11 @@ export function TreeDetail() {
         </div>
         <div className="flex items-center gap-2">
           <Button
-            variant="violet"
+            variant="pink"
             size="sm"
             onClick={() => setInitDialogOpen(true)}
+            startIcon={<Sparkles className="h-4 w-4" />}
           >
-            <Sparkles className="h-4 w-4 mr-2" />
             Init
           </Button>
           <ClearTreeDialog
@@ -655,18 +655,18 @@ export function TreeDetail() {
                 ].map((operation) => {
                   const IconComponent = operation.icon;
                   return (
-                    <Button
-                      key={operation.id}
-                      variant={operation.variant}
-                      className="w-full justify-start transition-all duration-200 active:scale-95"
-                      onClick={() => {
-                        setCurrentOperation(operation.id);
-                        setOperationDialogOpen(true);
-                      }}
-                    >
-                      <IconComponent className="h-4 w-4 mr-2" />
-                      {operation.label}
-                    </Button>
+                      <Button
+                        key={operation.id}
+                        variant={operation.variant}
+                        className="w-full justify-start transition-all duration-200 active:scale-95"
+                        onClick={() => {
+                          setCurrentOperation(operation.id);
+                          setOperationDialogOpen(true);
+                        }}
+                        startIcon={<IconComponent className="h-4 w-4" />}
+                      >
+                        {operation.label}
+                      </Button>
                   );
                 })}
               </div>
@@ -680,7 +680,6 @@ export function TreeDetail() {
                     logs={displayLogs}
                     fullView={false}
                     onFullView={() => setFullLogsOpen(true)}
-                    onDownload={() => { /* ... download logic ... */ }}
                   />
                 </div>
               </CollapsibleSection>

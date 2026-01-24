@@ -34,6 +34,8 @@ const buttonVariants = cva(
           "bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-950/50 hover:border-rose-300 dark:hover:border-rose-700",
         pink:
           "bg-pink-50 dark:bg-pink-950/30 border border-pink-200 dark:border-pink-800 text-pink-700 dark:text-pink-300 hover:bg-pink-100 dark:hover:bg-pink-950/50 hover:border-pink-300 dark:hover:border-pink-700",
+        rose:
+          "bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 hover:bg-rose-100 dark:hover:bg-rose-950/50 hover:border-rose-300 dark:hover:border-rose-700",
         purple:
           "bg-purple-50 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 hover:bg-purple-100 dark:hover:bg-purple-950/50 hover:border-purple-300 dark:hover:border-purple-700",
         violet:
@@ -74,10 +76,15 @@ function Button({
   variant = "default",
   size = "default",
   asChild = false,
+  startIcon,
+  endIcon,
+  children,
   ...props
 }: React.ComponentProps<"button"> &
   VariantProps<typeof buttonVariants> & {
     asChild?: boolean
+    startIcon?: React.ReactNode
+    endIcon?: React.ReactNode
   }) {
   const Comp = asChild ? Slot : "button"
 
@@ -88,7 +95,11 @@ function Button({
       data-size={size}
       className={cn(buttonVariants({ variant, size, className }))}
       {...props}
-    />
+    >
+      {startIcon && <span className="flex items-center justify-center [&>svg]:size-4">{startIcon}</span>}
+      {children}
+      {endIcon && <span className="flex items-center justify-center [&>svg]:size-4">{endIcon}</span>}
+    </Comp>
   )
 }
 

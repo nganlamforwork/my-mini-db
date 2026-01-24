@@ -88,7 +88,7 @@ export const TreeControls: React.FC<TreeControlsProps> = ({
                     variant={hasPendingOperation && !isPlaying ? "default" : "ghost"}
                     size="icon"
                     onClick={onPlayPause}
-                    className={`h-8 w-8 ${hasPendingOperation && !isPlaying ? "animate-pulse bg-slate-800 hover:bg-slate-900 text-white" : ""}`}
+                    className={`h-8 w-8 ${hasPendingOperation && !isPlaying ? "animate-pulse bg-slate-800 dark:bg-blue-600 hover:bg-slate-900 dark:hover:bg-blue-700 text-white" : ""}`}
                     title={isPlaying ? "Pause" : (hasPendingOperation ? "Start Visualization" : "Play")}
                   >
                     {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
@@ -112,13 +112,13 @@ export const TreeControls: React.FC<TreeControlsProps> = ({
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              {[0.5, 1, 1.5, 2].map(speed => (
+              {[0.25, 0.5, 1, 1.5, 2].map(speed => (
                 <DropdownMenuItem 
                   key={speed} 
                   onClick={() => onPlaybackSpeedChange?.(speed)}
                   className={playbackSpeed === speed ? "bg-accent" : ""}
                 >
-                  <span>{speed}x Speed</span>
+                  <span><b>{speed}x</b> Speed</span>
                 </DropdownMenuItem>
               ))}
             </DropdownMenuContent>

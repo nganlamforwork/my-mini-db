@@ -29,8 +29,8 @@ export function ClearTreeDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogTrigger asChild>
         {trigger || (
-          <Button variant="blue" size="sm">
-            <RotateCcw className="h-4 w-4 mr-2" /> Reset
+          <Button variant="blue" size="sm" startIcon={<RotateCcw className="h-4 w-4"/>}>
+            Reset
           </Button>
         )}
       </AlertDialogTrigger>
