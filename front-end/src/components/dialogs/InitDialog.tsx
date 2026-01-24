@@ -167,7 +167,7 @@ export function InitDialog({
             Cancel
           </Button>
           <Button
-            variant="violet"
+            variant="pink"
             onClick={handleInit}
             disabled={
               initInProgress ||

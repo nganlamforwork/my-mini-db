@@ -29,6 +29,7 @@ import {
   Sun,
   Moon,
   Sparkles,
+  HelpCircle,
 } from "lucide-react";
 import {
   Collapsible,
@@ -100,6 +101,7 @@ export function TreeDetail() {
     "insert" | "search" | "update" | "delete" | "range" | null
   >(null);
   const [helpDialogOpen, setHelpDialogOpen] = useState(false);
+  const [operationHelpOpen, setOperationHelpOpen] = useState(false);
   const [clearTreeDialogOpen, setClearTreeDialogOpen] = useState(false);
   const [initDialogOpen, setInitDialogOpen] = useState(false);
   const hasLoggedInitialLoadRef = useRef(false);
@@ -617,9 +619,18 @@ export function TreeDetail() {
           <div className="w-64 border-r p-4 flex flex-col overflow-hidden">
             {/* Tree Operations Section */}
             <div className="space-y-3 flex-shrink-0">
-              <h3 className="text-xs font-semibold mb-2 uppercase text-left">
-                Tree Operations
-              </h3>
+              <div className="flex items-center justify-between mb-2">
+                <h3 className="text-xs font-semibold uppercase text-left">
+                  Tree Operations
+                </h3>
+                <button
+                  onClick={() => setOperationHelpOpen(true)}
+                  className="p-1 rounded hover:bg-accent transition-colors"
+                  title="View operation algorithms"
+                >
+                  <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                </button>
+              </div>
               <div className="space-y-2">
                 {[
                   {
@@ -751,6 +762,13 @@ export function TreeDetail() {
       <OperationHelpDialog
         open={helpDialogOpen}
         onOpenChange={setHelpDialogOpen}
+        operation={currentOperation || "insert"}
+      />
+
+      {/* Operations Section Help Dialog */}
+      <OperationHelpDialog
+        open={operationHelpOpen}
+        onOpenChange={setOperationHelpOpen}
         operation={currentOperation || "insert"}
       />
 
