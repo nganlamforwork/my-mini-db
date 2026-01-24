@@ -257,6 +257,7 @@ export const useTreeRenderer = ({
         let activeNodeFill = '';
         let activeStroke = '';
         const activeKeyIndices = new Set<number>();
+        const amberKeyIndices = new Set<number>(); // New: For "First Child" comparison check
         let foundKeyIndex = -1; // Specific index for exact match (Green)
 
         if (activeStep && activeStep.pageId === pos.id) {
@@ -278,7 +279,7 @@ export const useTreeRenderer = ({
               
               if ('selectedChildIndex' in activeStep && typeof activeStep.selectedChildIndex === 'number') {
                  const childIdx = activeStep.selectedChildIndex;
-
+                 const numKeys = nodeData.keys?.length || 0;
                  
                  // If we selected childIdx, it means we passed keys 0 to childIdx-1 (inclusive)
                  // because they were <= SearchKey.
@@ -286,10 +287,12 @@ export const useTreeRenderer = ({
                  // Highlight only the keys we "accepted" as <= SearchKey.
                  const limit = childIdx - 1;
                  
-                 // Only add if currentIndex >= 0 (e.g. childIdx=0 -> limit=-1 -> loop doesn't run)
-                 // And ensure we don't go beyond our limit
-                 // Correction: Use simple loop based on time-stepped index
-                 if (limit >= 0) {
+                 // SPECIAL CASE: If going to first child (index 0), we compared with Key 0 
+                 // and found SearchKey < Key[0]. 
+                 // We highlight Key 0 in AMBER to show we checked it but rejected it.
+                 if (limit < 0 && numKeys > 0) {
+                     amberKeyIndices.add(0);
+                 } else if (limit >= 0) {
                      // We want to animate from 0 to limit.
                      // The max index we can show right now is 'currentIndex'.
                      // But strictly up to 'limit'.
@@ -303,10 +306,7 @@ export const useTreeRenderer = ({
 
             case 'SCAN_KEYS': 
               activeNodeFill = isDark ? '#134e4a' : '#ccfbf1'; // teal base (or maybe blue per request?)
-              // User said "traverse key -> blue". 
-              // "search" usually scans keys. 
-              // Let's use blue base for the node, but maybe Cyan for the active operation?
-              // User: "traverse key -> blue", "founded key -> green".
+              // User said "traverse key -> blue", "founded key -> green".
               
               activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
               activeStroke = isDark ? '#3b82f6' : '#2563eb';
@@ -422,12 +422,15 @@ export const useTreeRenderer = ({
             
             // Highlight specific key if active
             const isKeyActive = isActive && activeKeyIndices.has(idx);
+            const isKeyAmber = isActive && amberKeyIndices.has(idx); // Amber check
             const isKeyFound = idx === foundKeyIndex;
             const isKeyHovered = isHovered && hoveredKeyRef.current === idx;
             
             let fill = rootFill;
             if (isKeyFound) {
                  fill = isDark ? '#22c55e' : '#4ade80'; // Green
+            } else if (isKeyAmber) {
+                 fill = isDark ? '#f59e0b' : '#fcd34d'; // Amber for "Checked but failed"
             } else if (isKeyActive) {
                  // URGENT: ALWAYS BLUE for active traversing keys
                  fill = isDark ? '#3b82f6' : '#93c5fd'; // Blue
@@ -491,12 +494,15 @@ export const useTreeRenderer = ({
             const keyW = keyWidths[idx];
             
             const isKeyActive = isActive && activeKeyIndices.has(idx);
+            const isKeyAmber = isActive && amberKeyIndices.has(idx); // Amber check
             const isKeyFound = idx === foundKeyIndex;
             const isKeyHovered = isHovered && hoveredKeyRef.current === idx;
             
             let fill = nodeFill;
             if (isKeyFound) {
                  fill = isDark ? '#22c55e' : '#4ade80'; // Green for found
+            } else if (isKeyAmber) {
+                 fill = isDark ? '#f59e0b' : '#fcd34d'; // Amber
             } else if (isKeyActive) {
                  // URGENT: ALWAYS BLUE for active traversing keys
                  fill = isDark ? '#3b82f6' : '#93c5fd'; // Blue
