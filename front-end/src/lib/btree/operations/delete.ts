@@ -210,6 +210,20 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
 
       // Strategy 1: Borrow from Left
       if (leftSibling && leftSibling.keys.length > MIN_KEYS) {
+          // Visual Step: Select key to borrow
+          const borrowIdx = leftSibling.keys.length - 1;
+          const borrowKeyCandidate = leftSibling.keys[borrowIdx];
+          
+          stepCount++;
+          steps.push({
+             step: stepCount,
+             action: 'SCAN_KEYS',
+             pageId: leftSiblingId!,
+             keys: JSON.parse(JSON.stringify(leftSibling.keys)),
+             foundAtIndex: borrowIdx,
+             description: `Select key ${formatKey(borrowKeyCandidate)} from Left Sibling`
+          });
+
           // Borrow
           const borrowKey = leftSibling.keys.pop()!;
           let borrowValue: any; 
@@ -236,6 +250,8 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
                    siblingPageId: leftSiblingId!,
                    borrowedKey: borrowKey,
                    direction: 'LEFT_TO_RIGHT',
+                   keys: JSON.parse(JSON.stringify(currentNode.keys)),
+                   siblingKeys: JSON.parse(JSON.stringify(leftSibling.keys)),
                    description: `Move key ${formatKey(borrowKey)} from Page ${leftSiblingId} to Page ${currentNodeId}`
                });
                
@@ -246,7 +262,11 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
                    pageId: parentId,
                    oldKey: separator,
                    newKey: borrowKey,
-                   description: `Update separator index ${parentKeyIdx} to ${formatKey(borrowKey)}`
+                   description: `Update separator index ${parentKeyIdx} to ${formatKey(borrowKey)}`,
+                   nodeOverrides: [
+                       { pageId: currentNodeId, keys: JSON.parse(JSON.stringify(currentNode.keys)) },
+                       { pageId: leftSiblingId!, keys: JSON.parse(JSON.stringify(leftSibling.keys)) }
+                   ]
                });
           } else {
                // Internal Borrow (Rotate)
@@ -267,6 +287,8 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
                    parentPageId: parentId,
                    direction: 'LEFT_TO_RIGHT',
                    movedChildId: movedChild,
+                   keys: JSON.parse(JSON.stringify(currentNode.keys)),
+                   siblingKeys: JSON.parse(JSON.stringify(leftSibling.keys)),
                    description: `ROTATION: Move Child ${movedChild} from P${leftSiblingId} to P${currentNodeId}`
                });
                
@@ -286,6 +308,20 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
       }
       // Strategy 2: Borrow from Right
       else if (!borrowed && rightSibling && rightSibling.keys.length > MIN_KEYS) {
+           // Visual Step: Select key to borrow
+           const borrowIdx = 0;
+           const borrowKeyCandidate = rightSibling.keys[borrowIdx];
+
+          stepCount++;
+          steps.push({
+             step: stepCount,
+             action: 'SCAN_KEYS',
+             pageId: rightSiblingId!,
+             keys: JSON.parse(JSON.stringify(rightSibling.keys)),
+             foundAtIndex: borrowIdx,
+             description: `Select key ${formatKey(borrowKeyCandidate)} from Right Sibling`
+          });
+
            const borrowKey = rightSibling.keys.shift()!;
            let parentKeyIdx = myIndex; // Separator between current and right
            const separator = parent.keys[parentKeyIdx];
@@ -307,6 +343,8 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
                    siblingPageId: rightSiblingId!,
                    borrowedKey: borrowKey,
                    direction: 'RIGHT_TO_LEFT',
+                   keys: JSON.parse(JSON.stringify(currentNode.keys)),
+                   siblingKeys: JSON.parse(JSON.stringify(rightSibling.keys)),
                    description: `Move key ${formatKey(borrowKey)} from Page ${rightSiblingId} to Page ${currentNodeId}`
                });
                
@@ -317,7 +355,11 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
                    pageId: parentId,
                    oldKey: separator,
                    newKey: newSeparator,
-                   description: `Update separator index ${parentKeyIdx} to ${formatKey(newSeparator)}`
+                   description: `Update separator index ${parentKeyIdx} to ${formatKey(newSeparator)}`,
+                   nodeOverrides: [
+                       { pageId: currentNodeId, keys: JSON.parse(JSON.stringify(currentNode.keys)) },
+                       { pageId: rightSiblingId!, keys: JSON.parse(JSON.stringify(rightSibling.keys)) }
+                   ]
                });
            } else {
                // Internal Borrow
@@ -337,6 +379,8 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
                    parentPageId: parentId,
                    direction: 'RIGHT_TO_LEFT',
                    movedChildId: movedChild,
+                   keys: JSON.parse(JSON.stringify(currentNode.keys)),
+                   siblingKeys: JSON.parse(JSON.stringify(rightSibling.keys)),
                    description: `ROTATION: Move Child ${movedChild} from P${rightSiblingId} to P${currentNodeId}`
                });
                

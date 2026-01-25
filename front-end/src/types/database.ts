@@ -105,6 +105,7 @@ export interface CommonStepBase {
   action: StepAction;
   pageId: number;
   description: string;
+  nodeOverrides?: { pageId: number; keys: CompositeKey[] }[];
 }
 
 export interface NodeVisitStep extends CommonStepBase {
@@ -227,6 +228,8 @@ export interface BorrowFromSiblingStep extends CommonStepBase {
   siblingPageId: number;
   borrowedKey: CompositeKey;
   direction: 'LEFT_TO_RIGHT' | 'RIGHT_TO_LEFT';
+  keys?: CompositeKey[]; // For current node
+  siblingKeys?: CompositeKey[]; // For sibling node
 }
 
 export interface UpdateSeparatorStep extends CommonStepBase {
@@ -261,6 +264,8 @@ export interface InternalBorrowRotateStep extends CommonStepBase {
   parentPageId: number;
   direction: 'LEFT_TO_RIGHT' | 'RIGHT_TO_LEFT';
   movedChildId?: number;
+  keys?: CompositeKey[];
+  siblingKeys?: CompositeKey[];
 }
 
 export interface UpdateKeysRotationStep extends CommonStepBase {

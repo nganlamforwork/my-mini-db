@@ -1,4 +1,4 @@
-import { useEffect, type RefObject } from 'react';
+import { useEffect, useRef, type RefObject } from 'react';
 import type { TreeStructure, VisualizationStep } from '@/types/database';
 import type { NodePosition } from '../types';
 import type { LayoutNode } from './useTreeLayout';
@@ -37,6 +37,67 @@ export const useTreeRenderer = ({
   activeStep,
   playbackSpeed = 1
 }: UseTreeRendererProps) => {
+  // Cache for node state (keys) to maintain consistency across steps
+  const nodeStateCache = useRef<Map<number, any[]>>(new Map());
+
+  // Clear cache when treeData changes (operation finished/reset)
+  useEffect(() => {
+    nodeStateCache.current.clear();
+  }, [treeData]);
+
+  // Update cache based on activeStep
+  useEffect(() => {
+    if (!activeStep) return;
+
+    const cache = nodeStateCache.current;
+    const step = activeStep;
+
+    // Helper to set cache
+    const updateCache = (id: number, keys: any[]) => {
+      if (keys) cache.set(id, keys);
+    };
+
+    // 1. Generic nodeOverrides
+    if (step.nodeOverrides) {
+        step.nodeOverrides.forEach(o => updateCache(o.pageId, o.keys));
+    }
+
+    // 2. newKeys (Insert/Delete)
+    if ('newKeys' in step && step.newKeys) {
+        updateCache(step.pageId, step.newKeys);
+    }
+
+    // 3. keys (Check, Scan, etc.)
+    // Only update if it looks like a full snapshot. Most steps providing 'keys' are snapshots.
+    if ('keys' in step && step.keys) {
+        updateCache(step.pageId, step.keys);
+    }
+
+    // 4. siblingKeys (Borrow)
+    if ('siblingPageId' in step && 'siblingKeys' in step && step.siblingKeys) {
+        updateCache(step.siblingPageId, step.siblingKeys);
+    }
+
+    // 5. SPLIT_NODE (Left/Right)
+    if (step.action === 'SPLIT_NODE' && step.leftKeys && step.rightKeys) {
+        updateCache(step.pageId, step.leftKeys);
+        if ('newPageId' in step) {
+            updateCache(step.newPageId, step.rightKeys);
+        }
+    }
+
+    // 6. keyValues (Compare Range) - usually consistent with node state
+    if ('keyValues' in step && step.keyValues) {
+        updateCache(step.pageId, step.keyValues);
+    }
+    
+    // 7. mergedKeys (Merge)
+    if ('mergedKeys' in step && step.mergedKeys) {
+       updateCache(step.pageId, step.mergedKeys);
+    }
+
+  }, [activeStep]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
@@ -174,16 +235,19 @@ export const useTreeRenderer = ({
           return;
         }
         
-        // Calculate anchor point based on key positions
-        if (!parentNodeData.keys || !Array.isArray(parentNodeData.keys)) return;
-        const numKeys = parentNodeData.keys.length;
+        // Determine keys for parent to calculate anchors
+        // Use cache if available
+        const cachedParentKeys = nodeStateCache.current.get(node.parentId);
+        const parentKeys = cachedParentKeys || parentNodeData.keys || [];
+        
+        const numKeys = parentKeys.length;
         const numChildren = parentChildren.length;
         
         // Calculate node width using key groups (same as rendering)
         ctx.font = 'bold 14px "JetBrains Mono", monospace';
         
-        // Prepare key texts for width calculation (use truncated keys to match visual rendering)
-        const keyTexts = formatNodeDataForGraph(parentNodeData.keys);
+        // Prepare key texts for width calculation
+        const keyTexts = formatNodeDataForGraph(parentKeys);
         
         const keyWidths = keyTexts.map((keyText: string) => Math.max(60, ctx.measureText(keyText).width + 20));
         const totalKeyWidth = keyWidths.reduce((sum: number, w: number) => sum + w, 0);
@@ -206,7 +270,7 @@ export const useTreeRenderer = ({
         } else {
           const dividerPositions: number[] = [];
           let currentX = contentStartX;
-          keyWidths.forEach((keyWidth, idx) => {
+          keyWidths.forEach((keyWidth: number, idx: number) => {
             currentX += keyWidth;
             if (idx < numKeys - 1) {
               dividerPositions.push(currentX);
@@ -250,7 +314,8 @@ export const useTreeRenderer = ({
         }
 
         const isLeaf = nodeData.type === 'leaf';
-        let currentKeys = nodeData.keys; // Default to treeData keys
+        // USE CACHED KEYS IF AVAILABLE
+        let currentKeys = nodeStateCache.current.get(pos.id) || nodeData.keys;
 
         // --- VISUALIZATION OVERRIDES ---
         let isActive = false;
@@ -282,24 +347,10 @@ export const useTreeRenderer = ({
           // ADAPTIVE TIMING LOGIC
           const stepDuration = 1000 / playbackSpeed;
           
-          // Override keys if step provides them (for Insert/Split visualization on stale tree)
-          if ('newKeys' in activeStep && activeStep.newKeys) {
-              currentKeys = activeStep.newKeys;
-          } else if ('keys' in activeStep && activeStep.keys) {
-              currentKeys = activeStep.keys;
-          } else if ('keyValues' in activeStep && activeStep.keyValues) {
-              // COMPARE_RANGE uses keyValues
-              currentKeys = activeStep.keyValues;
-          } else if (activeStep.action === 'SPLIT_NODE' && activeStep.leftKeys && activeStep.rightKeys) {
-              // Handle Split logic:
-              // If this is the Left Node (original pageId), show leftKeys
-              // If this is the Right Node (newPageId), show rightKeys
-              if (pos.id === activeStep.pageId) {
-                  currentKeys = activeStep.leftKeys;
-              } else if (pos.id === activeStep.newPageId) {
-                  currentKeys = activeStep.rightKeys;
-              }
-          }
+          // Note: keys are already updated via cache logic above.
+          // We don't need inline overrides anymore for 'currentKeys' unless purely ephemeral.
+          // (Removed previous override block)
+
 
           const numKeys = currentKeys?.length || 0;
           
