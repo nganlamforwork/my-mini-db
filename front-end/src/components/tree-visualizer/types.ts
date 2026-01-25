@@ -27,6 +27,7 @@ export interface TreeCanvasProps {
   activeStep?: VisualizationStep;
   steps?: VisualizationStep[]; // Full list of steps for replay
   hasPendingOperation?: boolean;
+  lastOperationSuccess?: boolean;
 }
 
 export interface NodePosition {

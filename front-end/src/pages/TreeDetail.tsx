@@ -709,6 +709,11 @@ export function TreeDetail() {
                    activeStep={activeStep}
                    steps={pendingOperation?.response?.steps} // Pass full steps for cumulative state
                    hasPendingOperation={!!pendingOperation}
+                   lastOperationSuccess={
+                      pendingOperation?.operation === 'SEARCH'
+                          ? !!pendingOperation?.response?.value
+                          : pendingOperation?.response?.success
+                   }
                 />
               </div>
             )}

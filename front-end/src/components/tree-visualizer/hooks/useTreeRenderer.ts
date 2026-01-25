@@ -4,7 +4,7 @@ import type { NodePosition } from '../types';
 import type { LayoutNode } from './useTreeLayout';
 import { formatNodeDataForGraph } from '@/lib/keyUtils';
 import { drawRoundedRect, getThemeColors, drawLeafSiblingLinks } from '../helpers';
-import confetti from 'canvas-confetti';
+// import confetti from 'canvas-confetti'; (Removed usage)
 
 interface UseTreeRendererProps {
   canvasRef: RefObject<HTMLCanvasElement | null>;
@@ -480,22 +480,6 @@ export const useTreeRenderer = ({
                 
                 if (currentIndex === foundIdx) {
                    foundKeyIndex = foundIdx; // Turns Green
-                   
-                   const justReached = Math.floor(timeSinceStart / KEY_SCAN_DURATION) === foundIdx;
-                   const stepElapsed = timeSinceStart % KEY_SCAN_DURATION;
-                   if (justReached && stepElapsed < 50) {
-                        const centerX = width / 2;
-                        const visualX = (pos.x * camera.zoom) + centerX + (camera.x * camera.zoom);
-                        const visualY = (pos.y * camera.zoom) + 100 + (camera.y * camera.zoom);
-                        const normX = visualX / window.innerWidth;
-                        const normY = visualY / window.innerHeight;
-                        if (Math.random() > 0.8) { 
-                            confetti({
-                                particleCount: 5, spread: 30, origin: { x: normX, y: normY },
-                                colors: ['#22c55e', '#3b82f6'], disableForReducedMotion: true, zIndex: 9999
-                            });
-                        }
-                   }
                 }
               } else {
                  // Scan until target (finding position or not found)

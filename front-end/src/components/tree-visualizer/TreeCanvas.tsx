@@ -14,6 +14,7 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '../ui/tooltip';
+import confetti from 'canvas-confetti';
 
 import type { TreeCanvasProps, NodePosition } from './types';
 import { useTreeLayout } from './hooks/useTreeLayout';
@@ -37,12 +38,30 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   playbackSpeed,
   onPlaybackSpeedChange,
   steps, // Add steps to destructuring
+  lastOperationSuccess,
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const positionsRef = useRef<Map<number, NodePosition>>(new Map());
 
 
+
+  // Confetti Effect on Completion
+  useEffect(() => {
+    if (!activeStep || !steps || steps.length === 0) return;
+    
+    const lastStep = steps[steps.length - 1];
+    // Trigger when we hit the last step AND operation was successful
+    if (activeStep.step === lastStep.step && lastOperationSuccess) {
+        confetti({
+            particleCount: 100,
+            spread: 70,
+            origin: { y: 0.6 },
+            zIndex: 9999,
+            disableForReducedMotion: true
+        });
+    }
+  }, [activeStep, steps]);
 
   // 1. Calculate Layout (with CUMULATIVE Step-based overrides)
   // We need to replay steps up to the current active step to build the correct ephemeral tree structure.
