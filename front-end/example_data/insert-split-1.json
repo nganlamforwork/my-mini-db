@@ -1,0 +1,319 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 100
+        }
+      ]
+    },
+    "keyValues": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 136
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 203
+          }
+        ]
+      }
+    ],
+    "description": "Compare 100 vs [73, 136, 203] -> 100 >= 73 -> Next: page 16"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 16,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 16"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 16,
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 100
+        }
+      ]
+    },
+    "keyValues": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 121
+          }
+        ]
+      }
+    ],
+    "description": "Compare 100 vs [121] -> 100 < 121 -> Next: page 6"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 6,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 6"
+  },
+  {
+    "step": 6,
+    "action": "FIND_POS",
+    "pageId": 6,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 78
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 108
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 100
+        }
+      ]
+    },
+    "targetIndex": 2,
+    "description": "Scan [73, 78, 108] -> Target position: 2"
+  },
+  {
+    "step": 7,
+    "action": "INSERT_LEAF",
+    "pageId": 6,
+    "insertKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 100
+        }
+      ]
+    },
+    "atIndex": 2,
+    "newKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 78
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 100
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 108
+          }
+        ]
+      }
+    ],
+    "description": "Insert 100 at index 2 -> Keys: [73, 78, 100, 108]"
+  },
+  {
+    "step": 8,
+    "action": "CHECK_OVERFLOW",
+    "pageId": 6,
+    "currentSize": 4,
+    "maxSize": 3,
+    "isOverflow": true,
+    "description": "Check size: 4 > Max 3 -> OVERFLOW DETECTED"
+  },
+  {
+    "step": 9,
+    "action": "SPLIT_NODE",
+    "pageId": 6,
+    "newPageId": 20,
+    "splitKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 100
+        }
+      ]
+    },
+    "leftKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 78
+          }
+        ]
+      }
+    ],
+    "rightKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 100
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 108
+          }
+        ]
+      }
+    ],
+    "promoteKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 100
+        }
+      ]
+    },
+    "description": "Split Page 6 -> Left: [73, 78], Right: [100, 108] -> Copy 100 up"
+  },
+  {
+    "step": 10,
+    "action": "NODE_VISIT",
+    "pageId": 16,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 16"
+  },
+  {
+    "step": 11,
+    "action": "FIND_POS",
+    "pageId": 16,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 121
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 100
+        }
+      ]
+    },
+    "targetIndex": 0,
+    "description": "Scan [121] -> Target position: 0"
+  },
+  {
+    "step": 12,
+    "action": "INSERT_INTERNAL",
+    "pageId": 16,
+    "insertKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 100
+        }
+      ]
+    },
+    "atIndex": 0,
+    "newKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 100
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 121
+          }
+        ]
+      }
+    ],
+    "description": "Insert 100 at index 0 -> Keys: [100, 121]"
+  },
+  {
+    "step": 13,
+    "action": "CHECK_OVERFLOW",
+    "pageId": 16,
+    "currentSize": 2,
+    "maxSize": 3,
+    "isOverflow": false,
+    "description": "Check size: 2 <= Max 3 -> OK"
+  }
+]

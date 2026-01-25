@@ -1,0 +1,595 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 8
+        }
+      ]
+    },
+    "keyValues": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 136
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 203
+          }
+        ]
+      }
+    ],
+    "description": "Compare 8 vs [73, 136, 203] -> 8 < 73 -> Next: page 3"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 3,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 3"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 3,
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 8
+        }
+      ]
+    },
+    "keyValues": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 12
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 43
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 63
+          }
+        ]
+      }
+    ],
+    "description": "Compare 8 vs [12, 43, 63] -> 8 < 12 -> Next: page 1"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 1,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 1"
+  },
+  {
+    "step": 6,
+    "action": "FIND_POS",
+    "pageId": 1,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 4
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 5
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 11
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 8
+        }
+      ]
+    },
+    "targetIndex": 2,
+    "description": "Scan [4, 5, 11] -> Target position: 2"
+  },
+  {
+    "step": 7,
+    "action": "INSERT_LEAF",
+    "pageId": 1,
+    "insertKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 8
+        }
+      ]
+    },
+    "atIndex": 2,
+    "newKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 4
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 5
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 8
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 11
+          }
+        ]
+      }
+    ],
+    "description": "Insert 8 at index 2 -> Keys: [4, 5, 8, 11]"
+  },
+  {
+    "step": 8,
+    "action": "CHECK_OVERFLOW",
+    "pageId": 1,
+    "currentSize": 4,
+    "maxSize": 3,
+    "isOverflow": true,
+    "description": "Check size: 4 > Max 3 -> OVERFLOW DETECTED"
+  },
+  {
+    "step": 9,
+    "action": "SPLIT_NODE",
+    "pageId": 1,
+    "newPageId": 20,
+    "splitKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 8
+        }
+      ]
+    },
+    "leftKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 4
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 5
+          }
+        ]
+      }
+    ],
+    "rightKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 8
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 11
+          }
+        ]
+      }
+    ],
+    "promoteKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 8
+        }
+      ]
+    },
+    "description": "Split Page 1 -> Left: [4, 5], Right (20): [8, 11] -> Copy 8 up"
+  },
+  {
+    "step": 10,
+    "action": "NODE_VISIT",
+    "pageId": 3,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 3"
+  },
+  {
+    "step": 11,
+    "action": "FIND_POS",
+    "pageId": 3,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 12
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 43
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 63
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 8
+        }
+      ]
+    },
+    "targetIndex": 0,
+    "description": "Scan [12, 43, 63] -> Target position: 0"
+  },
+  {
+    "step": 12,
+    "action": "INSERT_INTERNAL",
+    "pageId": 3,
+    "insertKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 8
+        }
+      ]
+    },
+    "atIndex": 0,
+    "newKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 8
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 12
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 43
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 63
+          }
+        ]
+      }
+    ],
+    "description": "Insert 8 at index 0 -> Keys: [8, 12, 43, 63]"
+  },
+  {
+    "step": 13,
+    "action": "CHECK_OVERFLOW",
+    "pageId": 3,
+    "currentSize": 4,
+    "maxSize": 3,
+    "isOverflow": true,
+    "description": "Check size: 4 > Max 3 -> OVERFLOW DETECTED"
+  },
+  {
+    "step": 14,
+    "action": "SPLIT_NODE",
+    "pageId": 3,
+    "newPageId": 21,
+    "splitKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 12
+        }
+      ]
+    },
+    "leftKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 8
+          }
+        ]
+      }
+    ],
+    "rightKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 43
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 63
+          }
+        ]
+      }
+    ],
+    "promoteKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 12
+        }
+      ]
+    },
+    "description": "Split Page 3 -> Left: [8], Right (21): [43, 63] -> Move 12 up"
+  },
+  {
+    "step": 15,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 8"
+  },
+  {
+    "step": 16,
+    "action": "FIND_POS",
+    "pageId": 8,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 136
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 203
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 12
+        }
+      ]
+    },
+    "targetIndex": 0,
+    "description": "Scan [73, 136, 203] -> Target position: 0"
+  },
+  {
+    "step": 17,
+    "action": "INSERT_INTERNAL",
+    "pageId": 8,
+    "insertKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 12
+        }
+      ]
+    },
+    "atIndex": 0,
+    "newKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 12
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 136
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 203
+          }
+        ]
+      }
+    ],
+    "description": "Insert 12 at index 0 -> Keys: [12, 73, 136, 203]"
+  },
+  {
+    "step": 18,
+    "action": "CHECK_OVERFLOW",
+    "pageId": 8,
+    "currentSize": 4,
+    "maxSize": 3,
+    "isOverflow": true,
+    "description": "Check size: 4 > Max 3 -> OVERFLOW DETECTED"
+  },
+  {
+    "step": 19,
+    "action": "SPLIT_NODE",
+    "pageId": 8,
+    "newPageId": 22,
+    "splitKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 73
+        }
+      ]
+    },
+    "leftKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 12
+          }
+        ]
+      }
+    ],
+    "rightKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 136
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 203
+          }
+        ]
+      }
+    ],
+    "promoteKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 73
+        }
+      ]
+    },
+    "description": "Split Page 8 -> Left: [12], Right (22): [136, 203] -> Move 73 up"
+  },
+  {
+    "step": 20,
+    "action": "CREATE_ROOT",
+    "pageId": 23,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      }
+    ],
+    "children": [
+      8,
+      22
+    ],
+    "description": "Create new Root Page 23 with key [73]"
+  }
+]

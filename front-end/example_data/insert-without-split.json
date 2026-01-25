@@ -1,0 +1,170 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 125
+        }
+      ]
+    },
+    "keyValues": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 73
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 136
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 203
+          }
+        ]
+      }
+    ],
+    "description": "Compare 125 vs [73, 136, 203] -> 125 >= 73 -> Next: page 16"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 16,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 16"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 16,
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 125
+        }
+      ]
+    },
+    "keyValues": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 121
+          }
+        ]
+      }
+    ],
+    "description": "Compare 125 vs [121] -> 125 >= 121 -> Next: page 13"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 13,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 13"
+  },
+  {
+    "step": 6,
+    "action": "FIND_POS",
+    "pageId": 13,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 121
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 134
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 125
+        }
+      ]
+    },
+    "targetIndex": 1,
+    "description": "Scan [121, 134] -> Target position: 1"
+  },
+  {
+    "step": 7,
+    "action": "INSERT_LEAF",
+    "pageId": 13,
+    "insertKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 125
+        }
+      ]
+    },
+    "atIndex": 1,
+    "newKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 121
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 125
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 134
+          }
+        ]
+      }
+    ],
+    "description": "Insert 125 at index 1 -> New keys: [121, 125, 134]"
+  },
+  {
+    "step": 8,
+    "action": "CHECK_OVERFLOW",
+    "pageId": 13,
+    "currentSize": 3,
+    "maxSize": 3,
+    "isOverflow": false,
+    "description": "Check size: 3 <= Max 3 -> OK"
+  }
+]

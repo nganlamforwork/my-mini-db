@@ -204,3 +204,82 @@ export function getThemeColors() {
   };
 }
 
+
+/**
+ * Draw dashed links between sibling leaf nodes.
+ * 
+ * Used for visualizing the linked-list structure of B+ Tree leaves.
+ * Abstracts the position/width retrieval so it can be used by both
+ * the animated renderer (using live positions) and the static export (using layout positions).
+ */
+export function drawLeafSiblingLinks(
+  ctx: CanvasRenderingContext2D,
+  layout: Array<{ id: number }>,
+  treeData: { nodes: Record<string, TreeNode> },
+  getNodeMetrics: (id: number) => { x: number; y: number; width: number } | null | undefined,
+  getNextPageOverride?: (id: number) => number | null | undefined
+) {
+  ctx.save();
+  ctx.lineWidth = 2;
+  const isDark = document.documentElement.classList.contains('dark');
+  ctx.strokeStyle = isDark ? '#10b981' : '#059669';
+  ctx.setLineDash([5, 5]);
+
+  layout.forEach(node => {
+    const nodeData = treeData.nodes[node.id.toString()];
+    if (!nodeData || nodeData.type !== 'leaf') return;
+
+    let nextPage: number | null | undefined = nodeData.nextPage;
+    if (getNextPageOverride) {
+       const override = getNextPageOverride(node.id);
+       if (override !== undefined) nextPage = override;
+    }
+
+    if (!nextPage) return;
+
+    const currentMetrics = getNodeMetrics(node.id);
+    const nextMetrics = getNodeMetrics(nextPage);
+
+    if (!currentMetrics || !nextMetrics) return;
+
+    const rightX = currentMetrics.x + currentMetrics.width / 2;
+    const leftX = nextMetrics.x - nextMetrics.width / 2;
+
+    ctx.beginPath();
+    ctx.moveTo(rightX, currentMetrics.y);
+    ctx.lineTo(leftX, nextMetrics.y);
+    ctx.stroke();
+  });
+
+  ctx.restore();
+}
+
+/**
+ * Creates a new TreeNode with an inserted placeholder (blank) key.
+ * 
+ * This function handles the creation of a new node object derived from an existing one,
+ * injecting a dummy key column into the keys array. It is intended for visualization purposes
+ * where we want to show an "empty slot" or "new key slot" before the actual data is committed.
+ *
+ * @param node The original TreeNode
+ * @param index The index at which to insert the placeholder (optional, defaults to end)
+ */
+export function createNodeWithPlaceholderKey(node: TreeNode, index?: number): TreeNode {
+  if (!node.keys) return node;
+  
+  const newKeys = [...node.keys];
+  const placeholderKey: any = { 
+    values: [{ type: 'string', value: ' ' }] // Blank value with space to ensure it renders empty slot
+  };
+  
+  if (index !== undefined && index >= 0 && index <= newKeys.length) {
+    newKeys.splice(index, 0, placeholderKey);
+  } else {
+    newKeys.push(placeholderKey);
+  }
+  
+  return {
+    ...node,
+    keys: newKeys
+  };
+}

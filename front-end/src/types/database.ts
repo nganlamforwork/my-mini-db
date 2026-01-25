@@ -50,32 +50,6 @@ export interface DatabaseInfo {
   };
 }
 
-// Cache Statistics
-export interface CacheStats {
-  size: number;
-  maxSize: number;
-  hits: number;
-  misses: number;
-  evictions: number;
-}
-
-// Cache Pages
-export interface CachePages {
-  pageIds: number[];
-  count: number;
-}
-
-// I/O Read Statistics
-export interface IOReadEntry {
-  pageId: number;
-  pageType: 'meta' | 'internal' | 'leaf';
-  timestamp: string;
-}
-
-export interface IOReadInfo {
-  totalReads: number;
-  details: IOReadEntry[];
-}
 
 // Tree Configuration
 export interface TreeConfig {
@@ -87,113 +61,6 @@ export interface TreeConfig {
   height: number;
 }
 
-// Step types from API - matching backend exactly
-export type StepType = 
-  // Navigation & Search Events
-  | 'TRAVERSE_START'
-  | 'NODE_VISIT'
-  | 'KEY_COMPARISON'
-  | 'CHILD_POINTER_SELECTED'
-  // Insert Logic
-  | 'LEAF_FOUND'
-  | 'INSERT_ENTRY'
-  | 'OVERFLOW_DETECTED'
-  | 'NODE_SPLIT'
-  | 'PROMOTE_KEY'
-  | 'NEW_ROOT_CREATED'
-  | 'REBALANCE_COMPLETE'
-  // Delete Logic
-  | 'ENTRY_REMOVED'
-  | 'UNDERFLOW_DETECTED'
-  | 'CHECK_SIBLING'
-  | 'BORROW_LEFT'
-  | 'BORROW_RIGHT'
-  | 'MERGE_NODES'
-  | 'SHRINK_TREE'
-  // Operation Lifecycle
-  | 'OPERATION_COMPLETE'
-  | 'SEARCH_FOUND'
-  | 'SEARCH_NOT_FOUND'
-  // Legacy types (kept for backward compatibility during transition)
-  | 'TRAVERSE_NODE'
-  | 'INSERT_KEY'
-  | 'UPDATE_KEY'
-  | 'DELETE_KEY'
-  | 'BORROW_FROM_LEFT'
-  | 'BORROW_FROM_RIGHT'
-  | 'BORROW_KEY'
-  | 'WAL_APPEND'
-  | 'BUFFER_FLUSH'
-  | 'PAGE_LOAD'
-  | 'PAGE_FLUSH'
-  | 'CACHE_HIT'
-  | 'CACHE_MISS'
-  | 'EVICT_PAGE'
-  | 'ADD_TEMP_KEY'
-  | 'CHECK_OVERFLOW'
-  | 'MERGE_NODE';
-
-// Execution Step from API - matching backend structure exactly
-export interface ExecutionStep {
-  step_id: number;
-  type: StepType;
-  node_id?: string;
-  target_id?: string | null;
-  key?: CompositeKey | null;
-  value?: Record | null;
-  depth: number;
-  metadata?: { [key: string]: any };
-  
-  // Legacy fields (for backward compatibility during transition)
-  nodeId?: string;
-  keys?: CompositeKey[];
-  children?: number[];
-  highlightKey?: CompositeKey;
-  originalNode?: string;
-  newNode?: string;
-  newNodes?: string[];
-  separatorKey?: CompositeKey;
-  targetNodeId?: string;
-  isOverflow?: boolean;
-  order?: number;
-  lsn?: number;
-  pageId?: number;
-}
-
-// Operation Response from API
-export interface OperationResponse {
-  success: boolean;
-  operation: 'INSERT' | 'UPDATE' | 'DELETE' | 'SEARCH' | 'RANGE_QUERY';
-  key?: CompositeKey;
-  value?: Record;
-  keys?: CompositeKey[];
-  values?: Record[];
-  steps?: ExecutionStep[]; // Optional - only present when enable_steps=true
-  error?: string;
-}
-
-// WAL Info
-export interface WALEntryInfo {
-  lsn: number;
-  type: string; // "insert", "update", "delete", "checkpoint"
-  pageId: number;
-}
-
-export interface WALInfo {
-  nextLSN: number;
-  entries?: WALEntryInfo[];
-  checkpoint?: number;
-}
-
-// Log Entry for system log
-export interface LogEntry {
-  id: string;
-  timestamp: Date;
-  message: string;
-  type: 'info' | 'success' | 'error' | 'warning';
-  steps?: ExecutionStep[]; // Steps from API operation
-  operation?: 'INSERT' | 'UPDATE' | 'DELETE' | 'SEARCH' | 'RANGE_QUERY';
-}
 
 // Schema types for Version 7.0
 export interface ColumnDefinition {
@@ -204,4 +71,260 @@ export interface ColumnDefinition {
 export interface Schema {
   columns: ColumnDefinition[];
   primaryKey: string[]; // Ordered list of column names
+}
+
+// Visualization Step Types for Search/Insert process
+export type StepAction = 
+  | 'NODE_VISIT' // Highlighting node visited
+  | 'COMPARE_RANGE' // Highlighting key found
+  | 'SCAN_KEYS' // Highlighting key found
+  | 'FIND_POS' // Highlighting key found
+  | 'INSERT_LEAF' // Add key into leaf (highlighting key inserted).
+  | 'INSERT_INTERNAL' // Add key into internal node (highlighting key inserted).
+  | 'CHECK_OVERFLOW'  // Highlighting node to checkoverflow. Overflow => red,  no overflow =>green
+  | 'SPLIT_NODE' // Split into 2 nodes (still connect 2 nodes by parent node)
+  | 'CREATE_ROOT'  // Create root node
+  | 'INSERT_FAIL' // Duplicate key or other error
+  | 'SCAN_RANGE' // Range query scan on leaf: highlight key by key it scans
+  | 'LINK_NEXT' // Traverse to next leaf: highlight next leaf
+  // Delete Operations
+  | 'DELETE_LEAF'
+  | 'CHECK_UNDERFLOW'
+  | 'CHECK_SIBLINGS'
+  | 'BORROW_FROM_SIBLING'
+  | 'UPDATE_SEPARATOR'
+  | 'MERGE_LEAF'
+  | 'UPDATE_LINK'
+  | 'DELETE_INDEX'
+  | 'INTERNAL_BORROW_ROTATE'
+  | 'UPDATE_KEYS_ROTATION'
+  | 'UPDATE_LEAF_VALUE'
+  | 'FINAL_STATE';
+
+export interface CommonStepBase {
+  step: number;
+  action: StepAction;
+  pageId: number;
+  description: string;
+  nodeOverrides?: { pageId: number; keys: CompositeKey[] }[];
+}
+
+export interface NodeVisitStep extends CommonStepBase {
+  action: 'NODE_VISIT';
+  nodeType?: 'internal' | 'leaf';
+}
+
+export interface CompareRangeStep extends CommonStepBase {
+  action: 'COMPARE_RANGE';
+  searchKey?: CompositeKey; 
+  keyValues?: CompositeKey[]; // Keys available in node
+  selectedChildIndex?: number;
+  nextPageId?: number;
+}
+
+export interface ScanKeysStep extends CommonStepBase {
+  action: 'SCAN_KEYS';
+  searchKey?: CompositeKey;
+  keyValues?: CompositeKey[]; // Legacy support
+  keys?: CompositeKey[]; 
+  foundAtIndex?: number; // -1 if not found
+}
+
+export interface FindPosStep extends CommonStepBase {
+  action: 'FIND_POS';
+  searchKey?: CompositeKey;
+  keys?: CompositeKey[];
+  targetIndex: number;
+  foundAtIndex?: number;
+}
+
+export interface InsertLeafStep extends CommonStepBase {
+  action: 'INSERT_LEAF';
+  insertKey: CompositeKey;
+  atIndex: number;
+  newKeys: CompositeKey[];
+}
+
+export interface InsertInternalStep extends CommonStepBase {
+  action: 'INSERT_INTERNAL';
+  insertKey: CompositeKey;
+  atIndex: number;
+  newKeys: CompositeKey[];
+}
+
+export interface CheckOverflowStep extends CommonStepBase {
+  action: 'CHECK_OVERFLOW';
+  currentSize: number;
+  maxSize: number;
+  isOverflow: boolean;
+  keys?: CompositeKey[]; // Added keys
+}
+
+export interface SplitNodeStep extends CommonStepBase {
+  action: 'SPLIT_NODE';
+  newPageId: number;
+  parentId?: number; // Added parentId
+  splitKey: CompositeKey;
+  leftKeys: CompositeKey[];
+  rightKeys: CompositeKey[];
+  leftChildren?: number[]; // Added for Internal Split
+  rightChildren?: number[]; // Added for Internal Split
+  promoteKey: CompositeKey;
+}
+
+export interface CreateRootStep extends CommonStepBase {
+  action: 'CREATE_ROOT';
+  keys: CompositeKey[];
+  children: number[];
+}
+
+export interface InsertFailStep extends CommonStepBase {
+  action: 'INSERT_FAIL';
+  reason: string;
+}
+
+export interface ScanRangeStep extends CommonStepBase {
+  action: 'SCAN_RANGE';
+  keys?: CompositeKey[];
+  rangeStart?: CompositeKey;
+  rangeEnd?: CompositeKey;
+  collected?: CompositeKey[];
+  stopReason?: string;
+}
+
+export interface LinkNextStep extends CommonStepBase {
+  action: 'LINK_NEXT';
+  fromPageId: number;
+  toPageId: number;
+}
+
+// --- Delete Operation Steps ---
+
+export interface DeleteLeafStep extends CommonStepBase {
+  action: 'DELETE_LEAF';
+  deleteKey: CompositeKey;
+  atIndex: number;
+  newKeys: CompositeKey[];
+}
+
+export interface CheckUnderflowStep extends CommonStepBase {
+  action: 'CHECK_UNDERFLOW';
+  currentSize: number;
+  minSize: number;
+  isUnderflow: boolean;
+  keys?: CompositeKey[];
+}
+
+export interface CheckSiblingsStep extends CommonStepBase {
+  action: 'CHECK_SIBLINGS';
+  leftSiblingId?: number | null;
+  leftSize?: number;
+  rightSiblingId?: number | null;
+  rightSize?: number;
+  keys?: CompositeKey[];
+}
+
+export interface BorrowFromSiblingStep extends CommonStepBase {
+  action: 'BORROW_FROM_SIBLING';
+  siblingPageId: number;
+  borrowedKey: CompositeKey;
+  direction: 'LEFT_TO_RIGHT' | 'RIGHT_TO_LEFT';
+  keys?: CompositeKey[]; // For current node
+  siblingKeys?: CompositeKey[]; // For sibling node
+}
+
+export interface UpdateSeparatorStep extends CommonStepBase {
+  action: 'UPDATE_SEPARATOR';
+  oldKey: CompositeKey;
+  newKey: CompositeKey;
+}
+
+export interface MergeLeafStep extends CommonStepBase {
+  action: 'MERGE_LEAF';
+  removePageId: number;
+  direction: 'RIGHT_INTO_LEFT' | 'LEFT_INTO_RIGHT';
+  mergedKeys: CompositeKey[];
+}
+
+export interface UpdateLinkStep extends CommonStepBase {
+  action: 'UPDATE_LINK';
+  oldNext?: number | null;
+  newNext?: number | null;
+}
+
+export interface DeleteIndexStep extends CommonStepBase {
+  action: 'DELETE_INDEX';
+  deleteKey: CompositeKey;
+  deleteChildPtr?: number;
+  newKeys: CompositeKey[];
+  mergedChildren?: number[];
+  mergeTargetId?: number;
+}
+
+export interface InternalBorrowRotateStep extends CommonStepBase {
+  action: 'INTERNAL_BORROW_ROTATE';
+  siblingPageId: number;
+  parentPageId: number;
+  direction: 'LEFT_TO_RIGHT' | 'RIGHT_TO_LEFT';
+  movedChildId?: number;
+  keys?: CompositeKey[];
+  siblingKeys?: CompositeKey[];
+}
+
+export interface UpdateKeysRotationStep extends CommonStepBase {
+  action: 'UPDATE_KEYS_ROTATION';
+  parentKeyIndex: number;
+  oldParentKey: CompositeKey;
+  newParentKey: CompositeKey;
+  movedKeyDown: CompositeKey;
+}
+
+export interface UpdateLeafValueStep extends CommonStepBase {
+  action: 'UPDATE_LEAF_VALUE';
+  key: CompositeKey;
+  oldValue: Record | null;
+  newValue: Record;
+  atIndex: number;
+}
+
+export interface FinalStateStep extends CommonStepBase {
+  action: 'FINAL_STATE';
+  rootKeys?: CompositeKey[];
+  // Flexible structure for confirming final state
+  [key: string]: any;
+}
+
+export type VisualizationStep = 
+  | NodeVisitStep
+  | CompareRangeStep
+  | ScanKeysStep
+  | FindPosStep
+  | InsertLeafStep
+  | InsertInternalStep
+  | CheckOverflowStep
+  | SplitNodeStep
+  | CreateRootStep
+  | InsertFailStep
+  | ScanRangeStep
+  | LinkNextStep
+  | DeleteLeafStep
+  | CheckUnderflowStep
+  | CheckSiblingsStep
+  | BorrowFromSiblingStep
+  | UpdateSeparatorStep
+  | MergeLeafStep
+  | UpdateLinkStep
+  | DeleteIndexStep
+  | InternalBorrowRotateStep
+  | UpdateKeysRotationStep
+  | UpdateLeafValueStep
+  | FinalStateStep;
+
+export interface LogEntry {
+  id: string;
+  timestamp: Date;
+  message: string;
+  type: 'info' | 'success' | 'error' | 'warning';
+  steps?: VisualizationStep[]; 
+  operation?: 'INSERT' | 'UPDATE' | 'DELETE' | 'SEARCH' | 'RANGE_QUERY';
 }

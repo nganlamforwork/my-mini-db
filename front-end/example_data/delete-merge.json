@@ -1,0 +1,128 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit ROOT page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "searchKey": { "values": [{ "type": "int", "value": 143 }] },
+    "keyValues": [
+        { "values": [{ "type": "int", "value": 100 }] }
+    ],
+    "description": "Compare [143] vs [[100]] -> [143] >= [100] -> Next: page 7"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 7,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 7"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 7,
+    "searchKey": { "values": [{ "type": "int", "value": 143 }] },
+    "keyValues": [
+        { "values": [{ "type": "int", "value": 133 }] },
+        { "values": [{ "type": "int", "value": 139 }] }
+    ],
+    "description": "Compare [143] vs [[133], [139]] -> [143] > [139] -> Next: page 10"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 10,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 10"
+  },
+  {
+    "step": 6,
+    "action": "FIND_POS",
+    "pageId": 10,
+    "keys": [
+        { "values": [{ "type": "int", "value": 143 }] }
+    ],
+    "searchKey": { "values": [{ "type": "int", "value": 143 }] },
+    "foundAtIndex": 0,
+    "description": "Scan [[143]] -> Found [143] at index 0"
+  },
+  {
+    "step": 7,
+    "action": "DELETE_LEAF",
+    "pageId": 10,
+    "deleteKey": { "values": [{ "type": "int", "value": 143 }] },
+    "atIndex": 0,
+    "newKeys": [],
+    "description": "Delete [143] -> Node empty -> Size: 0"
+  },
+  {
+    "step": 8,
+    "action": "CHECK_UNDERFLOW",
+    "pageId": 10,
+    "currentSize": 0,
+    "minSize": 1,
+    "isUnderflow": true,
+    "description": "Check size: 0 < Min 1 -> UNDERFLOW DETECTED"
+  },
+  {
+    "step": 9,
+    "action": "CHECK_SIBLINGS",
+    "pageId": 10,
+    "leftSiblingId": 2,
+    "leftSize": 1,
+    "rightSiblingId": null,
+    "description": "Check Left (Page 2): Size 1. Cannot Borrow (Needs >1) -> DECISION: MERGE"
+  },
+  {
+    "step": 10,
+    "action": "MERGE_LEAF",
+    "pageId": 2,
+    "removePageId": 10,
+    "direction": "RIGHT_INTO_LEFT",
+    "mergedKeys": [
+        { "values": [{ "type": "int", "value": 138 }] }
+    ],
+    "description": "Merge Page 10 into Page 2 -> Page 2 keys: [[138]]. Page 10 deleted."
+  },
+  {
+    "step": 11,
+    "action": "UPDATE_LINK",
+    "pageId": 2,
+    "oldNext": 10,
+    "newNext": null,
+    "description": "Update Page 2 NextPage pointer: 10 -> null"
+  },
+  {
+    "step": 12,
+    "action": "NODE_VISIT",
+    "pageId": 7,
+    "nodeType": "internal",
+    "description": "Visit PARENT page 7 to remove separator"
+  },
+  {
+    "step": 13,
+    "action": "DELETE_INDEX",
+    "pageId": 7,
+    "deleteKey": { "values": [{ "type": "int", "value": 139 }] },
+    "deleteChildPtr": 10,
+    "newKeys": [
+        { "values": [{ "type": "int", "value": 133 }] }
+    ],
+    "description": "Remove key [139] and pointer to Page 10. Remaining keys: [[133]]"
+  },
+  {
+    "step": 14,
+    "action": "CHECK_UNDERFLOW",
+    "pageId": 7,
+    "currentSize": 1,
+    "minSize": 1,
+    "isUnderflow": false,
+    "description": "Check size: 1 >= Min 1 -> OK"
+  }
+]

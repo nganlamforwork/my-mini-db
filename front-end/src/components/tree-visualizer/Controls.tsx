@@ -1,20 +1,20 @@
 /**
  * Controls Component
- * 
+ *
  * @description
  * UI component providing zoom and download controls for the tree visualization.
  * Displays as a floating control panel in the top-right corner of the canvas.
- * 
+ *
  * Features:
  * - Zoom in/out buttons
  * - Reset view button (fits tree to viewport)
  * - Download menu (JPG, PNG, SVG formats)
  * - Current zoom level display
- * 
+ *
  * @usage
  * ```tsx
  * import { Controls } from './Controls';
- * 
+ *
  * <Controls
  *   camera={{ x: 0, y: 0, zoom: 1.0 }}
  *   onZoomIn={() => setZoom(prev => prev * 1.2)}
@@ -23,35 +23,43 @@
  *   onDownloadImage={(format) => handleDownload(format)}
  * />
  * ```
- * 
+ *
  * @props
  * - camera: Current camera state (position and zoom)
  * - onZoomIn: Callback for zoom in action
  * - onZoomOut: Callback for zoom out action
  * - onResetView: Callback to reset camera to fit tree
  * - onDownloadImage: Callback with format ('jpg' | 'png' | 'svg')
- * 
+ *
  * @note
  * This is a presentational component. All logic should be handled by parent
  * component (typically TreeCanvas).
  */
 
-import React from 'react';
-import { ZoomIn, ZoomOut, Download, RotateCcw, FileImage, FileType, Image as ImageIcon } from 'lucide-react';
-import { Button } from '../ui/button';
+import React from "react";
+import {
+  ZoomIn,
+  ZoomOut,
+  Download,
+  RotateCcw,
+  FileImage,
+  FileType,
+  Image as ImageIcon,
+} from "lucide-react";
+import { Button } from "../ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
-} from '../ui/dropdown-menu';
+} from "../ui/dropdown-menu";
 
 export interface ControlsProps {
   camera: { x: number; y: number; zoom: number };
   onZoomIn: () => void;
   onZoomOut: () => void;
   onResetView: () => void;
-  onDownloadImage: (format: 'jpg' | 'png' | 'svg') => void;
+  onDownloadImage: (format: "jpg" | "png" | "svg") => void;
 }
 
 export const Controls: React.FC<ControlsProps> = ({
@@ -103,15 +111,15 @@ export const Controls: React.FC<ControlsProps> = ({
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end">
-          <DropdownMenuItem onClick={() => onDownloadImage('jpg')}>
+          <DropdownMenuItem onClick={() => onDownloadImage("jpg")}>
             <ImageIcon className="mr-2 h-4 w-4" />
             <span>JPG (with background)</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onDownloadImage('png')}>
+          <DropdownMenuItem onClick={() => onDownloadImage("png")}>
             <FileImage className="mr-2 h-4 w-4" />
             <span>PNG (transparent)</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => onDownloadImage('svg')}>
+          <DropdownMenuItem onClick={() => onDownloadImage("svg")}>
             <FileType className="mr-2 h-4 w-4" />
             <span>SVG (vector)</span>
           </DropdownMenuItem>

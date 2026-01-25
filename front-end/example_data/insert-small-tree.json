@@ -1,0 +1,187 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 1,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 1"
+  },
+  {
+    "step": 2,
+    "action": "FIND_POS",
+    "pageId": 1,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 1
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 2
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 3
+          }
+        ]
+      }
+    ],
+    "searchKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 4
+        }
+      ]
+    },
+    "targetIndex": 3,
+    "description": "Scan [1, 2, 3] -> Target position: 3"
+  },
+  {
+    "step": 3,
+    "action": "INSERT_LEAF",
+    "pageId": 1,
+    "insertKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 4
+        }
+      ]
+    },
+    "atIndex": 3,
+    "newKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 1
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 2
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 3
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 4
+          }
+        ]
+      }
+    ],
+    "description": "Insert 4 at index 3 -> Keys: [1, 2, 3, 4]"
+  },
+  {
+    "step": 4,
+    "action": "CHECK_OVERFLOW",
+    "pageId": 1,
+    "currentSize": 4,
+    "maxSize": 3,
+    "isOverflow": true,
+    "description": "Check size: 4 > Max 3 -> OVERFLOW DETECTED"
+  },
+  {
+    "step": 5,
+    "action": "SPLIT_NODE",
+    "pageId": 1,
+    "newPageId": 2,
+    "splitKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 3
+        }
+      ]
+    },
+    "leftKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 1
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 2
+          }
+        ]
+      }
+    ],
+    "rightKeys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 3
+          }
+        ]
+      },
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 4
+          }
+        ]
+      }
+    ],
+    "promoteKey": {
+      "values": [
+        {
+          "type": "int",
+          "value": 3
+        }
+      ]
+    },
+    "description": "Split Page 1 -> Left: [1, 2], Right (2): [3, 4] -> Copy 3 up"
+  },
+  {
+    "step": 6,
+    "action": "CREATE_ROOT",
+    "pageId": 3,
+    "keys": [
+      {
+        "values": [
+          {
+            "type": "int",
+            "value": 3
+          }
+        ]
+      }
+    ],
+    "children": [
+      1,
+      2
+    ],
+    "description": "Create new Root Page 3 with key [3]"
+  }
+]

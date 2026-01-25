@@ -1,0 +1,78 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit ROOT page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "searchKey": { "values": [{ "type": "int", "value": 25 }] },
+    "keyValues": [
+        { "values": [{ "type": "int", "value": 67 }] },
+        { "values": [{ "type": "int", "value": 165 }] }
+    ],
+    "description": "Compare [25] vs [[67], [165]] -> [25] < [67] -> Next: page 3"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 3,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 3"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 3,
+    "searchKey": { "values": [{ "type": "int", "value": 25 }] },
+    "keyValues": [
+        { "values": [{ "type": "int", "value": 18 }] },
+        { "values": [{ "type": "int", "value": 25 }] },
+        { "values": [{ "type": "int", "value": 52 }] }
+    ],
+    "description": "Compare [25] vs [[18], [25], [52]] -> [25] >= [25] (Separator) -> Next: page 9"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 9,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 9"
+  },
+  {
+    "step": 6,
+    "action": "FIND_POS",
+    "pageId": 9,
+    "keys": [
+        { "values": [{ "type": "int", "value": 25 }] },
+        { "values": [{ "type": "int", "value": 38 }] }
+    ],
+    "searchKey": { "values": [{ "type": "int", "value": 25 }] },
+    "foundAtIndex": 0,
+    "description": "Scan [[25], [38]] -> Found [25] at index 0"
+  },
+  {
+    "step": 7,
+    "action": "DELETE_LEAF",
+    "pageId": 9,
+    "deleteKey": { "values": [{ "type": "int", "value": 25 }] },
+    "atIndex": 0,
+    "newKeys": [
+        { "values": [{ "type": "int", "value": 38 }] }
+    ],
+    "description": "Delete [25] at index 0 -> Remaining keys: [[38]]"
+  },
+  {
+    "step": 8,
+    "action": "CHECK_UNDERFLOW",
+    "pageId": 9,
+    "currentSize": 1,
+    "minSize": 1,
+    "isUnderflow": false,
+    "description": "Check size: 1 >= Min 1 -> OK. Transaction Commit."
+  }
+]

@@ -5,39 +5,54 @@ import { SearchForm } from './forms/SearchForm';
 import { UpdateForm } from './forms/UpdateForm';
 import { DeleteForm } from './forms/DeleteForm';
 import { RangeQueryForm } from './forms/RangeQueryForm';
-import type { Schema } from '@/types/database';
+import { SimpleKeyValueForm } from './forms/SimpleKeyValueForm';
+import { SimpleRangeForm } from './forms/SimpleRangeForm';
+import type { Schema, CompositeKey, Record as DBRecord } from '@/types/database';
 
 interface OperationDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   operation: 'insert' | 'search' | 'update' | 'delete' | 'range';
-  schema: Schema | null | undefined; // undefined = not loaded yet, null = loaded but doesn't exist
-  onSubmit: (rowData?: Record<string, any>, startKeyData?: Record<string, any>, endKeyData?: Record<string, any>) => void;
+  schema?: Schema | null | undefined; // Optional - not needed for simple operations
+  onSubmit: (rowData?: { key?: CompositeKey; value?: DBRecord } | Record<string, any>, startKeyData?: CompositeKey | Record<string, any>, endKeyData?: CompositeKey | Record<string, any>) => void;
 }
 
 export const OperationDialog: React.FC<OperationDialogProps> = ({ open, onOpenChange, operation, schema, onSubmit }) => {
-  const handleInsertSubmit = (rowData: Record<string, any>) => {
+  const handleInsertSubmit = (rowData: Record<string, any> | { key: CompositeKey; value: DBRecord }) => {
     onSubmit(rowData);
     onOpenChange(false);
   };
 
-  const handleUpdateSubmit = (rowData: Record<string, any>) => {
+  const handleUpdateSubmit = (rowData: Record<string, any> | { key: CompositeKey; value: DBRecord }) => {
     onSubmit(rowData);
     onOpenChange(false);
   };
 
-  const handleSearchSubmit = (keyData: Record<string, any>) => {
-    onSubmit(undefined, keyData);
+  const handleSearchSubmit = (keyData: Record<string, any> | CompositeKey) => {
+    // Handle both old format (keyData object) and new format (CompositeKey directly)
+    if ('values' in keyData && Array.isArray(keyData.values)) {
+      onSubmit(undefined, keyData as CompositeKey);
+    } else {
+      onSubmit(undefined, keyData as any);
+    }
     onOpenChange(false);
   };
 
-  const handleDeleteSubmit = (keyData: Record<string, any>) => {
-    onSubmit(undefined, keyData);
+  const handleDeleteSubmit = (keyData: Record<string, any> | CompositeKey) => {
+    // Handle both old format (keyData object) and new format (CompositeKey directly)
+    if ('values' in keyData && Array.isArray(keyData.values)) {
+      onSubmit(undefined, keyData as CompositeKey);
+    } else {
+      onSubmit(undefined, keyData as any);
+    }
     onOpenChange(false);
   };
 
-  const handleRangeSubmit = (startKeyData: Record<string, any>, endKeyData: Record<string, any>) => {
-    onSubmit(undefined, startKeyData, endKeyData);
+  const handleRangeSubmit = (startKeyData: Record<string, any> | CompositeKey, endKeyData: Record<string, any> | CompositeKey) => {
+    // Handle both old format (keyData object) and new format (CompositeKey directly)
+    const startKey = ('values' in startKeyData && Array.isArray(startKeyData.values)) ? startKeyData as CompositeKey : startKeyData as any;
+    const endKey = ('values' in endKeyData && Array.isArray(endKeyData.values)) ? endKeyData as CompositeKey : endKeyData as any;
+    onSubmit(undefined, startKey, endKey);
     onOpenChange(false);
   };
 
@@ -58,25 +73,6 @@ export const OperationDialog: React.FC<OperationDialogProps> = ({ open, onOpenCh
     }
   };
 
-  // Show loading state if schema is not yet loaded (undefined = not loaded yet)
-  if (schema === undefined) {
-    return (
-      <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="max-w-2xl max-h-[85vh]">
-          <DialogHeader>
-            <DialogTitle className="capitalize">{operation} Operation</DialogTitle>
-            <DialogDescription>{getDescription()}</DialogDescription>
-          </DialogHeader>
-          <div className="flex items-center justify-center py-12">
-            <div className="flex flex-col items-center gap-3">
-              <div className="h-8 w-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-              <p className="text-sm text-muted-foreground">Loading database schema...</p>
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
-    )
-  }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -87,11 +83,61 @@ export const OperationDialog: React.FC<OperationDialogProps> = ({ open, onOpenCh
         </DialogHeader>
 
         <div className="mt-4">
-          {operation === 'insert' && <InsertForm schema={schema} onSubmit={handleInsertSubmit} />}
-          {operation === 'search' && <SearchForm schema={schema} onSubmit={handleSearchSubmit} />}
-          {operation === 'update' && <UpdateForm schema={schema} onSubmit={handleUpdateSubmit} />}
-          {operation === 'delete' && <DeleteForm schema={schema} onSubmit={handleDeleteSubmit} />}
-          {operation === 'range' && <RangeQueryForm schema={schema} onSubmit={handleRangeSubmit} />}
+          {schema ? (
+            <>
+              {operation === 'insert' && <InsertForm schema={schema} onSubmit={handleInsertSubmit} />}
+              {operation === 'search' && <SearchForm schema={schema} onSubmit={handleSearchSubmit} />}
+              {operation === 'update' && <UpdateForm schema={schema} onSubmit={handleUpdateSubmit} />}
+              {operation === 'delete' && <DeleteForm schema={schema} onSubmit={handleDeleteSubmit} />}
+              {operation === 'range' && <RangeQueryForm schema={schema} onSubmit={handleRangeSubmit} />}
+            </>
+          ) : (
+            <>
+              {operation === 'insert' && (
+                <SimpleKeyValueForm
+                  operation="insert"
+                  onSubmit={(key: CompositeKey, value?: DBRecord) => {
+                    if (value) {
+                      handleInsertSubmit({ key, value } as any);
+                    }
+                  }}
+                />
+              )}
+              {operation === 'search' && (
+                <SimpleKeyValueForm
+                  operation="search"
+                  onSubmit={(key: CompositeKey) => {
+                    handleSearchSubmit(key);
+                  }}
+                />
+              )}
+              {operation === 'update' && (
+                <SimpleKeyValueForm
+                  operation="update"
+                  onSubmit={(key: CompositeKey, value?: DBRecord) => {
+                    if (value) {
+                      handleUpdateSubmit({ key, value } as any);
+                    }
+                  }}
+                />
+              )}
+              {operation === 'delete' && (
+                <SimpleKeyValueForm
+                  operation="delete"
+                  onSubmit={(key: CompositeKey) => {
+                    handleDeleteSubmit(key);
+                  }}
+                />
+              )}
+              {operation === 'range' && (
+                <SimpleRangeForm
+                  onSubmit={(startKey: CompositeKey, endKey: CompositeKey) => {
+                    handleRangeSubmit(startKey, endKey);
+                  }}
+                />
+              )}
+            </>
+          )}
         </div>
       </DialogContent>
     </Dialog>

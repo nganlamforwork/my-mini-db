@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { Sun, Moon } from 'lucide-react'
-import { Switch } from './ui/switch'
+import { IconSwitch } from './ui/icon-switch'
 import { cn } from '@/lib/utils'
 
 function getInitialTheme(): 'light' | 'dark' {
@@ -57,15 +57,13 @@ export function Header() {
             ))}
           </nav>
         </div>
-        <div className="flex items-center gap-2">
-          <Sun className="h-4 w-4" />
-          <Switch
-            checked={theme === 'dark'}
-            onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')}
-            aria-label="Toggle theme"
-          />
-          <Moon className="h-4 w-4" />
-        </div>
+        <IconSwitch
+          checked={theme === 'dark'}
+          onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')}
+          activeIcon={Moon}
+          inactiveIcon={Sun}
+          aria-label="Toggle theme"
+        />
       </div>
     </header>
   )

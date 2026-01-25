@@ -1,0 +1,38 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "description": "Visit INTERNAL page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "description": "Compare 136 vs [73, 136, 203] -> 136 >= 136 -> Next: page 12"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 12,
+    "description": "Visit INTERNAL page 12"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 12,
+    "description": "Compare 136 vs [144, 170, 192] -> 136 < 144 -> Next: page 11"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 11,
+    "description": "Visit LEAF page 11"
+  },
+  {
+    "step": 6,
+    "action": "SCAN_KEYS",
+    "pageId": 11,
+    "description": "Scan [136, 138] -> Found 136 at index 0"
+  }
+]

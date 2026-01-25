@@ -1,0 +1,55 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 8 (Root)"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "searchKey": 8,
+    "keyValues": [73, 136, 203],
+    "description": "Compare 8 vs [73, 136, 203] -> 8 < 73 -> Next: page 3"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 3,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 3"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 3,
+    "searchKey": 8,
+    "keyValues": [12, 43, 63],
+    "description": "Compare 8 vs [12, 43, 63] -> 8 < 12 -> Next: page 1"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 1,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 1"
+  },
+  {
+    "step": 6,
+    "action": "FIND_POS",
+    "pageId": 1,
+    "keys": [4, 5, 8, 11],
+    "searchKey": 8,
+    "foundAtIndex": 2,
+    "description": "Scan [4, 5, 8, 11] -> Found 8 at index 2"
+  },
+  {
+    "step": 7,
+    "action": "INSERT_FAIL",
+    "pageId": 1,
+    "reason": "DUPLICATE_KEY",
+    "description": "Key 8 already exists -> Insert Failed"
+  }
+]
