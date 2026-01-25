@@ -39,17 +39,29 @@ export const useTreeRenderer = ({
 }: UseTreeRendererProps) => {
   // Cache for node state (keys) to maintain consistency across steps
   const nodeStateCache = useRef<Map<number, any[]>>(new Map());
+  // Cache for hidden nodes (merged/deleted)
+  const hiddenNodesCache = useRef<Set<number>>(new Set());
+  // Cache for nextPage overrides (link updates)
+  const nextPageCache = useRef<Map<number, number | null>>(new Map());
+  // Cache for child-parent overrides (internal rebalancing)
+  const childParentCache = useRef<Map<number, number>>(new Map());
 
-  // Clear cache when treeData changes (operation finished/reset)
+  // Clear caches when treeData changes
   useEffect(() => {
     nodeStateCache.current.clear();
+    hiddenNodesCache.current.clear();
+    nextPageCache.current.clear();
+    childParentCache.current.clear();
   }, [treeData]);
 
-  // Update cache based on activeStep
+  // Update caches based on activeStep
   useEffect(() => {
     if (!activeStep) return;
 
     const cache = nodeStateCache.current;
+    const hiddenCache = hiddenNodesCache.current;
+    const linkCache = nextPageCache.current;
+    const parentCache = childParentCache.current;
     const step = activeStep;
 
     // Helper to set cache
@@ -57,6 +69,7 @@ export const useTreeRenderer = ({
       if (keys) cache.set(id, keys);
     };
 
+    // ... (Existing cache logic) ...
     // 1. Generic nodeOverrides
     if (step.nodeOverrides) {
         step.nodeOverrides.forEach(o => updateCache(o.pageId, o.keys));
@@ -68,7 +81,6 @@ export const useTreeRenderer = ({
     }
 
     // 3. keys (Check, Scan, etc.)
-    // Only update if it looks like a full snapshot. Most steps providing 'keys' are snapshots.
     if ('keys' in step && step.keys) {
         updateCache(step.pageId, step.keys);
     }
@@ -86,7 +98,7 @@ export const useTreeRenderer = ({
         }
     }
 
-    // 6. keyValues (Compare Range) - usually consistent with node state
+    // 6. keyValues (Compare Range)
     if ('keyValues' in step && step.keyValues) {
         updateCache(step.pageId, step.keyValues);
     }
@@ -94,6 +106,32 @@ export const useTreeRenderer = ({
     // 7. mergedKeys (Merge)
     if ('mergedKeys' in step && step.mergedKeys) {
        updateCache(step.pageId, step.mergedKeys);
+    }
+    
+    // --- Hidden Cache Logic ---
+    if (step.action === 'MERGE_LEAF' && step.removePageId) {
+        hiddenCache.add(step.removePageId);
+    }
+    if (step.action === 'DELETE_INDEX' && step.deleteChildPtr) {
+        hiddenCache.add(step.deleteChildPtr);
+    }
+    
+    // --- Link Cache Logic ---
+    if (step.action === 'UPDATE_LINK' && step.pageId) {
+        // defined in step: newNext: number | null
+        if ('newNext' in step) { // TS check
+             linkCache.set(step.pageId, step.newNext === undefined ? null : step.newNext);
+        }
+    }
+    
+    // --- Parent Cache Logic ---
+    if (step.action === 'INTERNAL_BORROW_ROTATE' && step.movedChildId) {
+        parentCache.set(step.movedChildId, step.pageId);
+    }
+    if (step.action === 'DELETE_INDEX' && step.mergedChildren && step.mergeTargetId) {
+        step.mergedChildren.forEach(childId => {
+            parentCache.set(childId, step.mergeTargetId!);
+        });
     }
 
   }, [activeStep]);
@@ -167,11 +205,17 @@ export const useTreeRenderer = ({
         layout,
         treeData,
         (id) => {
+          if (hiddenNodesCache.current.has(id)) return null;
+
           const pos = positionsRef.current.get(id);
           const layoutNode = layoutNodeMap.get(id);
           if (!pos || !layoutNode) return null;
           
           return { x: pos.x, y: pos.y, width: layoutNode.width };
+        },
+        (id) => {
+            if (nextPageCache.current.has(id)) return nextPageCache.current.get(id);
+            return undefined;
         }
       );
 
@@ -183,21 +227,31 @@ export const useTreeRenderer = ({
       // Build a map of parent -> children for efficient lookup
       const parentChildrenMap = new Map<number, number[]>();
       layout.forEach(node => {
-        if (node.parentId !== null) {
-          if (!parentChildrenMap.has(node.parentId)) {
-            parentChildrenMap.set(node.parentId, []);
+        const overridePid = childParentCache.current.get(node.id);
+        const pid = (overridePid !== undefined) ? overridePid : node.parentId;
+
+        if (pid !== null) {
+          if (!parentChildrenMap.has(pid)) {
+            parentChildrenMap.set(pid, []);
           }
-          parentChildrenMap.get(node.parentId)!.push(node.id);
+          parentChildrenMap.get(pid)!.push(node.id);
         }
       });
       
       layout.forEach(node => {
+        // Skip hidden nodes (edges)
+        if (hiddenNodesCache.current.has(node.id)) return;
+        const overridePid = childParentCache.current.get(node.id);
+        const pid = (overridePid !== undefined) ? overridePid : node.parentId;
+        
+        if (pid && hiddenNodesCache.current.has(pid)) return;
+
         // Get current visual position of child node (updated every frame via lerp)
         const childPos = positionsRef.current.get(node.id);
-        if (!childPos || !node.parentId) return;
+        if (!childPos || !pid) return;
         
         // Get current visual position of parent node (updated every frame via lerp)
-        const parentPos = positionsRef.current.get(node.parentId);
+        const parentPos = positionsRef.current.get(pid);
         if (!parentPos) return;
         
         const childX = childPos.x;
@@ -205,17 +259,15 @@ export const useTreeRenderer = ({
         const parentX = parentPos.x;
         const parentY = parentPos.y;
         
-        // Check for SPLIT_NODE suppression: Hide edge for the new split node
-        // OLD: if (activeStep && activeStep.action === 'SPLIT_NODE' && 'newPageId' in activeStep) ...
-        // NEW: Check if this child is marked as "pending" in the parent node (via TreeCanvas logic)
-        const parentNodeData = treeData.nodes[node.parentId.toString()];
+        // Check for SPLIT_NODE suppression
+        const parentNodeData = treeData.nodes[pid.toString()];
         const parentAny = parentNodeData as any;
         if (parentAny && parentAny.pendingChildren && parentAny.pendingChildren.includes(node.id)) {
-            return; // Edge is pending, do not draw yet
+            return; 
         }
 
         if (!parentNodeData || parentNodeData.type !== 'internal') {
-          // Fallback for non-internal or missing parent - use current visual positions
+          // Fallback
           ctx.beginPath();
           ctx.moveTo(parentX, parentY + 25);
           ctx.bezierCurveTo(parentX, parentY + 70, childX, childY - 70, childX, childY - 25);
@@ -224,10 +276,9 @@ export const useTreeRenderer = ({
         }
         
         // Find child index in parent's children array
-        const parentChildren = parentChildrenMap.get(node.parentId) || [];
+        const parentChildren = parentChildrenMap.get(pid) || [];
         const childIndex = parentChildren.indexOf(node.id);
         if (childIndex === -1) {
-          // Fallback if child not found - use current visual positions
           ctx.beginPath();
           ctx.moveTo(parentX, parentY + 25);
           ctx.bezierCurveTo(parentX, parentY + 70, childX, childY - 70, childX, childY - 25);
@@ -236,8 +287,7 @@ export const useTreeRenderer = ({
         }
         
         // Determine keys for parent to calculate anchors
-        // Use cache if available
-        const cachedParentKeys = nodeStateCache.current.get(node.parentId);
+        const cachedParentKeys = nodeStateCache.current.get(pid);
         const parentKeys = cachedParentKeys || parentNodeData.keys || [];
         
         const numKeys = parentKeys.length;
@@ -305,6 +355,16 @@ export const useTreeRenderer = ({
 
       // Draw Nodes
       positionsRef.current.forEach(pos => {
+        // Hidden check
+        if (hiddenNodesCache.current.has(pos.id)) {
+             let isExempt = false;
+             if (activeStep && 'removePageId' in activeStep && activeStep.removePageId === pos.id) {
+                 // Still show it while the merge action is happening (it will be Red)
+                 isExempt = true;
+             }
+             if (!isExempt) return;
+        }
+
         ctx.save(); // Save context state for each node (handles transforms etc)
         
         const nodeData = treeData.nodes[pos.id.toString()];

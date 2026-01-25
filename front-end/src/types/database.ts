@@ -256,6 +256,8 @@ export interface DeleteIndexStep extends CommonStepBase {
   deleteKey: CompositeKey;
   deleteChildPtr?: number;
   newKeys: CompositeKey[];
+  mergedChildren?: number[];
+  mergeTargetId?: number;
 }
 
 export interface InternalBorrowRotateStep extends CommonStepBase {

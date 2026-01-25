@@ -216,7 +216,8 @@ export function drawLeafSiblingLinks(
   ctx: CanvasRenderingContext2D,
   layout: Array<{ id: number }>,
   treeData: { nodes: Record<string, TreeNode> },
-  getNodeMetrics: (id: number) => { x: number; y: number; width: number } | null | undefined
+  getNodeMetrics: (id: number) => { x: number; y: number; width: number } | null | undefined,
+  getNextPageOverride?: (id: number) => number | null | undefined
 ) {
   ctx.save();
   ctx.lineWidth = 2;
@@ -226,10 +227,18 @@ export function drawLeafSiblingLinks(
 
   layout.forEach(node => {
     const nodeData = treeData.nodes[node.id.toString()];
-    if (!nodeData || nodeData.type !== 'leaf' || !nodeData.nextPage) return;
+    if (!nodeData || nodeData.type !== 'leaf') return;
+
+    let nextPage: number | null | undefined = nodeData.nextPage;
+    if (getNextPageOverride) {
+       const override = getNextPageOverride(node.id);
+       if (override !== undefined) nextPage = override;
+    }
+
+    if (!nextPage) return;
 
     const currentMetrics = getNodeMetrics(node.id);
-    const nextMetrics = getNodeMetrics(nodeData.nextPage);
+    const nextMetrics = getNodeMetrics(nextPage);
 
     if (!currentMetrics || !nextMetrics) return;
 

@@ -469,6 +469,8 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
               deleteKey: separatorKey,
               deleteChildPtr: currentNodeId,
               newKeys: JSON.parse(JSON.stringify(parent.keys)),
+              mergedChildren: currentNode.children ? [...currentNode.children] : undefined,
+              mergeTargetId: leftSiblingId!,
               description: `Remove separator ${formatKey(separatorKey)} and pointer to ${currentNodeId}`
           });
           
@@ -526,6 +528,8 @@ export function deleteKey(treeName: string, key: CompositeKey): OperationRespons
               deleteKey: separatorKey,
               deleteChildPtr: rightSiblingId!,
               newKeys: JSON.parse(JSON.stringify(parent.keys)),
+              mergedChildren: rightSibling.children ? [...rightSibling.children] : undefined,
+              mergeTargetId: currentNodeId,
               description: `Remove separator and pointer to ${rightSiblingId}`
           });
           
