@@ -1,0 +1,109 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit ROOT page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "searchKey": { "values": [{ "type": "int", "value": 38 }] },
+    "keyValues": [
+        { "values": [{ "type": "int", "value": 67 }] },
+        { "values": [{ "type": "int", "value": 165 }] }
+    ],
+    "description": "Compare [38] vs [[67], [165]] -> [38] < [67] -> Next: page 3"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 3,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 3"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 3,
+    "searchKey": { "values": [{ "type": "int", "value": 38 }] },
+    "keyValues": [
+        { "values": [{ "type": "int", "value": 18 }] },
+        { "values": [{ "type": "int", "value": 25 }] },
+        { "values": [{ "type": "int", "value": 52 }] }
+    ],
+    "description": "Compare [38] vs [[18], [25], [52]] -> [38] >= [25] and [38] < [52] -> Next: page 9"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 9,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 9"
+  },
+  {
+    "step": 6,
+    "action": "FIND_POS",
+    "pageId": 9,
+    "keys": [
+        { "values": [{ "type": "int", "value": 38 }] }
+    ],
+    "searchKey": { "values": [{ "type": "int", "value": 38 }] },
+    "foundAtIndex": 0,
+    "description": "Scan [[38]] -> Found [38] at index 0"
+  },
+  {
+    "step": 7,
+    "action": "DELETE_LEAF",
+    "pageId": 9,
+    "deleteKey": { "values": [{ "type": "int", "value": 38 }] },
+    "atIndex": 0,
+    "newKeys": [],
+    "description": "Delete [38] -> Node empty -> Size: 0"
+  },
+  {
+    "step": 8,
+    "action": "CHECK_UNDERFLOW",
+    "pageId": 9,
+    "currentSize": 0,
+    "minSize": 1,
+    "isUnderflow": true,
+    "description": "Check size: 0 < Min 1 -> UNDERFLOW DETECTED"
+  },
+  {
+    "step": 9,
+    "action": "CHECK_SIBLINGS",
+    "pageId": 9,
+    "leftSiblingId": 13,
+    "leftSize": 2,
+    "rightSiblingId": 5,
+    "rightSize": 2,
+    "description": "Check siblings -> Left (Page 13) has 2 keys -> Can Borrow from Left"
+  },
+  {
+    "step": 10,
+    "action": "BORROW_FROM_SIBLING",
+    "pageId": 9,
+    "siblingPageId": 13,
+    "borrowedKey": { "values": [{ "type": "int", "value": 21 }] },
+    "direction": "LEFT_TO_RIGHT",
+    "description": "Move key [21] from Page 13 to Page 9"
+  },
+  {
+    "step": 11,
+    "action": "NODE_VISIT",
+    "pageId": 3,
+    "nodeType": "internal",
+    "description": "Visit PARENT page 3 to update separator"
+  },
+  {
+    "step": 12,
+    "action": "UPDATE_SEPARATOR",
+    "pageId": 3,
+    "oldKey": { "values": [{ "type": "int", "value": 25 }] },
+    "newKey": { "values": [{ "type": "int", "value": 21 }] },
+    "description": "Update separator index 1: [25] -> [21] (New split point)"
+  }
+]

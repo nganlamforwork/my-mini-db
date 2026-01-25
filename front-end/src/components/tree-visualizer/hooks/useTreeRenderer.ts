@@ -264,7 +264,19 @@ export const useTreeRenderer = ({
         let shakeOffsetY = 0; // New Y-axis shake
         let shakeAngle = 0; // Rotation for error
 
-        if (activeStep && (activeStep.pageId === pos.id || (activeStep.action === 'SPLIT_NODE' && activeStep.newPageId === pos.id))) {
+        if (activeStep) {
+           // Broaden active check for multi-node steps
+           if (activeStep.pageId === pos.id) isActive = true;
+           else if ('newPageId' in activeStep && activeStep.newPageId === pos.id) isActive = true;
+           else if ('siblingPageId' in activeStep && activeStep.siblingPageId === pos.id) isActive = true;
+           else if ('leftSiblingId' in activeStep && activeStep.leftSiblingId === pos.id) isActive = true;
+           else if ('rightSiblingId' in activeStep && activeStep.rightSiblingId === pos.id) isActive = true;
+           else if ('removePageId' in activeStep && activeStep.removePageId === pos.id) isActive = true;
+           else if ('parentPageId' in activeStep && activeStep.parentPageId === pos.id) isActive = true;
+           else if ('toPageId' in activeStep && activeStep.toPageId === pos.id) isActive = true;
+        }
+
+        if (isActive && activeStep) {
           isActive = true;
           const timeSinceStart = Date.now() - startTime;
           // ADAPTIVE TIMING LOGIC
@@ -491,28 +503,101 @@ export const useTreeRenderer = ({
                break;
             }
 
-            case 'LINK_NEXT': {
-               // Highlight the visual change. 
-               // This step effectively moves focus to 'toPageId'.
-               // But 'activeStep.pageId' is the CURRENT page (Scan Range comes next).
-               // The visualizer focuses on 'pos.id'.
-               // If pos.id === activeStep.toPageId, highlight it?
-               // The API: rangeQuery.ts step 7: pageId=currentId, toPageId=nextPageId
-               // So if we are rendering 'toPageId', highlight it.
-               
+             case 'LINK_NEXT': {
                if (pos.id === activeStep.toPageId) {
                    isActive = true;
                    activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
                    activeStroke = isDark ? '#3b82f6' : '#2563eb';
-               } else if (pos.id === activeStep.fromPageId) {
-                    // Maybe highlight the 'next' pointer? 
-                    // Visualization doesn't draw explicit next pointers usually (sibling links).
-                    // Sibling links are drawn by 'drawLeafSiblingLinks'.
-                    // We can't easily highlight that line from here.
-                    // Just highlighing the destination node is good.
                }
                break;
             }
+
+            // --- DELETE OPERATIONS ---
+            case 'DELETE_LEAF':
+            case 'DELETE_INDEX':
+               // Highlight node red-ish if becoming empty? Or standard Blue?
+               // Standard Blue for visiting/acting.
+               activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
+               activeStroke = isDark ? '#3b82f6' : '#2563eb';
+               
+               // If empty (detected via numKeys maybe?), user asked for red box.
+               // We can check numKeys in currentKeys.
+               if (numKeys === 0) {
+                   activeNodeFill = isDark ? '#7f1d1d' : '#fee2e2'; 
+                   activeStroke = isDark ? '#ef4444' : '#dc2626';
+               }
+               break;
+
+            case 'CHECK_UNDERFLOW':
+               if ('isUnderflow' in activeStep && activeStep.isUnderflow) {
+                   activeNodeFill = isDark ? '#7f1d1d' : '#fee2e2'; // Red
+                   activeStroke = isDark ? '#ef4444' : '#dc2626';
+               } else {
+                   activeNodeFill = isDark ? '#064e3b' : '#d1fae5'; // Green
+                   activeStroke = isDark ? '#10b981' : '#059669';
+               }
+               break;
+
+            case 'CHECK_SIBLINGS':
+               // Highlight siblings in Amber/Yellow
+               if ((activeStep as any).leftSiblingId === pos.id || (activeStep as any).rightSiblingId === pos.id) {
+                   activeNodeFill = isDark ? '#78350f' : '#fef3c7'; // Amber
+                   activeStroke = isDark ? '#f59e0b' : '#d97706';
+               } else {
+                   // Main node Blue
+                   activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
+                   activeStroke = isDark ? '#3b82f6' : '#2563eb';
+               }
+               break;
+
+            case 'BORROW_FROM_SIBLING':
+            case 'INTERNAL_BORROW_ROTATE':
+               // Sibling (Source) -> Green? Or Blue?
+               // Dest (Current) -> Blue?
+               // Let's use Distinct colors.
+               if ((activeStep as any).siblingPageId === pos.id) {
+                   activeNodeFill = isDark ? '#064e3b' : '#d1fae5'; // Source Green
+                   activeStroke = isDark ? '#10b981' : '#059669';
+               } else {
+                   activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; // Dest Blue
+                   activeStroke = isDark ? '#3b82f6' : '#2563eb';
+               }
+               break;
+
+            case 'MERGE_LEAF':
+               // Target (Keep) -> Blue
+               // Remove -> Red
+               if ((activeStep as any).removePageId === pos.id) {
+                   activeNodeFill = isDark ? '#7f1d1d' : '#fee2e2'; // Red
+                   activeStroke = isDark ? '#ef4444' : '#dc2626';
+                   // Shake?
+                   const SHAKE_AMPLITUDE = 5;
+                   shakeOffsetY = Math.sin(timeSinceStart / 30) * SHAKE_AMPLITUDE;
+               } else {
+                   activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; // Blue
+                   activeStroke = isDark ? '#3b82f6' : '#2563eb';
+               }
+               break;
+
+            case 'UPDATE_SEPARATOR':
+            case 'UPDATE_KEYS_ROTATION':
+            case 'UPDATE_LINK':
+               // Simple highlight
+               activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
+               activeStroke = isDark ? '#3b82f6' : '#2563eb';
+               
+               if (activeStep.action === 'UPDATE_SEPARATOR' && 'newKey' in activeStep) {
+                   // Highlight the separator key?
+                   // If we can find the index.. but strict finding is hard without index provided.
+                   // Just highlight node.
+               }
+               break;
+
+            case 'FINAL_STATE':
+               // New Root Highlight
+                activeNodeFill = isDark ? '#064e3b' : '#d1fae5'; // Green
+                activeStroke = isDark ? '#10b981' : '#059669';
+                break;
           }
         }
         

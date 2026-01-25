@@ -86,7 +86,19 @@ export type StepAction =
   | 'CREATE_ROOT'  // Create root node
   | 'INSERT_FAIL' // Duplicate key or other error
   | 'SCAN_RANGE' // Range query scan on leaf: highlight key by key it scans
-  | 'LINK_NEXT'; // Traverse to next leaf: highlight next leaf
+  | 'LINK_NEXT' // Traverse to next leaf: highlight next leaf
+  // Delete Operations
+  | 'DELETE_LEAF'
+  | 'CHECK_UNDERFLOW'
+  | 'CHECK_SIBLINGS'
+  | 'BORROW_FROM_SIBLING'
+  | 'UPDATE_SEPARATOR'
+  | 'MERGE_LEAF'
+  | 'UPDATE_LINK'
+  | 'DELETE_INDEX'
+  | 'INTERNAL_BORROW_ROTATE'
+  | 'UPDATE_KEYS_ROTATION'
+  | 'FINAL_STATE';
 
 export interface CommonStepBase {
   step: number;
@@ -184,6 +196,88 @@ export interface LinkNextStep extends CommonStepBase {
   toPageId: number;
 }
 
+// --- Delete Operation Steps ---
+
+export interface DeleteLeafStep extends CommonStepBase {
+  action: 'DELETE_LEAF';
+  deleteKey: CompositeKey;
+  atIndex: number;
+  newKeys: CompositeKey[];
+}
+
+export interface CheckUnderflowStep extends CommonStepBase {
+  action: 'CHECK_UNDERFLOW';
+  currentSize: number;
+  minSize: number;
+  isUnderflow: boolean;
+  keys?: CompositeKey[];
+}
+
+export interface CheckSiblingsStep extends CommonStepBase {
+  action: 'CHECK_SIBLINGS';
+  leftSiblingId?: number | null;
+  leftSize?: number;
+  rightSiblingId?: number | null;
+  rightSize?: number;
+  keys?: CompositeKey[];
+}
+
+export interface BorrowFromSiblingStep extends CommonStepBase {
+  action: 'BORROW_FROM_SIBLING';
+  siblingPageId: number;
+  borrowedKey: CompositeKey;
+  direction: 'LEFT_TO_RIGHT' | 'RIGHT_TO_LEFT';
+}
+
+export interface UpdateSeparatorStep extends CommonStepBase {
+  action: 'UPDATE_SEPARATOR';
+  oldKey: CompositeKey;
+  newKey: CompositeKey;
+}
+
+export interface MergeLeafStep extends CommonStepBase {
+  action: 'MERGE_LEAF';
+  removePageId: number;
+  direction: 'RIGHT_INTO_LEFT' | 'LEFT_INTO_RIGHT';
+  mergedKeys: CompositeKey[];
+}
+
+export interface UpdateLinkStep extends CommonStepBase {
+  action: 'UPDATE_LINK';
+  oldNext?: number | null;
+  newNext?: number | null;
+}
+
+export interface DeleteIndexStep extends CommonStepBase {
+  action: 'DELETE_INDEX';
+  deleteKey: CompositeKey;
+  deleteChildPtr?: number;
+  newKeys: CompositeKey[];
+}
+
+export interface InternalBorrowRotateStep extends CommonStepBase {
+  action: 'INTERNAL_BORROW_ROTATE';
+  siblingPageId: number;
+  parentPageId: number;
+  direction: 'LEFT_TO_RIGHT' | 'RIGHT_TO_LEFT';
+  movedChildId?: number;
+}
+
+export interface UpdateKeysRotationStep extends CommonStepBase {
+  action: 'UPDATE_KEYS_ROTATION';
+  parentKeyIndex: number;
+  oldParentKey: CompositeKey;
+  newParentKey: CompositeKey;
+  movedKeyDown: CompositeKey;
+}
+
+export interface FinalStateStep extends CommonStepBase {
+  action: 'FINAL_STATE';
+  rootKeys?: CompositeKey[];
+  // Flexible structure for confirming final state
+  [key: string]: any;
+}
+
 export type VisualizationStep = 
   | NodeVisitStep
   | CompareRangeStep
@@ -196,7 +290,18 @@ export type VisualizationStep =
   | CreateRootStep
   | InsertFailStep
   | ScanRangeStep
-  | LinkNextStep;
+  | LinkNextStep
+  | DeleteLeafStep
+  | CheckUnderflowStep
+  | CheckSiblingsStep
+  | BorrowFromSiblingStep
+  | UpdateSeparatorStep
+  | MergeLeafStep
+  | UpdateLinkStep
+  | DeleteIndexStep
+  | InternalBorrowRotateStep
+  | UpdateKeysRotationStep
+  | FinalStateStep;
 
 export interface LogEntry {
   id: string;

@@ -1,0 +1,160 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit ROOT page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "searchKey": { "values": [{ "type": "int", "value": 100 }] },
+    "keyValues": [
+        { "values": [{ "type": "int", "value": 74 }] }
+    ],
+    "description": "Compare [100] vs [[74]] -> [100] >= [74] -> Next: page 7"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 7,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 7"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 7,
+    "searchKey": { "values": [{ "type": "int", "value": 100 }] },
+    "keyValues": [
+        { "values": [{ "type": "int", "value": 92 }] }
+    ],
+    "description": "Compare [100] vs [[92]] -> [100] >= [92] -> Next: page 6"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 6,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 6"
+  },
+  {
+    "step": 6,
+    "action": "FIND_POS",
+    "pageId": 6,
+    "keys": [
+        { "values": [{ "type": "int", "value": 100 }] }
+    ],
+    "searchKey": { "values": [{ "type": "int", "value": 100 }] },
+    "foundAtIndex": 0,
+    "description": "Scan [[100]] -> Found [100] at index 0"
+  },
+  {
+    "step": 7,
+    "action": "DELETE_LEAF",
+    "pageId": 6,
+    "deleteKey": { "values": [{ "type": "int", "value": 100 }] },
+    "atIndex": 0,
+    "newKeys": [],
+    "description": "Delete [100] -> Node empty -> Size: 0"
+  },
+  {
+    "step": 8,
+    "action": "CHECK_UNDERFLOW",
+    "pageId": 6,
+    "currentSize": 0,
+    "minSize": 1,
+    "isUnderflow": true,
+    "description": "Check size: 0 < Min 1 -> UNDERFLOW (Leaf)"
+  },
+  {
+    "step": 9,
+    "action": "CHECK_SIBLINGS",
+    "pageId": 6,
+    "leftSiblingId": 2,
+    "leftSize": 1,
+    "description": "Check Left (Page 2): Size 1. Cannot Borrow (Needs >1) -> DECISION: MERGE"
+  },
+  {
+    "step": 10,
+    "action": "MERGE_LEAF",
+    "pageId": 2,
+    "removePageId": 6,
+    "direction": "RIGHT_INTO_LEFT",
+    "mergedKeys": [
+        { "values": [{ "type": "int", "value": 84 }] }
+    ],
+    "description": "Merge Page 6 into Page 2. Page 6 deleted."
+  },
+  {
+    "step": 11,
+    "action": "NODE_VISIT",
+    "pageId": 7,
+    "nodeType": "internal",
+    "description": "Visit PARENT page 7 to handle merged child"
+  },
+  {
+    "step": 12,
+    "action": "DELETE_INDEX",
+    "pageId": 7,
+    "deleteKey": { "values": [{ "type": "int", "value": 92 }] },
+    "deleteChildPtr": 6,
+    "newKeys": [],
+    "description": "Remove key [92] and pointer to 6 -> Node 7 Keys: [], Children: [2]"
+  },
+  {
+    "step": 13,
+    "action": "CHECK_UNDERFLOW",
+    "pageId": 7,
+    "currentSize": 0,
+    "minSize": 1,
+    "isUnderflow": true,
+    "description": "Check size: 0 < Min 1 -> UNDERFLOW (Internal)"
+  },
+  {
+    "step": 14,
+    "action": "CHECK_SIBLINGS",
+    "pageId": 7,
+    "leftSiblingId": 3,
+    "leftSize": 2,
+    "description": "Check Left Sibling (Page 3): Size 2 -> Can Borrow (2 > 1)"
+  },
+  {
+    "step": 15,
+    "action": "INTERNAL_BORROW_ROTATE",
+    "pageId": 7,
+    "siblingPageId": 3,
+    "parentPageId": 8,
+    "direction": "LEFT_TO_RIGHT",
+    "movedChildId": 4,
+    "description": "ROTATE: Move Child 4 from Node 3 to Node 7."
+  },
+  {
+    "step": 16,
+    "action": "UPDATE_KEYS_ROTATION",
+    "parentKeyIndex": 0,
+    "oldParentKey": { "values": [{ "type": "int", "value": 74 }] },
+    "newParentKey": { "values": [{ "type": "int", "value": 68 }] },
+    "movedKeyDown": { "values": [{ "type": "int", "value": 74 }] },
+    "description": "Key [68] moves UP from Node 3 to Root. Key [74] moves DOWN from Root to Node 7."
+  },
+  {
+    "step": 17,
+    "action": "FINAL_STATE",
+    "pageId": 8,
+    "rootKeys": [
+        { "values": [{ "type": "int", "value": 68 }] }
+    ],
+    "leftNode3": {
+        "keys": [{ "values": [{ "type": "int", "value": 57 }] }],
+        "children": [1, 5]
+    },
+    "rightNode7": {
+        "keys": [{ "values": [{ "type": "int", "value": 74 }] }],
+        "children": [4, 2]
+    },
+    "description": "Rebalanced: Root splits at [68]. Node 7 now has children [4, 2]."
+  }
+]
