@@ -196,7 +196,9 @@ export function TreeDetail() {
       message: message,
       executionTime,
       key: response.key,
-      value: response.values || response.value,
+      value: response.value,
+      keys: response.keys,
+      values: response.values,
       timestamp: new Date(),
       error: !isSuccess ? (response.error || "Not found") : undefined
     });
@@ -332,16 +334,7 @@ export function TreeDetail() {
 
 
 
-  // Helper to format key for display
-  const formatKeyForMessage = (key?: {
-    values: Array<{ type: string; value: any }>;
-  }): string => {
-    if (!key || !key.values || key.values.length === 0) return "";
-    if (key.values.length === 1) {
-      return String(key.values[0].value);
-    }
-    return `(${key.values.map((v) => String(v.value)).join(", ")})`;
-  };
+
 
   // Initialize tree name from URL or current
   useEffect(() => {
@@ -445,6 +438,10 @@ export function TreeDetail() {
         success: response.success,
         message: response.success ? "Operation completed" : (response.error || "Failed"),
         executionTime,
+        key: response.key,
+        value: response.value,
+        keys: response.keys,
+        values: response.values,
         error: response.error,
         timestamp: new Date(),
       });
@@ -509,7 +506,7 @@ export function TreeDetail() {
 
       await handleOperationResponse(
         response,
-        operation.toUpperCase(),
+        operation === "range" ? "RANGE_QUERY" : operation.toUpperCase(),
         startTime,
       );
     } catch (error) {

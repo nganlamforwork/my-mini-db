@@ -258,6 +258,7 @@ export const useTreeRenderer = ({
         let activeStroke = '';
         const activeKeyIndices = new Set<number>();
         const amberKeyIndices = new Set<number>(); // New: For "First Child" comparison check
+        const greenKeyIndices = new Set<number>(); // New: For Range Query collected keys
         let foundKeyIndex = -1; // Specific index for exact match (Green)
         let shakeOffset = 0; 
         let shakeOffsetY = 0; // New Y-axis shake
@@ -438,8 +439,80 @@ export const useTreeRenderer = ({
               }
               break;
               
-             default:
-               isActive = false;
+            case 'SCAN_RANGE': {
+               activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
+               activeStroke = isDark ? '#3b82f6' : '#2563eb';
+               
+               const nodeKeys = currentKeys || [];
+               const collected = activeStep.collected || [];
+               
+               // Helper to check if a key is in collected list
+               // We need exact match on values
+               const isCollected = (k: any) => {
+                   return collected.some(c => 
+                       c.values.length === k.values.length && 
+                       c.values.every((v: any, i: number) => v.value === k.values[i].value)
+                   );
+               };
+
+               const numKeys = nodeKeys.length;
+               // Calculate how many keys to show based on time
+               // We want to scan linearly
+               const currentIndex = Math.floor(timeSinceStart / KEY_SCAN_DURATION);
+               
+               // If completely stopped
+               if (activeStep.stopReason === 'OUT_OF_RANGE') {
+                   // Calculate when the linear scan reaches the offending key
+                   // We assume keys are sorted. Offending key is the first key > endKey.
+                   // Or simply, we scan until we hit the end of the node or stop?
+                   // The steps usually imply we scan everything up to the stop point.
+                   
+                   // For visualization simple approach: scan ALL keys up to limit?
+                   // Use collected list length as guide? 
+                   // If OUT_OF_RANGE, we probably scanned one extra key (the one that failed).
+                   // Let's deduce the "scanned count" from collected.length + 1?
+                   
+                   // For visualization simple approach: just let the time drive it up to numKeys
+                   // Can handle visual stop here if needed.
+               }
+               
+               for (let i = 0; i < numKeys; i++) {
+                   if (i <= currentIndex) {
+                       activeKeyIndices.add(i);
+                       
+                       // Color logic
+                       if (isCollected(nodeKeys[i])) {
+                           greenKeyIndices.add(i);
+                       }
+                   }
+               }
+               // No shake for OUT_OF_RANGE as per user request
+               break;
+               break;
+            }
+
+            case 'LINK_NEXT': {
+               // Highlight the visual change. 
+               // This step effectively moves focus to 'toPageId'.
+               // But 'activeStep.pageId' is the CURRENT page (Scan Range comes next).
+               // The visualizer focuses on 'pos.id'.
+               // If pos.id === activeStep.toPageId, highlight it?
+               // The API: rangeQuery.ts step 7: pageId=currentId, toPageId=nextPageId
+               // So if we are rendering 'toPageId', highlight it.
+               
+               if (pos.id === activeStep.toPageId) {
+                   isActive = true;
+                   activeNodeFill = isDark ? '#1e3a8a' : '#dbeafe'; 
+                   activeStroke = isDark ? '#3b82f6' : '#2563eb';
+               } else if (pos.id === activeStep.fromPageId) {
+                    // Maybe highlight the 'next' pointer? 
+                    // Visualization doesn't draw explicit next pointers usually (sibling links).
+                    // Sibling links are drawn by 'drawLeafSiblingLinks'.
+                    // We can't easily highlight that line from here.
+                    // Just highlighing the destination node is good.
+               }
+               break;
+            }
           }
         }
         
@@ -486,10 +559,11 @@ export const useTreeRenderer = ({
             const isKeyActive = isActive && activeKeyIndices.has(idx);
             const isKeyAmber = isActive && amberKeyIndices.has(idx); 
             const isKeyFound = idx === foundKeyIndex;
+            const isKeyGreen = isKeyFound || (isActive && greenKeyIndices.has(idx));
             const isKeyHovered = isHovered && hoveredKeyRef.current === idx;
             
             let fill = rootFill;
-            if (isKeyFound) {
+            if (isKeyGreen) {
                  fill = isDark ? '#22c55e' : '#4ade80'; // Green
             } else if (isKeyAmber) {
                  fill = isDark ? '#f59e0b' : '#fcd34d'; 
@@ -555,10 +629,11 @@ export const useTreeRenderer = ({
             const isKeyActive = isActive && activeKeyIndices.has(idx);
             const isKeyAmber = isActive && amberKeyIndices.has(idx); 
             const isKeyFound = idx === foundKeyIndex;
+            const isKeyGreen = isKeyFound || (isActive && greenKeyIndices.has(idx));
             const isKeyHovered = isHovered && hoveredKeyRef.current === idx;
             
             let fill = nodeFill;
-            if (isKeyFound) {
+            if (isKeyGreen) {
                  fill = isDark ? 'rgba(34, 197, 94, 0.2)' : '#4ade80'; // Green (transparent in dark)
             } else if (isKeyAmber) {
                  fill = isDark ? 'rgba(245, 158, 11, 0.2)' : '#fcd34d'; // Amber (transparent in dark)

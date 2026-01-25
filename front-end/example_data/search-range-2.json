@@ -1,0 +1,243 @@
+[
+  {
+    "step": 1,
+    "action": "NODE_VISIT",
+    "pageId": 8,
+    "nodeType": "internal",
+    "description": "Visit ROOT page 8"
+  },
+  {
+    "step": 2,
+    "action": "COMPARE_RANGE",
+    "pageId": 8,
+    "searchKey": { "values": [{ "type": "int", "value": -1 }] },
+    "keyValues": [
+      { "values": [{ "type": "int", "value": 67 }] },
+      { "values": [{ "type": "int", "value": 165 }] }
+    ],
+    "description": "Compare [-1] vs [[67], [165]] -> [-1] < [67] -> Next: page 3"
+  },
+  {
+    "step": 3,
+    "action": "NODE_VISIT",
+    "pageId": 3,
+    "nodeType": "internal",
+    "description": "Visit INTERNAL page 3"
+  },
+  {
+    "step": 4,
+    "action": "COMPARE_RANGE",
+    "pageId": 3,
+    "searchKey": { "values": [{ "type": "int", "value": -1 }] },
+    "keyValues": [
+      { "values": [{ "type": "int", "value": 18 }] },
+      { "values": [{ "type": "int", "value": 25 }] },
+      { "values": [{ "type": "int", "value": 52 }] }
+    ],
+    "description": "Compare [-1] vs [[18], [25], [52]] -> [-1] < [18] -> Next: page 1"
+  },
+  {
+    "step": 5,
+    "action": "NODE_VISIT",
+    "pageId": 1,
+    "nodeType": "leaf",
+    "description": "Visit LEAF page 1 (Start Node)"
+  },
+  {
+    "step": 6,
+    "action": "SCAN_RANGE",
+    "pageId": 1,
+    "keys": [
+      { "values": [{ "type": "int", "value": 3 }] },
+      { "values": [{ "type": "int", "value": 11 }] }
+    ],
+    "rangeStart": { "values": [{ "type": "int", "value": -1 }] },
+    "rangeEnd": { "values": [{ "type": "int", "value": 200 }] },
+    "collected": [
+      { "values": [{ "type": "int", "value": 3 }] },
+      { "values": [{ "type": "int", "value": 11 }] }
+    ],
+    "description": "Scan [[3], [11]] -> All > [-1] and < [200] -> Collect: [[3], [11]]"
+  },
+  {
+    "step": 7,
+    "action": "LINK_NEXT",
+    "fromPageId": 1,
+    "toPageId": 13,
+    "description": "Follow NextPage pointer -> Visit LEAF page 13"
+  },
+  {
+    "step": 8,
+    "action": "SCAN_RANGE",
+    "pageId": 13,
+    "keys": [
+      { "values": [{ "type": "int", "value": 18 }] },
+      { "values": [{ "type": "int", "value": 21 }] }
+    ],
+    "rangeEnd": { "values": [{ "type": "int", "value": 200 }] },
+    "collected": [
+      { "values": [{ "type": "int", "value": 18 }] },
+      { "values": [{ "type": "int", "value": 21 }] }
+    ],
+    "description": "Scan [[18], [21]] -> All in range -> Collect: [[18], [21]]"
+  },
+  {
+    "step": 9,
+    "action": "LINK_NEXT",
+    "fromPageId": 13,
+    "toPageId": 9,
+    "description": "Follow NextPage pointer -> Visit LEAF page 9"
+  },
+  {
+    "step": 10,
+    "action": "SCAN_RANGE",
+    "pageId": 9,
+    "keys": [
+      { "values": [{ "type": "int", "value": 25 }] },
+      { "values": [{ "type": "int", "value": 38 }] }
+    ],
+    "rangeEnd": { "values": [{ "type": "int", "value": 200 }] },
+    "collected": [
+      { "values": [{ "type": "int", "value": 25 }] },
+      { "values": [{ "type": "int", "value": 38 }] }
+    ],
+    "description": "Scan [[25], [38]] -> All in range -> Collect: [[25], [38]]"
+  },
+  {
+    "step": 11,
+    "action": "LINK_NEXT",
+    "fromPageId": 9,
+    "toPageId": 5,
+    "description": "Follow NextPage pointer -> Visit LEAF page 5"
+  },
+  {
+    "step": 12,
+    "action": "SCAN_RANGE",
+    "pageId": 5,
+    "keys": [
+      { "values": [{ "type": "int", "value": 52 }] },
+      { "values": [{ "type": "int", "value": 64 }] }
+    ],
+    "rangeEnd": { "values": [{ "type": "int", "value": 200 }] },
+    "collected": [
+      { "values": [{ "type": "int", "value": 52 }] },
+      { "values": [{ "type": "int", "value": 64 }] }
+    ],
+    "description": "Scan [[52], [64]] -> All in range -> Collect: [[52], [64]]"
+  },
+  {
+    "step": 13,
+    "action": "LINK_NEXT",
+    "fromPageId": 5,
+    "toPageId": 10,
+    "description": "Follow NextPage pointer -> Visit LEAF page 10"
+  },
+  {
+    "step": 14,
+    "action": "SCAN_RANGE",
+    "pageId": 10,
+    "keys": [
+      { "values": [{ "type": "int", "value": 67 }] },
+      { "values": [{ "type": "int", "value": 72 }] },
+      { "values": [{ "type": "int", "value": 86 }] }
+    ],
+    "rangeEnd": { "values": [{ "type": "int", "value": 200 }] },
+    "collected": [
+      { "values": [{ "type": "int", "value": 67 }] },
+      { "values": [{ "type": "int", "value": 72 }] },
+      { "values": [{ "type": "int", "value": 86 }] }
+    ],
+    "description": "Scan [[67], [72], [86]] -> All in range -> Collect: [[67], [72], [86]]"
+  },
+  {
+    "step": 15,
+    "action": "LINK_NEXT",
+    "fromPageId": 10,
+    "toPageId": 4,
+    "description": "Follow NextPage pointer -> Visit LEAF page 4"
+  },
+  {
+    "step": 16,
+    "action": "SCAN_RANGE",
+    "pageId": 4,
+    "keys": [
+      { "values": [{ "type": "int", "value": 111 }] },
+      { "values": [{ "type": "int", "value": 115 }] }
+    ],
+    "rangeEnd": { "values": [{ "type": "int", "value": 200 }] },
+    "collected": [
+      { "values": [{ "type": "int", "value": 111 }] },
+      { "values": [{ "type": "int", "value": 115 }] }
+    ],
+    "description": "Scan [[111], [115]] -> All in range -> Collect: [[111], [115]]"
+  },
+  {
+    "step": 17,
+    "action": "LINK_NEXT",
+    "fromPageId": 4,
+    "toPageId": 12,
+    "description": "Follow NextPage pointer -> Visit LEAF page 12"
+  },
+  {
+    "step": 18,
+    "action": "SCAN_RANGE",
+    "pageId": 12,
+    "keys": [
+      { "values": [{ "type": "int", "value": 136 }] },
+      { "values": [{ "type": "int", "value": 164 }] }
+    ],
+    "rangeEnd": { "values": [{ "type": "int", "value": 200 }] },
+    "collected": [
+      { "values": [{ "type": "int", "value": 136 }] },
+      { "values": [{ "type": "int", "value": 164 }] }
+    ],
+    "description": "Scan [[136], [164]] -> All in range -> Collect: [[136], [164]]"
+  },
+  {
+    "step": 19,
+    "action": "LINK_NEXT",
+    "fromPageId": 12,
+    "toPageId": 2,
+    "description": "Follow NextPage pointer -> Visit LEAF page 2"
+  },
+  {
+    "step": 20,
+    "action": "SCAN_RANGE",
+    "pageId": 2,
+    "keys": [
+      { "values": [{ "type": "int", "value": 165 }] },
+      { "values": [{ "type": "int", "value": 175 }] }
+    ],
+    "rangeEnd": { "values": [{ "type": "int", "value": 200 }] },
+    "collected": [
+      { "values": [{ "type": "int", "value": 165 }] },
+      { "values": [{ "type": "int", "value": 175 }] }
+    ],
+    "description": "Scan [[165], [175]] -> All in range -> Collect: [[165], [175]]"
+  },
+  {
+    "step": 21,
+    "action": "LINK_NEXT",
+    "fromPageId": 2,
+    "toPageId": 6,
+    "description": "Follow NextPage pointer -> Visit LEAF page 6"
+  },
+  {
+    "step": 22,
+    "action": "SCAN_RANGE",
+    "pageId": 6,
+    "keys": [
+      { "values": [{ "type": "int", "value": 177 }] },
+      { "values": [{ "type": "int", "value": 187 }] },
+      { "values": [{ "type": "int", "value": 194 }] }
+    ],
+    "rangeEnd": { "values": [{ "type": "int", "value": 200 }] },
+    "collected": [
+      { "values": [{ "type": "int", "value": 177 }] },
+      { "values": [{ "type": "int", "value": 187 }] },
+      { "values": [{ "type": "int", "value": 194 }] }
+    ],
+    "stopReason": "END_OF_TREE",
+    "description": "Scan [[177], [187], [194]] -> All < [200] -> Collect all. End of Tree."
+  }
+]

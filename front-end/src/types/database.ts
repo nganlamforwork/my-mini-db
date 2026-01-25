@@ -84,7 +84,9 @@ export type StepAction =
   | 'CHECK_OVERFLOW'  // Highlighting node to checkoverflow. Overflow => red,  no overflow =>green
   | 'SPLIT_NODE' // Split into 2 nodes (still connect 2 nodes by parent node)
   | 'CREATE_ROOT'  // Create root node
-  | 'INSERT_FAIL'; // Duplicate key or other error
+  | 'INSERT_FAIL' // Duplicate key or other error
+  | 'SCAN_RANGE' // Range query scan on leaf: highlight key by key it scans
+  | 'LINK_NEXT'; // Traverse to next leaf: highlight next leaf
 
 export interface CommonStepBase {
   step: number;
@@ -167,6 +169,21 @@ export interface InsertFailStep extends CommonStepBase {
   reason: string;
 }
 
+export interface ScanRangeStep extends CommonStepBase {
+  action: 'SCAN_RANGE';
+  keys?: CompositeKey[];
+  rangeStart?: CompositeKey;
+  rangeEnd?: CompositeKey;
+  collected?: CompositeKey[];
+  stopReason?: string;
+}
+
+export interface LinkNextStep extends CommonStepBase {
+  action: 'LINK_NEXT';
+  fromPageId: number;
+  toPageId: number;
+}
+
 export type VisualizationStep = 
   | NodeVisitStep
   | CompareRangeStep
@@ -177,7 +194,9 @@ export type VisualizationStep =
   | CheckOverflowStep
   | SplitNodeStep
   | CreateRootStep
-  | InsertFailStep;
+  | InsertFailStep
+  | ScanRangeStep
+  | LinkNextStep;
 
 export interface LogEntry {
   id: string;
