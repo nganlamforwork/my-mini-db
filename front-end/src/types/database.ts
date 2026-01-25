@@ -98,6 +98,7 @@ export type StepAction =
   | 'DELETE_INDEX'
   | 'INTERNAL_BORROW_ROTATE'
   | 'UPDATE_KEYS_ROTATION'
+  | 'UPDATE_LEAF_VALUE'
   | 'FINAL_STATE';
 
 export interface CommonStepBase {
@@ -278,6 +279,14 @@ export interface UpdateKeysRotationStep extends CommonStepBase {
   movedKeyDown: CompositeKey;
 }
 
+export interface UpdateLeafValueStep extends CommonStepBase {
+  action: 'UPDATE_LEAF_VALUE';
+  key: CompositeKey;
+  oldValue: Record | null;
+  newValue: Record;
+  atIndex: number;
+}
+
 export interface FinalStateStep extends CommonStepBase {
   action: 'FINAL_STATE';
   rootKeys?: CompositeKey[];
@@ -308,6 +317,7 @@ export type VisualizationStep =
   | DeleteIndexStep
   | InternalBorrowRotateStep
   | UpdateKeysRotationStep
+  | UpdateLeafValueStep
   | FinalStateStep;
 
 export interface LogEntry {

@@ -693,6 +693,15 @@ export const useTreeRenderer = ({
                 activeNodeFill = isDark ? '#064e3b' : '#d1fae5'; // Green
                 activeStroke = isDark ? '#10b981' : '#059669';
                 break;
+
+             case 'UPDATE_LEAF_VALUE':
+                // Highlight Node Green (Success/Update)
+                activeNodeFill = isDark ? '#064e3b' : '#ecfdf5'; 
+                activeStroke = isDark ? '#10b981' : '#059669';
+                if ('atIndex' in activeStep) {
+                    foundKeyIndex = activeStep.atIndex;
+                }
+                break;
           }
         }
         
