@@ -2,6 +2,7 @@ package btree
 
 import (
 	"fmt"
+	"os"
 
 	"bplustree/internal/common"
 	"bplustree/internal/page"
@@ -69,6 +70,9 @@ func NewBPlusTree(filename string, truncate bool) (*BPlusTree, error) {
 	pager := page.NewPageManagerWithFile(filename, truncate)
 	
 	// Initialize WAL manager using database filename
+	if truncate {
+		_ = os.Remove(filename + ".wal")
+	}
 	wal, err := transaction.NewWALManager(filename)
 	if err != nil {
 		pager.Close() // Close pager on error to avoid resource leak
@@ -94,6 +98,11 @@ func NewBPlusTree(filename string, truncate bool) (*BPlusTree, error) {
 	meta, err := pager.ReadMeta()
 	if err == nil {
 		tree.meta = meta
+	} else if !truncate {
+		// If we are opening an existing DB (not truncating) and cannot read meta,
+		// that is an error (unless it's a completely empty file, which pager handles).
+		// pager.ReadMeta() returns error if page 1 cannot be read or is invalid.
+		return nil, fmt.Errorf("failed to read meta page from existing db: %w", err)
 	}
 
 	return tree, nil
@@ -124,6 +133,9 @@ func NewBPlusTreeWithCacheSize(filename string, truncate bool, maxCacheSize int)
 	pager := page.NewPageManagerWithCacheSize(filename, truncate, maxCacheSize)
 	
 	// Initialize WAL manager using database filename
+	if truncate {
+		_ = os.Remove(filename + ".wal")
+	}
 	wal, err := transaction.NewWALManager(filename)
 	if err != nil {
 		pager.Close() // Close pager on error to avoid resource leak

@@ -125,6 +125,7 @@ func (w *WALManager) recoverLSN() error {
 	}
 
 	w.nextLSN = maxLSN + 1
+	w.nextLSN = maxLSN + 1
 	// Seek to end for appending
 	_, err = w.file.Seek(0, io.SeekEnd)
 	return err

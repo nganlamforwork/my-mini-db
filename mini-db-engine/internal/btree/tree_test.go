@@ -628,6 +628,9 @@ func TestLoadFromDisk(t *testing.T) {
 			t.Errorf("key %d not found after load: %v", KI(k), err)
 		}
 		expected := V(fmt.Sprintf("v%d", KI(k)))
+		if len(val.Columns) > 0 && val.Columns[0].Value == nil {
+			t.Logf("FATAL: Key %v returned Record with NIL value! Record: %+v", k, val)
+		}
 		if VS(val) != VS(expected) {
 			t.Errorf("key %d: expected value %v, got %v", KI(k), expected, val)
 		}
