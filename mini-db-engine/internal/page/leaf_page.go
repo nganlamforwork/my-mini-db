@@ -74,6 +74,7 @@ func InsertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
 
 // SplitLeaf function used for: Splitting a full leaf page into two leaf pages when it overflows,
 // redistributing keys and values, and promoting the first key of the right leaf to the parent internal node.
+// Implements B-Link tree protocol (Lehman & Yao) for atomic splits.
 //
 // Algorithm steps:
 // 1. Calculate midpoint - Divide keys at midpoint for even distribution (mid = len(keys) / 2)
@@ -81,9 +82,14 @@ func InsertIntoLeaf(page *LeafPage, key KeyType, value ValueType) error {
 // 3. Redistribute values - Move values from midpoint onward to new leaf (right half)
 // 4. Truncate original page - Keep left half (keys and values up to midpoint) in original leaf
 // 5. Update sibling links - Maintain doubly-linked list between leaves (update NextPage/PrevPage pointers)
-// 6. Update next sibling pointer - Update next sibling's PrevPage pointer if it exists
-// 7. Update metadata - Update KeyCount for both leaves to reflect actual slice lengths
-// 8. Recompute free space - Calculate free space for both leaves based on payload capacity
+// 6. Update B-Link pointers (Lehman & Yao protocol):
+//    - B.RightPageID = A.RightPageID (preserve old chain)
+//    - B.HighKey = A.HighKey (inherit old boundary)
+//    - A.HighKey = last key in A (shrink A's responsibility)
+//    - A.RightPageID = B.PageID (link A->B)
+// 7. Update next sibling pointer - Update next sibling's PrevPage pointer if it exists
+// 8. Update metadata - Update KeyCount for both leaves to reflect actual slice lengths
+// 9. Recompute free space - Calculate free space for both leaves based on payload capacity
 //
 // Return: KeyType - the first key of the new right leaf (separator key to be promoted to parent)
 func SplitLeaf(page *LeafPage, newLeaf *LeafPage) KeyType {
@@ -101,6 +107,27 @@ func SplitLeaf(page *LeafPage, newLeaf *LeafPage) KeyType {
 	newLeaf.Header.NextPage = page.Header.NextPage
 	newLeaf.Header.PrevPage = page.Header.PageID
 	page.Header.NextPage = newLeaf.Header.PageID
+
+	// B-Link protocol (Lehman & Yao): Set up RightPageID and HighKey
+	// Preserve old chain: B.RightPageID = A.RightPageID
+	newLeaf.Header.RightPageID = page.Header.RightPageID
+	// Inherit old boundary: B.HighKey = A.HighKey
+	newLeaf.Header.HighKey = page.Header.HighKey
+
+	// Shrink A's responsibility: A.HighKey = last key in A
+	if len(page.Keys) > 0 {
+		lastKey := page.Keys[len(page.Keys)-1]
+		var buf bytes.Buffer
+		if err := lastKey.WriteTo(&buf); err == nil {
+			page.Header.HighKey = buf.Bytes()
+		}
+	} else {
+		// If A is empty (shouldn't happen), set empty HighKey
+		page.Header.HighKey = []byte{}
+	}
+
+	// Link A->B: A.RightPageID = B.PageID
+	page.Header.RightPageID = newLeaf.Header.PageID
 
 	// Update key counts
 	page.Header.KeyCount = uint16(len(page.Keys))

@@ -2,6 +2,7 @@ package transaction
 
 import (
 	"fmt"
+	"sync"
 
 	"bplustree/internal/page"
 )
@@ -35,6 +36,7 @@ type TransactionManager struct {
 	activeTx   *Transaction		// Currently active transaction
 	nextTxID   uint64			// Next transaction ID to assign
 	autoCommit bool 			// True if current transaction is auto-commit (single operation)
+	mu         sync.Mutex		// Mutex for thread-safe transaction management
 }
 
 // Constructor to create a new transaction manager
@@ -48,6 +50,9 @@ func NewTransactionManager(wal *WALManager) *TransactionManager {
 
 // Begin starts a new explicit transaction (for multi-operation queries)
 func (tm *TransactionManager) Begin(tree TreeInterface) (*Transaction, error) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
 	if tm.activeTx != nil {
 		return nil, fmt.Errorf("transaction already active (nested transactions not supported)")
 	}
@@ -70,6 +75,9 @@ func (tm *TransactionManager) Begin(tree TreeInterface) (*Transaction, error) {
 // BeginAutoCommit starts an auto-commit transaction (for single operations)
 // This ensures crash recovery even for simple operations
 func (tm *TransactionManager) BeginAutoCommit(tree TreeInterface) (*Transaction, error) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
 	if tm.activeTx != nil {
 		// Already in a transaction, reuse it
 		return tm.activeTx, nil
@@ -92,11 +100,16 @@ func (tm *TransactionManager) BeginAutoCommit(tree TreeInterface) (*Transaction,
 
 // IsAutoCommit returns true if the current transaction is auto-commit (single operation)
 func (tm *TransactionManager) IsAutoCommit() bool {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	return tm.autoCommit
 }
 
 // Commit commits the current transaction (multi-operation)
 func (tm *TransactionManager) Commit() error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
 	if tm.activeTx == nil {
 		return fmt.Errorf("no active transaction")
 	}
@@ -147,6 +160,9 @@ func (tm *TransactionManager) Commit() error {
 
 // Rollback rolls back the current transaction
 func (tm *TransactionManager) Rollback() error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+
 	if tm.activeTx == nil {
 		return fmt.Errorf("no active transaction")
 	}
@@ -183,15 +199,30 @@ func (tm *TransactionManager) Rollback() error {
 
 // GetActiveTransaction returns the currently active transaction, or nil
 func (tm *TransactionManager) GetActiveTransaction() *Transaction {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	return tm.activeTx
 }
 
 // TrackPageModification tracks a page modification for the current transaction
 // If no transaction exists, it will be created automatically (auto-commit)
 func (tm *TransactionManager) TrackPageModification(pageID uint64, pageObj interface{}, tree TreeInterface) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	
 	// Auto-create transaction if none exists (for crash recovery)
 	if tm.activeTx == nil {
-		_, _ = tm.BeginAutoCommit(tree)
+		// Create transaction inline to avoid unlock/relock
+		tx := &Transaction{
+			txID:          tm.nextTxID,
+			state:         TxStateActive,
+			tree:          tree,
+			modifiedPages: make(map[uint64]interface{}),
+			originalPages: make(map[uint64]interface{}),
+		}
+		tm.nextTxID++
+		tm.activeTx = tx
+		tm.autoCommit = true
 	}
 
 	// Save original state if not already saved
@@ -221,9 +252,22 @@ func (tm *TransactionManager) TrackPageModification(pageID uint64, pageObj inter
 
 // TrackPageAllocation tracks a newly allocated page
 func (tm *TransactionManager) TrackPageAllocation(pageID uint64, pageObj interface{}, tree TreeInterface) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	
 	// Auto-create transaction if none exists
 	if tm.activeTx == nil {
-		_, _ = tm.BeginAutoCommit(tree)
+		// Create transaction inline to avoid unlock/relock
+		tx := &Transaction{
+			txID:          tm.nextTxID,
+			state:         TxStateActive,
+			tree:          tree,
+			modifiedPages: make(map[uint64]interface{}),
+			originalPages: make(map[uint64]interface{}),
+		}
+		tm.nextTxID++
+		tm.activeTx = tx
+		tm.autoCommit = true
 	}
 	
 	// New pages don't have original state
@@ -232,9 +276,12 @@ func (tm *TransactionManager) TrackPageAllocation(pageID uint64, pageObj interfa
 
 // TrackPageDeletion tracks a page deletion
 func (tm *TransactionManager) TrackPageDeletion(pageID uint64, tree TreeInterface) {
+	tm.mu.Lock()
 	// Auto-create transaction if none exists
 	if tm.activeTx == nil {
+		tm.mu.Unlock()
 		_, _ = tm.BeginAutoCommit(tree)
+		tm.mu.Lock()
 	}
 	
 	// Save original state if not already saved
@@ -252,10 +299,13 @@ func (tm *TransactionManager) TrackPageDeletion(pageID uint64, tree TreeInterfac
 	
 	// Mark as deleted (remove from modified pages, keep in original for rollback)
 	delete(tm.activeTx.modifiedPages, pageID)
+	tm.mu.Unlock()
 }
 
 // Checkpoint creates a checkpoint in the WAL
 func (tm *TransactionManager) Checkpoint() error {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
 	if tm.activeTx != nil {
 		return fmt.Errorf("cannot checkpoint while transaction is active")
 	}

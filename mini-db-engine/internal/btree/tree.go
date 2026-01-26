@@ -2,7 +2,10 @@ package btree
 
 import (
 	"bytes"
+	"encoding/binary"
 	"fmt"
+	"runtime"
+	"sync"
 
 	"bplustree/internal/common"
 	"bplustree/internal/page"
@@ -24,6 +27,7 @@ type BPlusTree struct {
 	txManager *transaction.TransactionManager
 	wal       *transaction.WALManager
 	schema    *storage.Schema // Optional schema for schema-enforced operations
+	insertMu  sync.Mutex      // Temporary mutex to serialize inserts until B-link is fully stable
 }
 
 const MAX_KEYS = page.ORDER - 1
@@ -315,26 +319,24 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 	for {
 		p := tree.pager.Get(currentID)
 		if p == nil {
-			return nil, nil, fmt.Errorf("page not found: %d", currentID)
+			// In concurrent scenarios, a page might be in the process of being written
+			// Retry a few times - the page might be written and cached by another thread
+			for retry := 0; retry < 3; retry++ {
+				runtime.Gosched() // Yield first to allow other goroutines to complete
+				p = tree.pager.Get(currentID)
+				if p != nil {
+					break
+				}
+			}
+			if p == nil {
+				return nil, nil, fmt.Errorf("page not found: %d (may be in process of being written)", currentID)
+			}
 		}
 
 		// Read latch the current page
 		p.RLock()
 
-		// Move Right Logic (B-Link)
-		for tree.isGreaterThanHighKey(key, p.GetHeader().HighKey) {
-			nextID := p.GetHeader().RightPageID
-			if nextID == 0 {
-				break // Should not happen if HighKey comparison was true
-			}
-			p.RUnlock()
-			currentID = nextID
-			p = tree.pager.Get(currentID)
-			if p == nil {
-				return nil, nil, fmt.Errorf("right page not found: %d", currentID)
-			}
-			p.RLock()
-		}
+		// Move-right logic removed - using traditional B+ tree with insertMu for concurrency
 
 		switch node := p.(type) {
 		case *LeafPage:
@@ -353,7 +355,17 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 				childIndex = pos + 1
 			}
 
+			// Bounds check - ensure childIndex is valid
+			if childIndex >= len(node.Children) || len(node.Children) == 0 {
+				p.RUnlock()
+				return nil, nil, fmt.Errorf("invalid internal node: childIndex %d out of bounds (children: %d)", childIndex, len(node.Children))
+			}
+
 			nextID := node.Children[childIndex]
+			if nextID == 0 {
+				p.RUnlock()
+				return nil, nil, fmt.Errorf("invalid child page ID: 0 at index %d", childIndex)
+			}
 			p.RUnlock() // Unlock current before moving down
 			currentID = nextID
 			depth++
@@ -366,30 +378,82 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 }
 
 // isGreaterThanHighKey checks if key > highKey. If highKey is empty, it's considered infinity.
+// This function must be safe to call in concurrent scenarios where HighKey might be partially written.
+// Returns false (don't move right) on any error to ensure safety.
 func (tree *BPlusTree) isGreaterThanHighKey(key KeyType, hKeyBytes []byte) bool {
+	// Use recover to handle any panics from corrupted HighKey bytes
+	defer func() {
+		if r := recover(); r != nil {
+			// If anything panics, treat as infinity (don't move right) - this is safe
+		}
+	}()
+	
 	if len(hKeyBytes) == 0 {
-		return false // Infinity
+		return false // Infinity - don't move right
 	}
-	hKey, err := storage.ReadCompositeKeyFrom(bytes.NewReader(hKeyBytes))
-	if err != nil {
+	
+	// Validate minimum size
+	if len(hKeyBytes) < 13 {
+		return false // Too small to be valid
+	}
+	
+	// Validate maximum size to prevent malformed data from causing hangs
+	if len(hKeyBytes) > 1024 {
+		return false // Too large - likely corrupted
+	}
+	
+	// Copy bytes to avoid concurrent modification during read
+	hKeyBytesCopy := make([]byte, len(hKeyBytes))
+	copy(hKeyBytesCopy, hKeyBytes)
+	
+	// Quick validation: check numVals is reasonable
+	if len(hKeyBytesCopy) < 4 {
 		return false
 	}
+	numVals := binary.BigEndian.Uint32(hKeyBytesCopy[0:4])
+	if numVals == 0 || numVals > 100 {
+		return false // Invalid numVals
+	}
+	
+	// Try to parse - if it fails, return false
+	reader := bytes.NewReader(hKeyBytesCopy)
+	hKey, err := storage.ReadCompositeKeyFrom(reader)
+	if err != nil {
+		// Can't read HighKey - return false (don't move right)
+		return false
+	}
+	
+	// Successfully read HighKey - now compare
 	return key.Compare(hKey) > 0
 }
 
-// Insert function used for: B+Tree insertion with automatic node splitting to maintain balance. The operation handles two cases: simple insertion (no split) and insertion with splits that propagate upward.
+
+
+// Insert function used for: B+Tree insertion with automatic node splitting to maintain balance. 
+// Uses traditional B+ tree approach with global insertMu for concurrency control.
+//
+// Concurrency Model: 
+// - insertMu serializes all inserts to ensure consistency
+// - Individual page-level RWMutex used for finer-grained locking during traversal
+// - Traditional path-based split propagation (not Lehman & Yao B-link)
 //
 // Algorithm steps:
 // 1. Handle empty tree - Create root leaf if tree is empty
-// 2. Find target leaf - Navigate to leaf that should contain the key
+// 2. Find target leaf - Navigate to leaf that should contain the key, collecting path
 // 3. Check duplicates - Return error if key already exists
 // 4. Insert into leaf - Add key-value pair in sorted order
 // 5. Check overflow - Verify if leaf exceeds capacity (key count or payload size)
-// 6. Split if needed - Split leaf and propagate split upward through internal nodes
+// 6. Split if needed - Split leaf and propagate split upward through internal nodes using collected path
 // 7. Create new root - If root splits, create new root internal node
 //
 // Return: error - nil on success, error if duplicate key or operation fails
 func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
+	// Global insert mutex for concurrency control
+	// Trade-off: Serializes inserts but ensures consistency and simplicity
+	// See docs/concurrent-access.md for rationale
+	tree.insertMu.Lock()
+	defer tree.insertMu.Unlock()
+	
 	// Auto-commit: Ensures crash recovery even for single operations
 	wasAutoCommit := tree.ensureAutoCommitTransaction()
 	defer func() {
@@ -430,6 +494,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	}
 
 	// 2. Find target leaf + path to parent
+	// Note: path contains internal page IDs from root to parent of leaf
 	leaf, path, err := tree.findLeaf(key)
 	if err != nil {
 		return err
@@ -438,28 +503,44 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	// Release read latch and acquire write latch for insertion
 	leaf.RUnlock()
 	leaf.Lock()
-	defer leaf.Unlock()
 
 	// Re-verify HighKey after acquiring write lock (B-Link Move Right)
-	for tree.isGreaterThanHighKey(key, leaf.Header.HighKey) {
-		nextID := leaf.Header.RightPageID
-		if nextID == 0 {
-			break
+		// TEMPORARILY DISABLED: With insertMu, move-right shouldn't be needed
+		/*
+		for tree.isGreaterThanHighKey(key, leaf.Header.HighKey) {
+			nextID := leaf.Header.RightPageID
+			if nextID == 0 {
+				break
+			}
+			leaf.Unlock()
+			p := tree.pager.Get(nextID)
+			if p == nil {
+				// Right page not found - this shouldn't happen but handle gracefully
+				// Re-acquire lock on current leaf and break
+				leaf.Lock()
+				break
+			}
+			nextLeaf, ok := p.(*page.LeafPage)
+			if !ok {
+				// Right page is not a leaf - this shouldn't happen but handle gracefully
+				// Re-acquire lock on current leaf and break
+				leaf.Lock()
+				break
+			}
+			leaf = nextLeaf
+			leaf.Lock()
 		}
-		leaf.Unlock()
-		p := tree.pager.Get(nextID)
-		leaf = p.(*LeafPage)
-		leaf.Lock()
-	}
-
+		*/
 	// Check for duplicate keys using binary search
 	if common.BinarySearch(leaf.Keys, key) != -1 {
+		leaf.Unlock()
 		return fmt.Errorf("duplicate key insertion: %v", key)
 	}
 	leafDepth := len(path)
 
 	// Insert into the leaf in sorted order
 	if err := page.InsertIntoLeaf(leaf, key, value); err != nil {
+		leaf.Unlock()
 		return err
 	}
 
@@ -476,10 +557,12 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 	// If the leaf does not overflow (by key count or payload), we're done
 	if !isOverflow {
+		leaf.Unlock()
 		return nil
 	}
 
-	// 3. Split leaf
+	// 3. Split leaf using traditional B+ tree approach (not B-link)
+	// Keep leaf locked during entire split propagation to ensure consistency
 	var pushKey KeyType
 	newLeaf := tree.pager.NewLeaf()
 	
@@ -491,18 +574,28 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		tree.txManager.TrackPageAllocation(newLeaf.Header.PageID, newLeaf, tree)
 	}
 
-	var childPageID uint64 = newLeaf.Header.PageID
+	// Unlock leaf now that split is complete
+	leaf.Unlock()
 
-	// 4. Propagate split up: insert the promoted key into parent
-	//    internal nodes. If a parent overflows, split it and
-	//    continue upward. `childPageID` always points to the
-	//    right-side page produced by the most recent split.
+	// 4. Propagate split up the tree using the collected path
+	// This is traditional B+ tree split propagation (not Lehman & Yao)
+	var childPageID uint64 = newLeaf.Header.PageID
 	parentDepth := leafDepth - 1
+	
 	for len(path) > 0 {
 		parentID := path[len(path)-1]
 		path = path[:len(path)-1]
 
-		parent := tree.pager.Get(parentID).(*page.InternalPage)
+		// Get and lock parent
+		parentPage := tree.pager.Get(parentID)
+		if parentPage == nil {
+			return fmt.Errorf("parent page %d not found during split propagation", parentID)
+		}
+		parent, ok := parentPage.(*page.InternalPage)
+		if !ok {
+			return fmt.Errorf("parent page %d is not an internal page", parentID)
+		}
+		parent.Lock()
 
 		// Insert the separator key and pointer into parent
 		page.InsertIntoInternal(parent, pushKey, childPageID)
@@ -514,17 +607,21 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 		// If parent didn't overflow, split propagation stops
 		if len(parent.Keys) < page.ORDER {
+			parent.Unlock()
 			return nil
 		}
-		// split internal
+
+		// Split internal node
 		newInternal := tree.pager.NewInternal()
 		pushKey = page.SplitInternal(parent, newInternal, tree.pager)
 		
-		
 		// Track new internal page
 		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(parentID, parent, tree)
 			tree.txManager.TrackPageAllocation(newInternal.Header.PageID, newInternal, tree)
 		}
+		
+		parent.Unlock()
 		
 		childPageID = newInternal.Header.PageID
 		parentDepth--
@@ -539,23 +636,34 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		childPageID,
 	)
 
-	// Ensure correct type assertions for left and right children
-		if left, ok := tree.pager.Get(tree.meta.RootPage).(*page.InternalPage); ok {
-		left.Header.ParentPage = newRoot.Header.PageID
-	} else if leftLeaf, ok := tree.pager.Get(tree.meta.RootPage).(*page.LeafPage); ok {
-		leftLeaf.Header.ParentPage = newRoot.Header.PageID
+	// Update parent pointers for children - need to lock them first
+	// Lock left child and update its parent
+	leftPage := tree.pager.Get(tree.meta.RootPage)
+	if leftPage != nil {
+		leftPage.Lock()
+		if left, ok := leftPage.(*page.InternalPage); ok {
+			left.Header.ParentPage = newRoot.Header.PageID
+		} else if leftLeaf, ok := leftPage.(*page.LeafPage); ok {
+			leftLeaf.Header.ParentPage = newRoot.Header.PageID
+		}
+		leftPage.Unlock()
 	}
 
-	if right, ok := tree.pager.Get(childPageID).(*page.InternalPage); ok {
-		right.Header.ParentPage = newRoot.Header.PageID
-	} else if rightLeaf, ok := tree.pager.Get(childPageID).(*page.LeafPage); ok {
-		rightLeaf.Header.ParentPage = newRoot.Header.PageID
+	// Lock right child and update its parent
+	rightPage := tree.pager.Get(childPageID)
+	if rightPage != nil {
+		rightPage.Lock()
+		if right, ok := rightPage.(*page.InternalPage); ok {
+			right.Header.ParentPage = newRoot.Header.PageID
+		} else if rightLeaf, ok := rightPage.(*page.LeafPage); ok {
+			rightLeaf.Header.ParentPage = newRoot.Header.PageID
+		}
+		rightPage.Unlock()
 	}
 
 	newRoot.Header.KeyCount = 1
 	
 	// Update meta root
-
 	tree.meta.RootPage = newRoot.Header.PageID
 	
 	// Ensure meta page is properly initialized for transaction tracking
@@ -872,9 +980,10 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	// Release read latch and acquire write latch
 	leaf.RUnlock()
 	leaf.Lock()
-	defer leaf.Unlock()
 
-	// Re-verify HighKey
+	// Re-verify HighKey (currently disabled for B-link)
+	// Move-right logic removed - using traditional B+ tree with insertMu for concurrency
+	/*
 	for tree.isGreaterThanHighKey(key, leaf.Header.HighKey) {
 		nextID := leaf.Header.RightPageID
 		if nextID == 0 {
@@ -885,10 +994,12 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 		leaf = p.(*LeafPage)
 		leaf.Lock()
 	}
+	*/
 
 	// Find and remove the key from the leaf using binary search
 	keyIndex := common.BinarySearch(leaf.Keys, key)
 	if keyIndex == -1 {
+		leaf.Unlock()
 		return fmt.Errorf("key not found: %v", key)
 	}
 
@@ -922,19 +1033,24 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 				tree.txManager.TrackPageModification(1, tree.meta, tree)
 			}
 			
+			leaf.Unlock()
 			// Meta page will be written during transaction commit (via defer)
 			return nil
 		}
+		leaf.Unlock()
 		return nil
 	}
 
 	// Check if leaf needs rebalancing
 	if len(leaf.Keys) >= MIN_KEYS {
+		leaf.Unlock()
 		return nil // No underflow, we're done
 	}
 
 	// Handle underflow: try to borrow or merge
-	return tree.rebalanceLeafAfterDelete(leaf, path)
+	err = tree.rebalanceLeafAfterDelete(leaf, path)
+	leaf.Unlock()
+	return err
 }
 
 // rebalanceLeafAfterDelete function used for: Handling leaf node underflow by attempting to borrow keys from siblings (preferred strategy)

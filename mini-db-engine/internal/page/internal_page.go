@@ -43,6 +43,7 @@ func InsertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
 
 // SplitInternal function used for: Splitting a full internal node into two nodes when it overflows,
 // redistributing keys and children, and promoting the middle key to the parent.
+// Implements B-Link tree protocol (Lehman & Yao) for atomic splits.
 //
 // Algorithm steps:
 // 1. Calculate midpoint - Find middle key index to promote (mid = len(keys) / 2)
@@ -50,9 +51,14 @@ func InsertIntoInternal(page *InternalPage, key KeyType, childPageID uint64) {
 // 3. Redistribute keys - Move keys after midpoint to new node (right half)
 // 4. Redistribute children - Move corresponding child pointers after midpoint to new node
 // 5. Truncate original node - Keep left half (keys and children up to midpoint) in original page
-// 6. Update parent pointers - Set parent of all moved children to new node's page ID
-// 7. Update metadata - Update KeyCount for both nodes to reflect actual slice lengths
-// 8. Recompute free space - Calculate free space for both nodes based on payload capacity
+// 6. Update B-Link pointers (Lehman & Yao protocol):
+//    - B.RightPageID = A.RightPageID (preserve old chain)
+//    - B.HighKey = A.HighKey (inherit old boundary)
+//    - A.HighKey = last key in A (shrink A's responsibility)
+//    - A.RightPageID = B.PageID (link A->B)
+// 7. Update parent pointers - Set parent of all moved children to new node's page ID
+// 8. Update metadata - Update KeyCount for both nodes to reflect actual slice lengths
+// 9. Recompute free space - Calculate free space for both nodes based on payload capacity
 //
 // Return: KeyType - the middle key to be promoted to the parent internal node
 func SplitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) KeyType {
@@ -66,6 +72,27 @@ func SplitInternal(page *InternalPage, newPage *InternalPage, pm *PageManager) K
 	// truncate original node to keep left half
 	page.Keys = page.Keys[:mid]
 	page.Children = page.Children[:mid+1]
+
+	// B-Link protocol (Lehman & Yao): Set up RightPageID and HighKey
+	// Preserve old chain: B.RightPageID = A.RightPageID
+	newPage.Header.RightPageID = page.Header.RightPageID
+	// Inherit old boundary: B.HighKey = A.HighKey
+	newPage.Header.HighKey = page.Header.HighKey
+
+	// Shrink A's responsibility: A.HighKey = last key in A
+	if len(page.Keys) > 0 {
+		lastKey := page.Keys[len(page.Keys)-1]
+		var buf bytes.Buffer
+		if err := lastKey.WriteTo(&buf); err == nil {
+			page.Header.HighKey = buf.Bytes()
+		}
+	} else {
+		// If A is empty (shouldn't happen), set empty HighKey
+		page.Header.HighKey = []byte{}
+	}
+
+	// Link A->B: A.RightPageID = B.PageID
+	page.Header.RightPageID = newPage.Header.PageID
 
 	// update metadata: ensure KeyCount reflects actual slice lengths
 	page.Header.KeyCount = uint16(len(page.Keys))

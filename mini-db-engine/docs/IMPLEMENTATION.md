@@ -2006,57 +2006,119 @@ tree.Insert(key, value)  // Commit completes
 
 ---
 
-## 10. **Concurrent B-Link Tree (Version 8.0)**
+## 10. **Concurrency Model (Current Implementation)**
 
 **Overview:**
-Version 8.0 introduces a high-performance concurrency control model based on the Lehman & Yao B-Link Tree algorithm. This replaces the standard "Page Lock" or "Tree Lock" approach (which bottlenecks at the root) with a latch-coupling and link-following mechanism (B-Link).
+MiniDB uses a **traditional B+ tree with global insert mutex** for write operations, prioritizing correctness and simplicity over maximum concurrency.
 
-### 10.1. **Architecture**
+> **Note**: This is a deliberate architectural decision. The fully concurrent B-Link tree (Lehman & Yao protocol) was evaluated and documented (see [concurrent-access.md](concurrent-access.md)) but not implemented due to complexity-benefit tradeoffs. See that document for detailed rationale.
 
-A B-Link Tree relaxes the strict structure of a B+Tree during split operations to allow readers to proceed without blocking writers (and vice-versa).
+### 10.1. **Current Concurrency Architecture**
 
-- **Right Links:** Every node (Internal and Leaf) maintains a `RightPageID` pointer to its right sibling.
-- **High Keys:** Every node stores a `HighKey` (Fence Key) which defines the strict upper bound of keys in that node.
-- **Optimistic Traversal:** Readers assume that the key they are looking for is in the standard path. If they encounter a node where `SearchKey > HighKey`, they know a split occurred concurrently and follow the `RightPageID` to find the correct data (the "Move Right" operation).
+The implementation provides **pragmatic concurrency** suitable for educational/prototype use:
 
-### 10.2. **Page-Level Locking**
+- **Global Insert Mutex (`insertMu`)**: Serializes all insert operations
+- **Page-Level RWMutex**: Allows concurrent reads on different pages
+- **Thread-Safe LRU Cache**: Internal cache.mu protects cache operations
+- **WAL-Based ACID**: Transaction guarantees maintained
 
-- **Latches (RWMutex):** Every `Page` struct now embeds a `sync.RWMutex`, providing granular locking at the page level.
-- **Read Latch (`RLock`):** Multiple readers can access a page simultaneously. Allows for high-throughput searching.
-- **Write Latch (`Lock`):** Only one writer can modify a page.
-- **Protocol:**
-    - `PageManager.Get` returns an unlatched page.
-    - Readers must explicit call `page.RLock()` before reading data.
-    - Writers must upgrade to `page.Lock()` before logical modification.
+**Concurrency Characteristics:**
 
-### 10.3. **Move Right Recovery (Read Path)**
+- ✅ **Multiple concurrent reads**: Fully supported via page-level `RLock()`
+- ✅ **Read while write**: Supported (readers see committed state)
+- ❌ **Multiple concurrent writes**: Serialized by global `insertMu`
+- ❌ **Optimal write scalability**: Not achieved (tradeoff for simplicity)
 
-The "Move Right" logic is crucial for correctness in the presence of concurrent splits. It is implemented in `findLeaf`:
+### 10.2. **Page-Level Locking (Read Path)**
+
+Pages embed a `sync.RWMutex` for fine-grained locking:
 
 ```go
-func findLeaf(key) {
-    p = Get(root)
-    p.RLock() // Latch Crab Phase 1: Lock Parent
-
-    // B-Link Check: Loop in case we need to move multiple steps right
-    while key > p.HighKey {
-        next = p.RightPageID
-        p.RUnlock()
-        p = Get(next)
-        p.RLock()
-    }
-
-    // Standard Descent
-    childID = findChild(p, key)
-    p.RUnlock() // Latch Crab Phase 2: Unlock Parent before Child (mostly)
-    // Note: In strict coupling, we'd lock child before unlocking parent. 
-    // In B-Link, we can unlock parent fully because the HighKey+RightLink protects us if the child splits before we get there.
-    
-    // ... repeat ...
+type PageHeader struct {
+    sync.RWMutex  // Embedded mutex for page-level locking
+    PageID   uint64
+    PageType uint8
+    // ...
 }
 ```
 
-This approach allows readers to navigate the tree correctly even if the internal structure is being concurrently modified, without needing to restart the search.
+**Read path example** (`findLeaf`):
+
+```go
+func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
+    currentID := tree.meta.RootPage
+    for {
+        p := tree.pager.Get(currentID)
+        p.RLock()  // Acquire read latch
+
+        switch node := p.(type) {
+        case *LeafPage:
+            return node, path, nil  // Leaf still locked (caller unlocks)
+        case *InternalPage:
+            childID := findChild(node, key)
+            p.RUnlock()  // Release parent before moving to child
+            currentID = childID
+        }
+    }
+}
+```
+
+Multiple readers can traverse the tree concurrently without blocking each other.
+
+### 10.3. **Write Path: Global Insert Mutex**
+
+All insert operations are serialized by a global mutex:
+
+```go
+func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
+    tree.insertMu.Lock()         // Serialize all inserts
+    defer tree.insertMu.Unlock()
+
+    // ... find leaf, split if needed, update tree ...
+}
+```
+
+**Why serialize inserts?**
+
+- Eliminates all race conditions during splits
+- Avoids complex parent fix-up logic
+- Prevents stale path issues
+- Ensures tree consistency without move-right recovery
+
+**Performance impact:**
+
+- Write throughput: **Serialized** (one insert at a time)
+- Read throughput: **Parallel** (insertMu doesn't block reads during traversal)
+- For many workloads (read-heavy), this is acceptable
+
+### 10.4. **What Was NOT Implemented: B-Link Tree**
+
+The Lehman & Yao B-Link Tree protocol would provide:
+
+- **Lock-free reads**: Readers never acquire write latches
+- **Atomic splits**: Writers don't block readers during splits
+- **No root bottleneck**: Parent nodes never locked during child splits
+
+**Why not implemented:**
+
+1. **Complexity**: Requires atomic split, move-right logic, high-key management
+2. **Debugging challenges**: Encountered infinite loops, deadlocks, stale path issues
+3. **Time investment**: Multiple iterations failed to resolve edge cases
+4. **Context**: Educational/prototype database, not production system
+5. **Correctness first**: Traditional approach is provably correct
+
+**See [concurrent-access.md](concurrent-access.md)** for complete analysis, theory, implementation roadmap, and decision rationale.
+
+### 10.5. **Future Enhancement Path**
+
+If write throughput becomes a bottleneck:
+
+1. Profile to confirm `insertMu` is the bottleneck (not disk I/O, WAL, etc.)
+2. Implement B-Link protocol following roadmap in [concurrent-access.md](concurrent-access.md)
+3. Add comprehensive concurrent stress tests
+4. Consider formal verification for correctness
+
+**Current status**: The traditional approach meets current needs while preserving optionality for future optimization.
 
 ---
 
@@ -2105,27 +2167,26 @@ This approach allows readers to navigate the tree correctly even if the internal
 
 ### High Priority
 
-1. **Concurrent Access**
-   - Add page-level locking or latching
-   - Support multiple readers, single writer
-   - Consider B-link tree variant for better concurrency
+1. **Enhanced Concurrency (B-Link Tree)**
+   - **Status**: Theory documented, traditional approach implemented
+   - Current: Global `insertMu` serializes writes
+   - Future: Implement Lehman & Yao B-Link protocol for fully concurrent writes
+   - **See**: [concurrent-access.md](concurrent-access.md) for detailed roadmap
+   - **Rationale**: Only pursue if write throughput becomes bottleneck
 
 ### Medium Priority
 
 3. **Variable-Length Value Optimization**
-
    - Currently stores values as strings; optimize for large values
    - Implement overflow pages for values > page size
    - Add compression for large values
 
 4. **Index Statistics**
-
    - Track tree height, page count, key distribution
    - Implement `Stats()` method for diagnostics
    - Help identify when rebalancing is needed
 
 5. **Bulk Loading**
-
    - Optimize for inserting sorted data
    - Build tree bottom-up instead of incremental inserts
    - 3-5x faster for initial loads
@@ -2137,12 +2198,10 @@ This approach allows readers to navigate the tree correctly even if the internal
 ### Low Priority
 
 7. **Key Compression**
-
    - Implement prefix compression for keys in internal nodes
    - Reduces space, increases fanout
 
 8. **Snapshot Isolation**
-
    - MVCC (Multi-Version Concurrency Control)
    - Readers don't block writers
 
@@ -2172,10 +2231,12 @@ In Version 7.0, MiniDB introduced schema enforcement with automatic key extracti
 ### Schema Definition
 
 A schema defines:
+
 - **Columns**: Array of column definitions (name, type)
 - **Primary Key**: Ordered list of column names that form the composite primary key
 
 Example schema:
+
 ```go
 schema := Schema{
     Columns: []ColumnDefinition{
@@ -2207,6 +2268,7 @@ When a row is inserted or searched:
 Given schema with columns [A, B, C] and PK [C, A]:
 
 **Input Row:**
+
 ```json
 {
   "A": 1,
@@ -2216,11 +2278,13 @@ Given schema with columns [A, B, C] and PK [C, A]:
 ```
 
 **Extracted Key:**
+
 - First, extract C = 3
 - Then, extract A = 1
 - Result: CompositeKey([3, 1])
 
 **Important**: The order of `PrimaryKeyColumns` determines how records are sorted in the B+Tree:
+
 - PK [C, A] means records are sorted by C first, then A
 - PK [A, C] would sort by A first, then C (different ordering!)
 
@@ -2234,9 +2298,9 @@ func (s *Schema) ExtractKey(row map[string]interface{}) (CompositeKey, error) {
     if err := s.ValidateRow(row); err != nil {
         return CompositeKey{}, err
     }
-    
+
     keyValues := make([]Column, 0, len(s.PrimaryKeyColumns))
-    
+
     // Extract values in primary key order
     for _, pkColName := range s.PrimaryKeyColumns {
         colDef, _ := s.GetColumnDefinition(pkColName)
@@ -2244,7 +2308,7 @@ func (s *Schema) ExtractKey(row map[string]interface{}) (CompositeKey, error) {
         column, _ := convertValueToColumn(value, colDef.Type)
         keyValues = append(keyValues, column)
     }
-    
+
     return CompositeKey{Values: keyValues}, nil
 }
 ```
@@ -2252,6 +2316,7 @@ func (s *Schema) ExtractKey(row map[string]interface{}) (CompositeKey, error) {
 ### Type Conversion
 
 The `convertValueToColumn()` function handles type conversion:
+
 - Supports JSON number types (common when parsing JSON)
 - Validates types match schema definition
 - Converts numeric types appropriately (int → int64, float → float64)

@@ -47,6 +47,7 @@ A file-backed B+Tree database implementation in Go with full CRUD operations, tr
 - **[IMPLEMENTATION.md](mini-db-engine/docs/IMPLEMENTATION.md)**: Complete implementation details, algorithms, and architecture
 - **[TESTING.md](mini-db-engine/docs/TESTING.md)**: Comprehensive test suite documentation and test infrastructure
 - **[CHANGELOG.md](mini-db-engine/docs/CHANGELOG.md)**: Development history and version evolution
+- **[concurrent-access.md](mini-db-engine/docs/concurrent-access.md)**: Concurrency model analysis, B-Link theory, and architectural decisions
 
 For full technical details, see [IMPLEMENTATION.md](mini-db-engine/docs/IMPLEMENTATION.md).
 
@@ -132,6 +133,10 @@ MiniDB/
 - **LRU Cache**: Least Recently Used cache for frequently accessed pages
 - **Leaf Linking**: Doubly-linked list for efficient range scans
 - **WAL File**: Separate `.wal` file for transaction logging
+- **Concurrency Model**: Traditional B+ tree with page-level read locks + global insert serialization
+  - **Concurrent Reads**: Multiple readers can traverse tree simultaneously
+  - **Serialized Writes**: Global mutex ensures consistent inserts/updates
+  - **See**: [concurrent-access.md](mini-db-engine/docs/concurrent-access.md) for detailed concurrency model and architectural decisions
 
 ---
 
@@ -140,6 +145,7 @@ MiniDB/
 MiniDB is a production-ready B+Tree database implementation demonstrating core database engine concepts. The implementation follows industry-standard patterns used by PostgreSQL, SQLite, and MySQL InnoDB, and is based on the ARIES recovery algorithm principles.
 
 The database engine provides:
+
 - **B+Tree Engine**: Full B+Tree implementation with all CRUD operations
 - **Transaction Support**: Multi-operation atomicity with WAL-based crash recovery
 - **Page Cache**: Configurable LRU cache for efficient memory management
@@ -200,7 +206,6 @@ func main() {
         stats.Size, tree.GetPager().GetMaxCacheSize())
 }
 ```
-
 
 ---
 
