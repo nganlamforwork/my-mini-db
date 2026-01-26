@@ -6,6 +6,10 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
 
 - [MiniDB Development Changelog](#minidb-development-changelog)
   - [Table of Contents](#table-of-contents)
+  - [Version 8.0 - Concurrent B-Link Tree (Active)](#version-80---concurrent-b-link-tree-active)
+    - [Major Features Added](#major-features-added-new)
+    - [Implementation Details](#implementation-details-new)
+    - [Completed Phases](#completed-phases)
   - [Version 7.0 - Schema Enforcement (Current)](#version-70---schema-enforcement-current)
     - [Major Features Added](#major-features-added)
     - [Implementation Details](#implementation-details)
@@ -21,7 +25,7 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
     - [Migration Guide](#migration-guide)
     - [Files Added](#files-added)
     - [Files Modified](#files-modified)
-    - [Key Improvements Over Version 6.0](#key-improvements-over-version-60)
+    - [Key Improvements Over Version 5.0](#key-improvements-over-version-50)
   - [Version 5.0 - LRU Page Cache](#version-50---lru-page-cache)
     - [Major Features Added](#major-features-added-1)
     - [Implementation Details](#implementation-details-1)
@@ -60,14 +64,51 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
     - [Files Created](#files-created)
   - [Development Timeline](#development-timeline)
   - [Future Roadmap](#future-roadmap)
-    - [Version 5.0 - Concurrent Access (Planned)](#version-50---concurrent-access-planned)
-    - [Version 6.0 - Performance Optimizations (Planned)](#version-60---performance-optimizations-planned)
-    - [Version 8.0 - Advanced Features (Planned)](#version-80---advanced-features-planned)
+    - [Version 9.0 - Performance Optimizations (Planned)](#version-90---performance-optimizations-planned)
+    - [Version 10.0 - Advanced Features (Planned)](#version-100---advanced-features-planned)
   - [Statistics](#statistics)
     - [Code Growth](#code-growth)
     - [Test Coverage](#test-coverage)
     - [Features by Version](#features-by-version)
   - [Notes](#notes)
+
+---
+
+## Version 8.0 - Concurrent B-Link Tree (Active)
+
+**Release Date:** January 2026
+**Status:** In Development (Phases 1-3 Completed)
+
+### Major Features Added
+
+- **Thread-Safe Page Access**: Introduced `sync.RWMutex` to all page structures, enabling safe concurrent reads and exclusive writes at the page level.
+- **B-Link Tree Structure**: Implemented Lehman & Yao's B-Link Tree components (`RightPageID` and `HighKey`) to support high-concurrency latched coupling.
+- **Concurrent Search (Read Path)**: Updated traversal algorithms to support "Latch Crabbing" and "Move Right" logic, allowing readers to recover from concurrent splits without restarting.
+
+### Implementation Details
+
+#### Infrastructure & Latching (Phase 1)
+- **Page Interface**: Updated `PageManager` to return a `Page` interface that enforces `RLock()`/`Lock()` methods.
+- **Granular Locking**: Each `LeafPage` and `InternalPage` now contains its own `sync.RWMutex`.
+- **Latency Hiding**: `PageManager` loads pages into memory without holding page locks, minimizing contention during I/O.
+
+#### Schema Evolution (Phase 2)
+- **Page Header Update**: Added `RightPageID` (uint64) and `HighKey` (variable-length bytes) to `PageHeader`.
+- **Serialization**: Updated `WriteToBuffer` and `ReadFromBuffer` to persist B-Link metadata.
+- **Backward Compatibility**: Validated that existing database files (non-concurrent) can be upgraded or read by the new engine.
+
+#### Move Right Logic (Phase 3)
+- **Latched Traversal**: `findLeaf` now holds read-latches on nodes while traversing.
+- **B-Link Recovery**: If a search operation encounters a key larger than the node's `HighKey`, it automatically follows the `RightPageID` pointer to the sibling node.
+- **Optimized Searching**: Internal binary search now respects B-Link boundaries.
+
+### Completed Phases
+- [x] Phase 1: Infrastructure & Latching
+- [x] Phase 2: Schema Evolution
+- [x] Phase 3: "Move Right" Logic (Read Path)
+- [ ] Phase 4: Atomic Split (Write Path)
+- [ ] Phase 5: Deletion Support
+- [ ] Phase 6: Vacuum & Compaction
 
 ---
 
@@ -137,7 +178,7 @@ Schema enforcement enables automatic validation and key extraction:
 - `docs/IMPLEMENTATION.md`: Added Row-to-Key extraction logic documentation
 - `docs/CHANGELOG.md`: Added Version 7.0 entry
 
-### Key Improvements Over Version 6.0
+### Key Improvements Over Version 5.0
 
 - **Type Safety**: Schema enforcement ensures data integrity
 - **Simplified Operations**: Row-based operations are more intuitive than manual key/value construction
@@ -569,38 +610,39 @@ Phase 3: Type System (v3.0)
   ├── Structured records
   └── Type-safe operations
 
-Phase 4: Complete Transactions (v4.0) ← Current
-  ├── Auto-commit transactions (every operation crash-safe)
-  ├── Explicit transactions (multi-operation atomicity)
-  ├── Write-Ahead Logging (complete implementation)
-  ├── Crash recovery (automatic WAL replay)
-  └── Crash safety guarantee (no partial writes)
+Phase 4: Complete Transactions (v4.0)
+  ├── Auto-commit transactions
+  ├── Explicit transactions
+  └── Write-Ahead Logging
+
+Phase 5: LRU Cache (v5.0)
+  └── Configurable Page Cache
+
+Phase 7: Schema Enforcement (v7.0)
+  ├── Schema definition
+  └── Row validation
+
+Phase 8: Concurrent B-Link Tree (v8.0) ← Current
+  ├── Page Latching (Phases 1-3 Completed)
+  ├── B-Link Structure
+  └── Concurrent Search
 ```
 
 ---
 
 ## Future Roadmap
 
-### Version 5.0 - Concurrent Access (Planned)
+### Version 9.0 - Performance Optimizations (Planned)
 
-- Page-level locking
-- Multiple readers, single writer
-- B-link tree variant consideration
-- Transaction isolation levels
-
-### Version 6.0 - Performance Optimizations (Planned)
-
-- Buffer pool with LRU eviction
 - Bulk loading for sorted data
 - Key compression
 - Index statistics
 
-### Version 8.0 - Advanced Features (Planned)
+### Version 10.0 - Advanced Features (Planned)
 
 - MVCC (Multi-Version Concurrency Control)
 - Snapshot isolation
 - WAL segment rotation
-- Free page list for defragmentation
 
 ---
 
@@ -613,7 +655,9 @@ Phase 4: Complete Transactions (v4.0) ← Current
 - **v3.0**: Composite keys and structured records
 - **v4.0**: Complete transaction implementation with crash safety
 - **v5.0**: LRU page cache for memory management
+- **v6.0**: Skipped (Merged into v8.0)
 - **v7.0**: Schema enforcement and row-based operations
+- **v8.0**: Concurrent B-Link Tree architecture (Phases 1-3)
 
 ### Test Coverage
 

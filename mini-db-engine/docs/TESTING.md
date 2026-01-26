@@ -20,6 +20,8 @@
   - [4. Range Query Operations](#4-range-query-operations)
   - [5. Update Operations](#5-update-operations)
   - [6. Delete Operations](#6-delete-operations)
+  - [7. Cache Testing](#7-cache-testing)
+  - [8. Concurrency Testing](#8-concurrency-testing)
 - [Test Helper Functions](#test-helper-functions)
   - [Key/Value Constructors](#keyvalue-constructors)
   - [TestContext Methods](#testcontext-methods)
@@ -419,6 +421,38 @@ fmt.Printf("Hits: %d, Misses: %d, Evictions: %d, Size: %d\n",
 - Frequently accessed pages (root, hot leaves) should have high hit rates
 - Cache evictions should occur when working with large datasets
 - Cache size should never exceed configured maximum
+
+---
+
+## 8. Concurrency Testing
+
+Concurrency testing is critical for verifying the thread-safety of the B-Link Tree implementation.
+
+### Unit Tests
+
+#### `TestConcurrentPageAccess` (Phase 1)
+- **Purpose**: Verify granular page locking.
+- **Scenario**: Spawn 100 Goroutines accessing the *same* page instance concurrently (mix of Reads and Writes).
+- **Validates**:
+    - `sync.RWMutex` correctly protects internal data structures.
+    - No Race Conditions (verified via `go test -race`).
+
+#### `TestBLinkMoveRight` (Phase 3)
+- **Purpose**: Verify the "Move Right" recovery logic.
+- **Scenario**: 
+    1. Manually construct a tree state where a parent points to Node A, but keys have been moved to Node B (simulating a split that the parent hasn't seen yet).
+    2. Set Node A's `RightPageID` to Node B and `HighKey` appropriately.
+    3. Perform a Search for a key that resides in Node B.
+- **Validates**:
+    - `findLeaf` detects `Key > HighKey`.
+    - Traversal follows the `RightPageID` pointer.
+    - Search returns correct result from Node B.
+
+### Stress Tests (Planned)
+
+Future phases will introduce:
+- **Torture Test**: 10 Readers, 2 Writers, 2 Deleters running indefinitely.
+- **Deadlock Detector**: Monitoring for stuck latches.
 
 ---
 

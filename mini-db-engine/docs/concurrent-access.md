@@ -163,6 +163,29 @@ How to split without locking the parent immediately (Lehman & Yao Protocol):
     *   *Note:* The Parent still thinks `A` holds everything. That's okay! Readers will hit `A`, see `Key > HighKey`, and follow the link to `B`.
 7.  **Propagate:** (Separately) Insert a pointer to `B` into the Parent node.
 
+#### 2.3. Delete (Lazy Deletion Strategy)
+In high-concurrency B-link trees, immediate rebalancing (merging nodes) is often avoided because it requires locking the parent and siblings, which creates bottlenecks. We use a **Lazy Deletion** approach.
+
+**Algorithm:**
+1.  **Traverse** to the candidate leaf node using the standard "Move Right" Search logic (holding Read Latches down the tree).
+2.  **Acquire Write Latch** on the target Leaf.
+3.  **Re-Verify Condition (Crucial):**
+    *   Since we might have released the Read Latch to acquire the Write Latch (depending on implementation), the node might have split in that tiny window.
+    *   Check: Is `TargetKey > Node.HighKey`?
+    *   **YES:** The node split! Unlock, move to `RightPageID`, and try again.
+    *   **NO:** Safe to proceed.
+4.  **Perform Deletion:** remove the key-value pair.
+5.  **Release Write Latch**.
+6.  **Rebalancing:** We generally allow pages to potentialy become empty or under-filled to maximize concurrency. Cleanup can be done by a separate background "Vacuum" process later.
+
+#### 2.4. Vacuum Process (Background Maintenance)
+Since we defer rebalancing during deletion, we need a mechanism to reclaim space.
+*   **Function:** A background goroutine periodically scans for "zombie" pages (pages that are empty or have very low utility).
+*   **Strategy:**
+    *   **Simple:** Identify empty pages and add their IDs to a "Free List" to be reused by future splits. The tree structure (links) stays, but the page is marked dead.
+    *   **Advanced:** Perform a "Safe Merge" by locking the Parent, Key-range, and Sibling to physically remove the node from the tree topology.
+*   **Trade-off:** This isolates the heavy locking required for structure modification to a low-priority background thread.
+
 ### 3. Implementation Roadmap for MiniDB
 
 This roadmap is designed to prevent regressions and ensure correctness at every step.
@@ -198,12 +221,37 @@ This roadmap is designed to prevent regressions and ensure correctness at every 
     *   Run multiple writers inserting sequential and random keys.
     *   Verify the tree structure integrity (all links valid, count matches).
 
-#### Phase 5: Verification & Stress Testing
+#### Phase 5: Deletion Support
+*   **Goal:** Enable concurrent removal of keys.
+*   **Step 5.1:** Implement `Delete` method in BTree.
+    *   Use the same "Move Right" traversal as Insert.
+    *   Ensure Write Latch is acquired on the leaf.
+    *   **Crucial:** Re-check `Key > HighKey` after acquiring the Write Latch.
+*   **Step 5.2:** Handle Underflow (Optional/Basic).
+    *   For this version, simply allow nodes to have fewer than `min` keys (Lazy Deletion).
+*   **Test 5:** Mixed Workload.
+    *   Run concurrent Inserts and Deletes logic to ensure specific keys are gone and no latches are stuck.
+
+#### Phase 6: Vacuum & Compaction (Optimization)
+*   **Goal:** Reclaim space without stopping the world.
+*   **Step 6.1:** Implement `FreeList` management.
+    *   When a page becomes completely empty, add it to a tracking list.
+*   **Step 6.2:** Create a Background Worker.
+    *   Periodically lock empty pages exclusively and mark them as "Free".
+    *   Update `PageManager` to check the Free List before allocating new pages at the end of the file.
+*   **Test 6:**
+    *   Insert 1000 keys, Delete 1000 keys.
+    *   Insert 1000 new keys.
+    *   Verify file size did not grow (reused pages).
+
+#### Phase 7: Verification & Stress Testing
 *   **Goal:** Prove it works under fire.
-*   **Step 5.1:** Run standard `go test -race ./...`.
-*   **Step 5.2:** Create a "Torture Test":
+*   **Step 7.1:** Run standard `go test -race ./...`.
+*   **Step 7.2:** Create a "Torture Test":
     *   Start 10 reader threads (looping random searches).
     *   Start 2 writer threads (looping random inserts).
+    *   Start 2 deleter threads (deleting existing keys).
+    *   In background: Run Vacuum occasionally.
     *   Run for 60 seconds.
     *   Assert: 0 crashes, 0 "Key Not Found" errors for known existing keys.
 

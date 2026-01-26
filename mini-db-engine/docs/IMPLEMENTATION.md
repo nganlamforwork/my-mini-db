@@ -2006,6 +2006,60 @@ tree.Insert(key, value)  // Commit completes
 
 ---
 
+## 10. **Concurrent B-Link Tree (Version 8.0)**
+
+**Overview:**
+Version 8.0 introduces a high-performance concurrency control model based on the Lehman & Yao B-Link Tree algorithm. This replaces the standard "Page Lock" or "Tree Lock" approach (which bottlenecks at the root) with a latch-coupling and link-following mechanism (B-Link).
+
+### 10.1. **Architecture**
+
+A B-Link Tree relaxes the strict structure of a B+Tree during split operations to allow readers to proceed without blocking writers (and vice-versa).
+
+- **Right Links:** Every node (Internal and Leaf) maintains a `RightPageID` pointer to its right sibling.
+- **High Keys:** Every node stores a `HighKey` (Fence Key) which defines the strict upper bound of keys in that node.
+- **Optimistic Traversal:** Readers assume that the key they are looking for is in the standard path. If they encounter a node where `SearchKey > HighKey`, they know a split occurred concurrently and follow the `RightPageID` to find the correct data (the "Move Right" operation).
+
+### 10.2. **Page-Level Locking**
+
+- **Latches (RWMutex):** Every `Page` struct now embeds a `sync.RWMutex`, providing granular locking at the page level.
+- **Read Latch (`RLock`):** Multiple readers can access a page simultaneously. Allows for high-throughput searching.
+- **Write Latch (`Lock`):** Only one writer can modify a page.
+- **Protocol:**
+    - `PageManager.Get` returns an unlatched page.
+    - Readers must explicit call `page.RLock()` before reading data.
+    - Writers must upgrade to `page.Lock()` before logical modification.
+
+### 10.3. **Move Right Recovery (Read Path)**
+
+The "Move Right" logic is crucial for correctness in the presence of concurrent splits. It is implemented in `findLeaf`:
+
+```go
+func findLeaf(key) {
+    p = Get(root)
+    p.RLock() // Latch Crab Phase 1: Lock Parent
+
+    // B-Link Check: Loop in case we need to move multiple steps right
+    while key > p.HighKey {
+        next = p.RightPageID
+        p.RUnlock()
+        p = Get(next)
+        p.RLock()
+    }
+
+    // Standard Descent
+    childID = findChild(p, key)
+    p.RUnlock() // Latch Crab Phase 2: Unlock Parent before Child (mostly)
+    // Note: In strict coupling, we'd lock child before unlocking parent. 
+    // In B-Link, we can unlock parent fully because the HighKey+RightLink protects us if the child splits before we get there.
+    
+    // ... repeat ...
+}
+```
+
+This approach allows readers to navigate the tree correctly even if the internal structure is being concurrently modified, without needing to restart the search.
+
+---
+
 ## Checklist: Completed Features
 
 ### Core Operations
