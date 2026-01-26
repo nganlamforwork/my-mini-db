@@ -22,7 +22,6 @@ type BPlusTree struct {
 	pager     *page.PageManager
 	txManager *transaction.TransactionManager
 	wal       *transaction.WALManager
-	recorder  StepRecorder // Optional step recorder for operation visualization
 	schema    *storage.Schema // Optional schema for schema-enforced operations
 }
 
@@ -40,16 +39,6 @@ func (tree *BPlusTree) GetPager() *page.PageManager {
 	return tree.pager
 }
 
-// SetRecorder sets the step recorder for this tree
-func (tree *BPlusTree) SetRecorder(recorder StepRecorder) {
-	tree.recorder = recorder
-}
-
-// GetRecorder returns the current step recorder
-func (tree *BPlusTree) GetRecorder() StepRecorder {
-	return tree.recorder
-}
-
 // SetSchema sets the schema for this tree
 func (tree *BPlusTree) SetSchema(schema *storage.Schema) {
 	tree.schema = schema
@@ -58,11 +47,6 @@ func (tree *BPlusTree) SetSchema(schema *storage.Schema) {
 // GetSchema returns the current schema (may be nil)
 func (tree *BPlusTree) GetSchema() *storage.Schema {
 	return tree.schema
-}
-
-// nodeID converts a page ID to a stable node identifier string
-func nodeID(pageID uint64) string {
-	return fmt.Sprintf("N%d", pageID)
 }
 
 // NewBPlusTree function used for: Creating a new B+Tree instance with a custom database filename, automatically creating PageManager and initializing WAL/transaction support for crash recovery.
@@ -323,11 +307,6 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 		currentID = tree.meta.RootPage
 	}
 
-	// Record traversal start
-	if tree.recorder != nil && currentID != 0 {
-		tree.recorder.RecordStepWithKey(StepTypeTraverseStart, nodeID(currentID), depth, &key, nil)
-	}
-
 	for {
 		page := tree.pager.Get(currentID)
 		if page == nil {
@@ -336,37 +315,13 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 
 		switch p := page.(type) {
 		case *LeafPage:
-			// Record leaf found
-			if tree.recorder != nil {
-				tree.recorder.RecordStepWithKey(StepTypeLeafFound, nodeID(currentID), depth, &key, nil)
-			}
 			return p, path, nil
 
 		case *InternalPage:
 			path = append(path, currentID)
 
-			// Record node visit
-			if tree.recorder != nil {
-				metadata := map[string]interface{}{
-					"is_leaf": false,
-					"key_count": len(p.Keys),
-				}
-				tree.recorder.RecordStepWithKey(StepTypeNodeVisit, nodeID(currentID), depth, &key, metadata)
-			}
-
 			// binary search: last key <= key
 			pos := common.BinarySearchLastLessOrEqual(p.Keys, key)
-
-			// Record key comparisons during binary search
-			if tree.recorder != nil && len(p.Keys) > 0 {
-				// Record comparison with relevant keys
-				metadata := map[string]interface{}{
-					"comparison_result": pos,
-				}
-				if pos >= 0 && pos < len(p.Keys) {
-					tree.recorder.RecordStepWithKey(StepTypeKeyComparison, nodeID(currentID), depth, &p.Keys[pos], metadata)
-				}
-			}
 
 			// If pos == -1 then all keys in the internal node are > key,
 			// so the correct child to follow is the left-most child (index 0).
@@ -418,24 +373,11 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	}
 
 	if tree.meta.RootPage == 0 {
-		// Record new root creation for empty tree
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeTraverseStart, "ROOT", 0, map[string]interface{}{"empty_tree": true})
-		}
-
 		leaf := tree.pager.NewLeaf()
 		leaf.Keys = append(leaf.Keys, key)
 		leaf.Values = append(leaf.Values, value)
 		leaf.Header.KeyCount = 1
 		tree.meta.RootPage = leaf.Header.PageID
-		
-		// Record leaf found and insert entry
-		if tree.recorder != nil {
-			tree.recorder.RecordStepWithKey(StepTypeLeafFound, nodeID(leaf.Header.PageID), 0, &key, nil)
-			tree.recorder.RecordStepWithKeyValue(StepTypeInsertEntry, nodeID(leaf.Header.PageID), 0, &key, &value, nil)
-			tree.recorder.RecordStepWithTargetKey(StepTypeNewRootCreated, nodeID(leaf.Header.PageID), "ROOT", 0, &key, map[string]interface{}{"root_type": "leaf"})
-			tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(leaf.Header.PageID), 0, map[string]interface{}{"op": "insert"})
-		}
 		
 		// Ensure meta page is properly initialized for transaction tracking
 		tree.meta.Header.PageID = 1
@@ -462,12 +404,6 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		return fmt.Errorf("duplicate key insertion: %v", key)
 	}
 
-	// Record insert entry
-	leafDepth := len(path)
-	if tree.recorder != nil {
-		tree.recorder.RecordStepWithKeyValue(StepTypeInsertEntry, nodeID(leaf.Header.PageID), leafDepth, &key, &value, nil)
-	}
-
 	// Insert into the leaf in sorted order
 	if err := page.InsertIntoLeaf(leaf, key, value); err != nil {
 		return err
@@ -484,24 +420,8 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	sizeOverflow := page.ComputeLeafPayloadSize(leaf) > payloadCapacity
 	isOverflow := keyOverflow || sizeOverflow
 
-		// Record overflow detection (leaf) with full payload/key metadata
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"key_count":        len(leaf.Keys),
-				"max_keys":         MAX_KEYS,
-				"payload_size":     page.ComputeLeafPayloadSize(leaf),
-				"payload_capacity": payloadCapacity,
-				"key_overflow":     keyOverflow,
-				"size_overflow":    sizeOverflow,
-			}
-			tree.recorder.RecordStep(StepTypeOverflowDetected, nodeID(leaf.Header.PageID), leafDepth, metadata)
-		}
-
 	// If the leaf does not overflow (by key count or payload), we're done
 	if !isOverflow {
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(leaf.Header.PageID), leafDepth, map[string]interface{}{"op": "insert"})
-		}
 		return nil
 	}
 
@@ -509,26 +429,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	var pushKey KeyType
 	newLeaf := tree.pager.NewLeaf()
 	
-	// Find split index before split
-	splitIndex := len(leaf.Keys) / 2
-	if len(leaf.Keys)%2 == 0 {
-		splitIndex = len(leaf.Keys) / 2
-	} else {
-		splitIndex = (len(leaf.Keys) + 1) / 2
-	}
-	
 	pushKey = page.SplitLeaf(leaf, newLeaf)
-
-	// Record node split
-	if tree.recorder != nil {
-		metadata := map[string]interface{}{
-			"split_index": splitIndex,
-			"original_key_count": len(leaf.Keys) + len(newLeaf.Keys),
-			"left_key_count": len(leaf.Keys),
-			"right_key_count": len(newLeaf.Keys),
-		}
-		tree.recorder.RecordStepWithTargetKey(StepTypeNodeSplit, nodeID(leaf.Header.PageID), nodeID(newLeaf.Header.PageID), leafDepth, &pushKey, metadata)
-	}
 
 	// Track page modifications for transaction
 	if tree.txManager != nil {
@@ -542,17 +443,12 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	//    internal nodes. If a parent overflows, split it and
 	//    continue upward. `childPageID` always points to the
 	//    right-side page produced by the most recent split.
-	parentDepth := leafDepth - 1
+	parentDepth := len(path) - 1
 	for len(path) > 0 {
 		parentID := path[len(path)-1]
 		path = path[:len(path)-1]
 
 		parent := tree.pager.Get(parentID).(*page.InternalPage)
-
-		// Record promote key
-		if tree.recorder != nil {
-			tree.recorder.RecordStepWithTargetKey(StepTypePromoteKey, nodeID(childPageID), nodeID(parentID), parentDepth, &pushKey, nil)
-		}
 
 		// Insert the separator key and pointer into parent
 		page.InsertIntoInternal(parent, pushKey, childPageID)
@@ -564,42 +460,12 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 		// If parent didn't overflow, split propagation stops
 		if len(parent.Keys) < page.ORDER {
-			if tree.recorder != nil {
-				tree.recorder.RecordStep(StepTypeRebalanceComplete, nodeID(parentID), parentDepth, map[string]interface{}{"op": "insert"})
-				tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(parentID), parentDepth, map[string]interface{}{"op": "insert"})
-			}
 			return nil
-		}
-
-		// Record overflow detected in parent (internal node) with metadata shape
-		// consistent with leaf overflow detection. Internal nodes don't have
-		// payload, so we only report key-based overflow and use zeroed payload
-		// fields for UI consistency.
-		if tree.recorder != nil {
-			keyOverflowParent := len(parent.Keys) > MAX_KEYS
-			metadata := map[string]interface{}{
-				"key_count":        len(parent.Keys),
-				"max_keys":         MAX_KEYS,
-				"payload_size":     0,
-				"payload_capacity": 0,
-				"key_overflow":     keyOverflowParent,
-				"size_overflow":    false,
-			}
-			tree.recorder.RecordStep(StepTypeOverflowDetected, nodeID(parentID), parentDepth, metadata)
 		}
 
 		// split internal
 		newInternal := tree.pager.NewInternal()
 		pushKey = page.SplitInternal(parent, newInternal, tree.pager)
-		
-		// Record internal node split
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"left_key_count": len(parent.Keys),
-				"right_key_count": len(newInternal.Keys),
-			}
-			tree.recorder.RecordStepWithTargetKey(StepTypeNodeSplit, nodeID(parentID), nodeID(newInternal.Header.PageID), parentDepth, &pushKey, metadata)
-		}
 		
 		// Track new internal page
 		if tree.txManager != nil {
@@ -635,20 +501,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	newRoot.Header.KeyCount = 1
 	
 	// Update meta root
-	oldRootID := tree.meta.RootPage
 	tree.meta.RootPage = newRoot.Header.PageID
-	
-	// Record new root creation
-	if tree.recorder != nil {
-		metadata := map[string]interface{}{
-			"old_root_id": oldRootID,
-			"new_root_id": newRoot.Header.PageID,
-			"root_type": "internal",
-		}
-		tree.recorder.RecordStepWithTargetKey(StepTypeNewRootCreated, nodeID(newRoot.Header.PageID), "ROOT", 0, &pushKey, metadata)
-		tree.recorder.RecordStep(StepTypeRebalanceComplete, nodeID(newRoot.Header.PageID), 0, map[string]interface{}{"op": "insert"})
-		tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(newRoot.Header.PageID), 0, map[string]interface{}{"op": "insert"})
-	}
 	
 	// Ensure meta page is properly initialized for transaction tracking
 	tree.meta.Header.PageID = 1
@@ -735,20 +588,12 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 	// Empty tree
 	if tree.IsEmpty() {
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeSearchNotFound, "ROOT", 0, map[string]interface{}{"op": "search"})
-			tree.recorder.RecordStep(StepTypeOperationComplete, "ROOT", 0, map[string]interface{}{"op": "search"})
-		}
 		return storage.Record{}, fmt.Errorf("key not found: %v (empty tree)", key)
 	}
 
-	// Find the leaf that should contain the key (findLeaf already records traversal)
+	// Find the leaf that should contain the key
 	leaf, _, err := tree.findLeaf(key)
 	if err != nil {
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeSearchNotFound, "UNKNOWN", 0, map[string]interface{}{"op": "search"})
-			tree.recorder.RecordStep(StepTypeOperationComplete, "UNKNOWN", 0, map[string]interface{}{"op": "search"})
-		}
 		return storage.Record{}, err
 	}
 
@@ -756,19 +601,9 @@ func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 	index := common.BinarySearch(leaf.Keys, key)
 	if index != -1 {
 		value := leaf.Values[index]
-		if tree.recorder != nil {
-			leafDepth := 0 // Depth will be set by findLeaf
-			tree.recorder.RecordStepWithKeyValue(StepTypeSearchFound, nodeID(leaf.Header.PageID), leafDepth, &key, &value, map[string]interface{}{"op": "search"})
-			tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(leaf.Header.PageID), leafDepth, map[string]interface{}{"op": "search"})
-		}
 		return value, nil
 	}
 
-	if tree.recorder != nil {
-		leafDepth := 0 // Depth will be set by findLeaf
-		tree.recorder.RecordStepWithKey(StepTypeSearchNotFound, nodeID(leaf.Header.PageID), leafDepth, &key, map[string]interface{}{"op": "search"})
-		tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(leaf.Header.PageID), leafDepth, map[string]interface{}{"op": "search"})
-	}
 	return storage.Record{}, fmt.Errorf("key not found: %v", key)
 }
 
@@ -787,26 +622,17 @@ func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
 func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []ValueType, error) {
 	// Validate range
 	if startKey.Compare(endKey) > 0 {
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeOperationComplete, "ROOT", 0, map[string]interface{}{"op": "range_search", "error": "invalid_range"})
-		}
 		return nil, nil, fmt.Errorf("invalid range: startKey %v > endKey %v", startKey, endKey)
 	}
 
 	// Empty tree
 	if tree.IsEmpty() {
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeOperationComplete, "ROOT", 0, map[string]interface{}{"op": "range_search", "result_count": 0})
-		}
 		return []KeyType{}, []ValueType{}, nil
 	}
 
-	// Find the leaf containing or after startKey (findLeaf already records traversal)
+	// Find the leaf containing or after startKey
 	leaf, _, err := tree.findLeaf(startKey)
 	if err != nil {
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeOperationComplete, "UNKNOWN", 0, map[string]interface{}{"op": "range_search", "error": err.Error()})
-		}
 		return nil, nil, err
 	}
 
@@ -827,9 +653,6 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 			}
 			// Early exit if we've passed endKey
 			if k.Compare(endKey) > 0 {
-				if tree.recorder != nil {
-					tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(leaf.Header.PageID), 0, map[string]interface{}{"op": "range_search", "result_count": len(keys)})
-				}
 				return keys, values, nil
 			}
 		}
@@ -849,9 +672,6 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 		}
 	}
 
-	if tree.recorder != nil {
-		tree.recorder.RecordStep(StepTypeOperationComplete, "LEAF", 0, map[string]interface{}{"op": "range_search", "result_count": len(keys)})
-	}
 	return keys, values, nil
 }
 
@@ -975,13 +795,6 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 		return fmt.Errorf("key not found: %v", key)
 	}
 
-	leafDepth := len(path)
-
-	// Record entry removal
-	if tree.recorder != nil {
-		tree.recorder.RecordStepWithKey(StepTypeEntryRemoved, nodeID(leaf.Header.PageID), leafDepth, &key, nil)
-	}
-
 	// Remove the key and value
 	leaf.Keys = append(leaf.Keys[:keyIndex], leaf.Keys[keyIndex+1:]...)
 	leaf.Values = append(leaf.Values[:keyIndex], leaf.Values[keyIndex+1:]...)
@@ -1003,12 +816,6 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 		if len(leaf.Keys) == 0 {
 			tree.meta.RootPage = 0
 			
-			// Record tree shrinking
-			if tree.recorder != nil {
-				tree.recorder.RecordStep(StepTypeShrinkTree, "ROOT", 0, map[string]interface{}{"new_root": 0})
-				tree.recorder.RecordStep(StepTypeOperationComplete, "ROOT", 0, map[string]interface{}{"op": "delete"})
-			}
-			
 			// Ensure meta page is properly initialized for transaction tracking
 			tree.meta.Header.PageID = 1
 			tree.meta.Header.PageType = page.PageTypeMeta
@@ -1021,27 +828,12 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 			// Meta page will be written during transaction commit (via defer)
 			return nil
 		}
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(leaf.Header.PageID), 0, map[string]interface{}{"op": "delete"})
-		}
 		return nil
 	}
 
 	// Check if leaf needs rebalancing
 	if len(leaf.Keys) >= MIN_KEYS {
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(leaf.Header.PageID), leafDepth, map[string]interface{}{"op": "delete"})
-		}
 		return nil // No underflow, we're done
-	}
-
-	// Record underflow detected
-	if tree.recorder != nil {
-		metadata := map[string]interface{}{
-			"key_count": len(leaf.Keys),
-			"min_keys": MIN_KEYS,
-		}
-		tree.recorder.RecordStep(StepTypeUnderflowDetected, nodeID(leaf.Header.PageID), leafDepth, metadata)
 	}
 
 	// Handle underflow: try to borrow or merge
@@ -1082,31 +874,13 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 		return fmt.Errorf("invalid parent-child relationship")
 	}
 
-	leafDepth := len(path)
-
 	// Try to borrow from right sibling first
 	if childIndex < len(parent.Children)-1 {
 		// Get right sibling
 		rightSiblingID := parent.Children[childIndex+1]
 		rightSibling := tree.pager.Get(rightSiblingID).(*page.LeafPage)
 
-		// Record check sibling
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"sibling_type": "right",
-				"sibling_key_count": len(rightSibling.Keys),
-				"min_keys": MIN_KEYS,
-			}
-			tree.recorder.RecordStepWithTarget(StepTypeCheckSibling, nodeID(leaf.Header.PageID), nodeID(rightSiblingID), leafDepth, metadata)
-		}
-
 		if len(rightSibling.Keys) > MIN_KEYS {
-			// Record borrow right
-			if tree.recorder != nil {
-				borrowedKey := rightSibling.Keys[0]
-				tree.recorder.RecordStepWithTargetKey(StepTypeBorrowRight, nodeID(leaf.Header.PageID), nodeID(rightSiblingID), leafDepth, &borrowedKey, nil)
-			}
-
 			// Borrow from right sibling
 			leaf.Keys = append(leaf.Keys, rightSibling.Keys[0])
 			leaf.Values = append(leaf.Values, rightSibling.Values[0])
@@ -1133,11 +907,6 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 				tree.txManager.TrackPageModification(parentID, parent, tree)
 			}
 
-			if tree.recorder != nil {
-				tree.recorder.RecordStep(StepTypeRebalanceComplete, nodeID(leaf.Header.PageID), leafDepth, map[string]interface{}{"op": "delete"})
-				tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(leaf.Header.PageID), leafDepth, map[string]interface{}{"op": "delete"})
-			}
-
 			return nil
 		}
 	}
@@ -1147,23 +916,7 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 		leftSiblingID := parent.Children[childIndex-1]
 		leftSibling := tree.pager.Get(leftSiblingID).(*page.LeafPage)
 
-		// Record check sibling
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"sibling_type": "left",
-				"sibling_key_count": len(leftSibling.Keys),
-				"min_keys": MIN_KEYS,
-			}
-			tree.recorder.RecordStepWithTarget(StepTypeCheckSibling, nodeID(leaf.Header.PageID), nodeID(leftSiblingID), leafDepth, metadata)
-		}
-
 		if len(leftSibling.Keys) > MIN_KEYS {
-			// Record borrow left
-			if tree.recorder != nil {
-				borrowedKey := leftSibling.Keys[len(leftSibling.Keys)-1]
-				tree.recorder.RecordStepWithTargetKey(StepTypeBorrowLeft, nodeID(leaf.Header.PageID), nodeID(leftSiblingID), leafDepth, &borrowedKey, nil)
-			}
-
 			// Borrow from left sibling
 			lastIdx := len(leftSibling.Keys) - 1
 			
@@ -1193,11 +946,6 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 				tree.txManager.TrackPageModification(parentID, parent, tree)
 			}
 
-			if tree.recorder != nil {
-				tree.recorder.RecordStep(StepTypeRebalanceComplete, nodeID(leaf.Header.PageID), leafDepth, map[string]interface{}{"op": "delete"})
-				tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(leaf.Header.PageID), leafDepth, map[string]interface{}{"op": "delete"})
-			}
-
 			return nil
 		}
 	}
@@ -1208,15 +956,6 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 		// Merge with right sibling
 		rightSiblingID := parent.Children[childIndex+1]
 		rightSibling := tree.pager.Get(rightSiblingID).(*page.LeafPage)
-
-		// Record merge nodes
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"deleted_node_id": nodeID(rightSiblingID),
-				"merge_direction": "right",
-			}
-			tree.recorder.RecordStepWithTarget(StepTypeMergeNodes, nodeID(leaf.Header.PageID), nodeID(rightSiblingID), leafDepth, metadata)
-		}
 
 		// Merge right into current
 		leaf.Keys = append(leaf.Keys, rightSibling.Keys...)
@@ -1256,15 +995,6 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 		// Merge with left sibling
 		leftSiblingID := parent.Children[childIndex-1]
 		leftSibling := tree.pager.Get(leftSiblingID).(*page.LeafPage)
-
-		// Record merge nodes
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"deleted_node_id": nodeID(leaf.Header.PageID),
-				"merge_direction": "left",
-			}
-			tree.recorder.RecordStepWithTarget(StepTypeMergeNodes, nodeID(leftSiblingID), nodeID(leaf.Header.PageID), leafDepth, metadata)
-		}
 
 		// Merge current into left
 		leftSibling.Keys = append(leftSibling.Keys, leaf.Keys...)
@@ -1331,17 +1061,7 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 	if len(path) == 0 {
 		// If root has no keys and one child, make that child the new root
 		if len(node.Keys) == 0 && len(node.Children) == 1 {
-			oldRootID := tree.meta.RootPage
 			tree.meta.RootPage = node.Children[0]
-			
-			// Record tree shrinking
-			if tree.recorder != nil {
-				metadata := map[string]interface{}{
-					"old_root_id": oldRootID,
-					"new_root_id": tree.meta.RootPage,
-				}
-				tree.recorder.RecordStep(StepTypeShrinkTree, "ROOT", 0, metadata)
-			}
 			
 			// Update parent pointer of new root
 			newRoot := tree.pager.Get(tree.meta.RootPage)
@@ -1367,39 +1087,15 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 				tree.txManager.TrackPageModification(1, tree.meta, tree)
 			}
 			
-			if tree.recorder != nil {
-				tree.recorder.RecordStep(StepTypeRebalanceComplete, "ROOT", 0, map[string]interface{}{"op": "delete"})
-				tree.recorder.RecordStep(StepTypeOperationComplete, "ROOT", 0, map[string]interface{}{"op": "delete"})
-			}
-			
 			// Meta page will be written during transaction commit (via defer)
 			return nil
-		}
-		if tree.recorder != nil {
-			tree.recorder.RecordStep(StepTypeRebalanceComplete, nodeID(node.Header.PageID), 0, map[string]interface{}{"op": "delete"})
-			tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(node.Header.PageID), 0, map[string]interface{}{"op": "delete"})
 		}
 		return nil
 	}
 
 	// Check if node has enough keys
 	if len(node.Keys) >= MIN_KEYS {
-		if tree.recorder != nil {
-			nodeDepth := len(path)
-			tree.recorder.RecordStep(StepTypeRebalanceComplete, nodeID(node.Header.PageID), nodeDepth, map[string]interface{}{"op": "delete"})
-			tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(node.Header.PageID), nodeDepth, map[string]interface{}{"op": "delete"})
-		}
 		return nil
-	}
-
-	// Record underflow detected in internal node
-	if tree.recorder != nil {
-		nodeDepth := len(path)
-		metadata := map[string]interface{}{
-			"key_count": len(node.Keys),
-			"min_keys": MIN_KEYS,
-		}
-		tree.recorder.RecordStep(StepTypeUnderflowDetected, nodeID(node.Header.PageID), nodeDepth, metadata)
 	}
 
 	// Get parent
@@ -1419,31 +1115,14 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 		return fmt.Errorf("parent-child relationship broken in internal node")
 	}
 
-	nodeDepth := len(path)
-
 	// Try to borrow from right sibling
 	if childIndex < len(parent.Children)-1 {
 		rightSiblingID := parent.Children[childIndex+1]
 		rightSibling := tree.pager.Get(rightSiblingID).(*page.InternalPage)
 
-		// Record check sibling
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"sibling_type": "right",
-				"sibling_key_count": len(rightSibling.Keys),
-				"min_keys": MIN_KEYS,
-			}
-			tree.recorder.RecordStepWithTarget(StepTypeCheckSibling, nodeID(node.Header.PageID), nodeID(rightSiblingID), nodeDepth, metadata)
-		}
-
 		if len(rightSibling.Keys) > MIN_KEYS {
 			// Pull separator from parent
 			separatorKey := parent.Keys[childIndex]
-
-			// Record borrow right
-			if tree.recorder != nil {
-				tree.recorder.RecordStepWithTargetKey(StepTypeBorrowRight, nodeID(node.Header.PageID), nodeID(rightSiblingID), nodeDepth, &separatorKey, nil)
-			}
 
 			// Borrow from right sibling
 			node.Keys = append(node.Keys, separatorKey)
@@ -1478,16 +1157,11 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 						tree.txManager.TrackPageModification(c.Header.PageID, c, tree)
 					case *page.LeafPage:
 						tree.txManager.TrackPageModification(c.Header.PageID, c, tree)
-					}
 				}
 			}
+		}
 
-			if tree.recorder != nil {
-				tree.recorder.RecordStep(StepTypeRebalanceComplete, nodeID(node.Header.PageID), nodeDepth, map[string]interface{}{"op": "delete"})
-				tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(node.Header.PageID), nodeDepth, map[string]interface{}{"op": "delete"})
-			}
-
-			return nil
+		return nil
 		}
 	}
 
@@ -1496,24 +1170,9 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 		leftSiblingID := parent.Children[childIndex-1]
 		leftSibling := tree.pager.Get(leftSiblingID).(*page.InternalPage)
 
-		// Record check sibling
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"sibling_type": "left",
-				"sibling_key_count": len(leftSibling.Keys),
-				"min_keys": MIN_KEYS,
-			}
-			tree.recorder.RecordStepWithTarget(StepTypeCheckSibling, nodeID(node.Header.PageID), nodeID(leftSiblingID), nodeDepth, metadata)
-		}
-
 		if len(leftSibling.Keys) > MIN_KEYS {
 			// Pull separator from parent
 			separatorKey := parent.Keys[childIndex-1]
-
-			// Record borrow left
-			if tree.recorder != nil {
-				tree.recorder.RecordStepWithTargetKey(StepTypeBorrowLeft, nodeID(node.Header.PageID), nodeID(leftSiblingID), nodeDepth, &separatorKey, nil)
-			}
 			
 			// Insert at beginning of current node
 			node.Keys = append([]KeyType{separatorKey}, node.Keys...)
@@ -1550,16 +1209,11 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 						tree.txManager.TrackPageModification(c.Header.PageID, c, tree)
 					case *page.LeafPage:
 						tree.txManager.TrackPageModification(c.Header.PageID, c, tree)
-					}
 				}
 			}
+		}
 
-			if tree.recorder != nil {
-				tree.recorder.RecordStep(StepTypeRebalanceComplete, nodeID(node.Header.PageID), nodeDepth, map[string]interface{}{"op": "delete"})
-				tree.recorder.RecordStep(StepTypeOperationComplete, nodeID(node.Header.PageID), nodeDepth, map[string]interface{}{"op": "delete"})
-			}
-
-			return nil
+		return nil
 		}
 	}
 
@@ -1568,15 +1222,6 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 		// Merge with right sibling
 		rightSiblingID := parent.Children[childIndex+1]
 		rightSibling := tree.pager.Get(rightSiblingID).(*page.InternalPage)
-
-		// Record merge nodes
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"deleted_node_id": nodeID(rightSiblingID),
-				"merge_direction": "right",
-			}
-			tree.recorder.RecordStepWithTarget(StepTypeMergeNodes, nodeID(node.Header.PageID), nodeID(rightSiblingID), nodeDepth, metadata)
-		}
 
 		// Pull separator from parent
 		separatorKey := parent.Keys[childIndex]
@@ -1617,15 +1262,6 @@ func (tree *BPlusTree) rebalanceInternalAfterDelete(node *page.InternalPage, pat
 		// Merge with left sibling
 		leftSiblingID := parent.Children[childIndex-1]
 		leftSibling := tree.pager.Get(leftSiblingID).(*page.InternalPage)
-
-		// Record merge nodes
-		if tree.recorder != nil {
-			metadata := map[string]interface{}{
-				"deleted_node_id": nodeID(node.Header.PageID),
-				"merge_direction": "left",
-			}
-			tree.recorder.RecordStepWithTarget(StepTypeMergeNodes, nodeID(leftSiblingID), nodeID(node.Header.PageID), nodeDepth, metadata)
-		}
 
 		// Pull separator from parent
 		separatorKey := parent.Keys[childIndex-1]
