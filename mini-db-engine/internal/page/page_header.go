@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 )
 
-const PageHeaderSize = 56 // bytes (56 bytes)
+const PageHeaderSize = 68 // base size with B-Link (68 bytes)
 
 type PageType uint8
 type PageHeader struct {
@@ -21,6 +21,10 @@ type PageHeader struct {
 	NextPage   uint64 // right sibling (leaf) or 0
 	PrevPage   uint64 // left sibling (leaf) or 0
 
+	// B-Link support
+	RightPageID uint64 // right sibling for B-Link (all node types)
+	HighKey     []byte // high key value for B-Link
+
 	// padding for 8-byte alignment
 	_ uint32
 
@@ -29,93 +33,67 @@ type PageHeader struct {
 }
 
 // WriteToBuffer function used for: Serializing a page header into a buffer for persistent storage on disk.
-//
-// Format: [page header] [page type] [key count] [free space] [padding] [LSN]
+// Format: [PageID] [ParentPage] [PrevPage] [NextPage] [PageType] [KeyCount] [FreeSpace] [Padding] [LSN] [RightPageID] [HighKeySize] [HighKey]
 func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
-	// Serialize header fields in a stable, explicitly-defined order
-	// (big-endian). The serialization order is independent of the Go
-	// struct field layout; consumers/readers must use the same order
-	// when decoding. The chosen order here is:
-	//   PageID, ParentPage, PrevPage, NextPage, PageType, KeyCount,
-	//   FreeSpace, padding (uint32), LSN
-	if err := binary.Write(buf, binary.BigEndian, h.PageID); err != nil {
-		return err
-	}
-	if err := binary.Write(buf, binary.BigEndian, h.ParentPage); err != nil {
-		return err
-	}
+	// 1. Core Fields (Always fixed size)
+	binary.Write(buf, binary.BigEndian, h.PageID)
+	binary.Write(buf, binary.BigEndian, h.ParentPage)
+	binary.Write(buf, binary.BigEndian, h.PrevPage)
+	binary.Write(buf, binary.BigEndian, h.NextPage)
+	binary.Write(buf, binary.BigEndian, uint8(h.PageType))
+	binary.Write(buf, binary.BigEndian, h.KeyCount)
+	binary.Write(buf, binary.BigEndian, h.FreeSpace)
+	
+	// Explicit 11-byte padding to reach correct alignment
+	buf.Write(make([]byte, 11))
+	
+	binary.Write(buf, binary.BigEndian, h.LSN)
 
-	// linkage (prev/next) so scanners can follow sibling chains
-	if err := binary.Write(buf, binary.BigEndian, h.PrevPage); err != nil {
-		return err
-	}
-	if err := binary.Write(buf, binary.BigEndian, h.NextPage); err != nil {
-		return err
-	}
-
-	// type and counts
-	if err := binary.Write(buf, binary.BigEndian, h.PageType); err != nil {
-		return err
-	}
-	if err := binary.Write(buf, binary.BigEndian, h.KeyCount); err != nil {
-		return err
-	}
-	if err := binary.Write(buf, binary.BigEndian, h.FreeSpace); err != nil {
-		return err
-	}
-
-	// padding for alignment to keep header size stable across platforms
-	var padding uint32 = 0
-	if err := binary.Write(buf, binary.BigEndian, padding); err != nil {
-		return err
-	}
-
-	// LSN last so header changes affecting recovery can be appended
-	if err := binary.Write(buf, binary.BigEndian, h.LSN); err != nil {
-		return err
+	// 2. B-Link Fields
+	binary.Write(buf, binary.BigEndian, h.RightPageID)
+	highKeySize := uint32(len(h.HighKey))
+	binary.Write(buf, binary.BigEndian, highKeySize)
+	if highKeySize > 0 {
+		buf.Write(h.HighKey)
 	}
 
 	return nil
 }
 
 // ReadFromBuffer function used for: Deserializing a page header from a buffer loaded from persistent storage on disk.
-//
-// Format: [page header] [page type] [key count] [free space] [padding] [LSN]
+// Format: [PageID] [ParentPage] [PrevPage] [NextPage] [PageType] [KeyCount] [FreeSpace] [Padding] [LSN] [RightPageID] [HighKeySize] [HighKey]
 func (h *PageHeader) ReadFromBuffer(buf *bytes.Reader) error {
-	// Deserialize fields in the same order they were written.
-	if err := binary.Read(buf, binary.BigEndian, &h.PageID); err != nil {
-		return err
-	}
-	if err := binary.Read(buf, binary.BigEndian, &h.ParentPage); err != nil {
-		return err
+	binary.Read(buf, binary.BigEndian, &h.PageID)
+	binary.Read(buf, binary.BigEndian, &h.ParentPage)
+	binary.Read(buf, binary.BigEndian, &h.PrevPage)
+	binary.Read(buf, binary.BigEndian, &h.NextPage)
+	
+	var pType uint8
+	binary.Read(buf, binary.BigEndian, &pType)
+	h.PageType = PageType(pType)
+	
+	binary.Read(buf, binary.BigEndian, &h.KeyCount)
+	binary.Read(buf, binary.BigEndian, &h.FreeSpace)
+	
+	// Skip 11-byte padding
+	buf.Read(make([]byte, 11))
+	
+	binary.Read(buf, binary.BigEndian, &h.LSN)
+
+	// B-Link fields
+	binary.Read(buf, binary.BigEndian, &h.RightPageID)
+	
+	var highKeySize uint32
+	binary.Read(buf, binary.BigEndian, &highKeySize)
+	if highKeySize > 0 {
+		h.HighKey = make([]byte, highKeySize)
+		buf.Read(h.HighKey)
+	} else {
+		h.HighKey = nil
 	}
 
-	if err := binary.Read(buf, binary.BigEndian, &h.PrevPage); err != nil {
-		return err
-	}
-	if err := binary.Read(buf, binary.BigEndian, &h.NextPage); err != nil {
-		return err
-	}
-
-	if err := binary.Read(buf, binary.BigEndian, &h.PageType); err != nil {
-		return err
-	}
-	if err := binary.Read(buf, binary.BigEndian, &h.KeyCount); err != nil {
-		return err
-	}
-	if err := binary.Read(buf, binary.BigEndian, &h.FreeSpace); err != nil {
-		return err
-	}
-
-	// skip padding (alignment)
-	var padding uint32
-	if err := binary.Read(buf, binary.BigEndian, &padding); err != nil {
-		return err
-	}
-
-	// read LSN last (consistent with WriteToBuffer)
-	if err := binary.Read(buf, binary.BigEndian, &h.LSN); err != nil {
-		return err
+	if h.PageID > 1000000 {
+		// fmt.Printf("DEBUG: Suspicious PageID read: %d\n", h.PageID)
 	}
 
 	return nil

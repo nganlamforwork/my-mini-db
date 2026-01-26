@@ -3,6 +3,7 @@ package page
 import (
 	"bytes"
 	"encoding/binary"
+	"sync"
 )
 
 // DefaultPageSize is the default page size used by in-memory pages
@@ -10,6 +11,7 @@ const DefaultPageSize = 4096 // bytes (4KB)
 
 type MetaPage struct {
 	Header PageHeader
+	mu     sync.RWMutex
 
 	// B+Tree metadata
 	RootPage uint64 // page id of root
@@ -17,6 +19,14 @@ type MetaPage struct {
 	Order    uint16 // B+Tree order
 	Version  uint16 // format version
 }
+
+var _ Page = (*MetaPage)(nil)
+
+func (m *MetaPage) RLock()               { m.mu.RLock() }
+func (m *MetaPage) RUnlock()             { m.mu.RUnlock() }
+func (m *MetaPage) Lock()                { m.mu.Lock() }
+func (m *MetaPage) Unlock()              { m.mu.Unlock() }
+func (m *MetaPage) GetHeader() *PageHeader { return &m.Header }
 
 // WriteToBuffer function used for: Serializing a meta page into a buffer for persistent storage on disk.
 //

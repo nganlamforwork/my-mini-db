@@ -248,14 +248,14 @@ func (pm *PageManager) NewInternal() *InternalPage {
 }
 
 // Get function used for: Retrieving a page by ID from LRU cache or loading it from disk if not cached, then caching it with LRU eviction.
-func (pm *PageManager) Get(pageID uint64) interface{} {
+func (pm *PageManager) Get(pageID uint64) Page {
 	if pageID == 0 {
 		return nil
 	}
 
 	// Try cache first (LRU will move to front if found)
 	if cached := pm.cache.Get(pageID); cached != nil {
-		return cached
+		return cached.(Page)
 	}
 
 	// Load from disk if not in cache (cache miss - I/O read)
@@ -267,12 +267,14 @@ func (pm *PageManager) Get(pageID uint64) interface{} {
 		panic(err)
 	}
 	
+	p := page.(Page)
+
 	// Track I/O read
-	pm.trackIORead(pageID, page)
+	pm.trackIORead(pageID, p)
 	
 	// Add to cache (may evict least recently used page if cache is full)
-	pm.cache.Put(pageID, page)
-	return page
+	pm.cache.Put(pageID, p)
+	return p
 }
 
 // WritePageToFile function used for: Serializing a page and writing it to the database file at the slot corresponding to pageID (exported for transaction/WAL use).
