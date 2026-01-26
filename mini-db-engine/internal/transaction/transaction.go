@@ -132,6 +132,17 @@ func (tm *TransactionManager) Commit() error {
 	// Flush all modified pages to main database file
 	pager := tm.activeTx.tree.GetPager()
 	for pageID, pageObj := range tm.activeTx.modifiedPages {
+		// Use WriteMeta for meta page (page ID 1) to ensure proper handling
+		if pageID == 1 {
+			if metaPage, ok := pageObj.(*page.MetaPage); ok {
+				// Ensure meta page is in cache before writing
+				pager.Put(1, metaPage)
+				if err := pager.WriteMeta(metaPage); err != nil {
+					return fmt.Errorf("failed to write meta page: %w", err)
+				}
+				continue
+			}
+		}
 		if err := pager.WritePageToFile(pageID, pageObj); err != nil {
 			return fmt.Errorf("failed to write page %d: %w", pageID, err)
 		}

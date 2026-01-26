@@ -618,6 +618,10 @@ func TestLoadFromDisk(t *testing.T) {
 		t.Fatalf("failed to create tree: %v", err)
 	}
 	defer tree2.Close()
+	// Explicitly load all pages from disk
+	if err := tree2.Load(); err != nil {
+		t.Fatalf("failed to load tree from disk: %v", err)
+	}
 	ctx.AddOperation("Successfully loaded all pages from disk into memory")
 
 	// Verify all keys can be found
@@ -626,6 +630,7 @@ func TestLoadFromDisk(t *testing.T) {
 		val, err := tree2.Search(k)
 		if err != nil {
 			t.Errorf("key %d not found after load: %v", KI(k), err)
+			continue // Skip validation if key not found
 		}
 		expected := V(fmt.Sprintf("v%d", KI(k)))
 		if len(val.Columns) > 0 && val.Columns[0].Value == nil {

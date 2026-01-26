@@ -3,6 +3,7 @@ package btree
 import (
 	"fmt"
 	"os"
+	"sync"
 
 	"bplustree/internal/common"
 	"bplustree/internal/page"
@@ -19,6 +20,7 @@ type LeafPage = page.LeafPage
 type InternalPage = page.InternalPage
 
 type BPlusTree struct {
+	mu        sync.RWMutex // Global mutex for Phase 1: Thread-Safety Baseline
 	meta      *page.MetaPage
 	pager     *page.PageManager
 	txManager *transaction.TransactionManager
@@ -274,12 +276,30 @@ func (tree *BPlusTree) Checkpoint() error {
 // Close function used for: Closing the WAL and page manager, ensuring all data is flushed to disk and resources are released.
 //
 // Algorithm steps:
-// 1. Close WAL manager if it exists, flushing all pending writes
-// 2. Close page manager if it exists, flushing page cache to disk
-// 3. Return any error from closing operations
+// 1. Commit any active transaction to ensure all modifications are persisted
+// 2. Ensure meta page is written to disk if it exists and has a root page
+// 3. Close WAL manager if it exists, flushing all pending writes
+// 4. Close page manager if it exists, flushing page cache to disk
+// 5. Return any error from closing operations
 //
 // Return: error - nil on success, error if closing fails
 func (tree *BPlusTree) Close() error {
+	// Commit any active transaction to ensure all modifications are persisted
+	if tree.txManager != nil {
+		if tree.txManager.GetActiveTransaction() != nil {
+			_ = tree.txManager.Commit()
+		}
+	}
+	// Ensure meta page is persisted before closing
+	// This is critical for persistence - the meta page must be on disk
+	if tree.meta != nil && tree.meta.RootPage != 0 && tree.pager != nil {
+		// Ensure meta page is in cache before writing
+		tree.pager.Put(1, tree.meta)
+		if err := tree.pager.WriteMeta(tree.meta); err != nil {
+			// Return error to ensure caller knows if persistence failed
+			return fmt.Errorf("failed to write meta page on close: %w", err)
+		}
+	}
 	if tree.wal != nil {
 		if err := tree.wal.Close(); err != nil {
 			return err
@@ -366,6 +386,10 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 //
 // Return: error - nil on success, error if duplicate key or operation fails
 func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
+	// Phase 1: Acquire write lock for thread-safety
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+
 	// Auto-commit: Ensures crash recovery even for single operations
 	wasAutoCommit := tree.ensureAutoCommitTransaction()
 	defer func() {
@@ -394,6 +418,9 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		// Ensure meta page is properly initialized for transaction tracking
 		tree.meta.Header.PageID = 1
 		tree.meta.Header.PageType = page.PageTypeMeta
+		
+		// Put meta page in pager cache to ensure it's properly tracked
+		tree.pager.Put(1, tree.meta)
 		
 		// Track page modifications for transaction (will be persisted on commit)
 		if tree.txManager != nil {
@@ -598,6 +625,10 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 //
 // Return: (ValueType, error) - value associated with key on success, error if key not found or tree is empty
 func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
+	// Phase 1: Acquire read lock for thread-safety
+	tree.mu.RLock()
+	defer tree.mu.RUnlock()
+
 	// Empty tree
 	if tree.IsEmpty() {
 		return storage.Record{}, fmt.Errorf("key not found: %v (empty tree)", key)
@@ -700,6 +731,10 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 //
 // Return: error - nil on success, error if key not found or update operation fails
 func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
+	// Phase 1: Acquire write lock for thread-safety
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+
 	// Auto-commit: Ensures crash recovery even for single operations
 	wasAutoCommit := tree.ensureAutoCommitTransaction()
 	defer func() {
@@ -782,6 +817,10 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 //
 // Return: error - nil on success, error if key not found or deletion fails
 func (tree *BPlusTree) Delete(key KeyType) error {
+	// Phase 1: Acquire write lock for thread-safety
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+
 	// Auto-commit: Ensures crash recovery even for single operations
 	wasAutoCommit := tree.ensureAutoCommitTransaction()
 	defer func() {
