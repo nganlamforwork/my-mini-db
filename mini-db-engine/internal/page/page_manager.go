@@ -306,6 +306,7 @@ func (pm *PageManager) WritePageToFile(pageID uint64, page interface{}) error {
 	}
 
 	offset := int64((pageID - 1) * uint64(pm.pageSize))
+	
 	if _, err := pm.file.WriteAt(buf.Bytes(), offset); err != nil {
 		return err
 	}

@@ -3,6 +3,7 @@ package page
 import (
 	"bytes"
 	"encoding/binary"
+	"io"
 )
 
 const PageHeaderSize = 56 // bytes (56 bytes)
@@ -75,6 +76,14 @@ func (h *PageHeader) WriteToBuffer(buf *bytes.Buffer) error {
 		return err
 	}
 
+	// Pad to PageHeaderSize (56 bytes)
+	// Current size: 8*4 + 1 + 2*2 + 4 + 8 = 49 bytes
+	// Needed padding: 56 - 49 = 7 bytes
+	padding7 := make([]byte, 7)
+	if _, err := buf.Write(padding7); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -115,6 +124,12 @@ func (h *PageHeader) ReadFromBuffer(buf *bytes.Reader) error {
 
 	// read LSN last (consistent with WriteToBuffer)
 	if err := binary.Read(buf, binary.BigEndian, &h.LSN); err != nil {
+		return err
+	}
+
+	// Skip trailing padding (7 bytes) to match PageHeaderSize
+	padding7 := make([]byte, 7)
+	if _, err := io.ReadFull(buf, padding7); err != nil {
 		return err
 	}
 
