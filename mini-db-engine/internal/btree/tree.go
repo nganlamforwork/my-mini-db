@@ -639,7 +639,135 @@ func (tree *BPlusTree) findLeafForWrite(key KeyType, operationType string) (*Lea
 	}
 }
 
+// findLeafPessimistic function used for: Phase 4 pessimistic traversal - acquires exclusive locks on ALL nodes
+// from root to leaf without releasing parent locks. Used when split/merge is detected and we need to hold
+// the entire path for the structural modification.
+//
+// Return: (*LeafPage, []uint64, []*sync.RWMutex, error) - target leaf, path of page IDs, held locks (for caller to release), error
+func (tree *BPlusTree) findLeafPessimistic(key KeyType) (*LeafPage, []uint64, []*sync.RWMutex, error) {
+	path := make([]uint64, 0)
+	heldLocks := make([]*sync.RWMutex, 0)
+
+	// ensure meta is loaded
+	if tree.meta == nil {
+		if m, err := tree.pager.ReadMeta(); err == nil {
+			tree.meta = m
+		}
+	}
+
+	currentID := uint64(0)
+	if tree.meta != nil {
+		currentID = tree.meta.RootPage
+	}
+
+	if currentID == 0 {
+		return nil, nil, nil, fmt.Errorf("empty tree")
+	}
+
+	// Get root page
+	rootPage := tree.pager.Get(currentID)
+	if rootPage == nil {
+		return nil, nil, nil, fmt.Errorf("page not found: %d", currentID)
+	}
+
+	var currentPage interface{} = rootPage
+
+	// Acquire exclusive lock on root (and KEEP IT - no early release in pessimistic mode)
+	switch p := rootPage.(type) {
+	case *LeafPage:
+		// Root is a leaf - acquire lock and return
+		p.Mu.Lock()
+		heldLocks = append(heldLocks, &p.Mu)
+		return p, path, heldLocks, nil
+	case *InternalPage:
+		p.Mu.Lock()
+		heldLocks = append(heldLocks, &p.Mu)
+		currentPage = p
+	default:
+		return nil, nil, nil, fmt.Errorf("unknown page type for page ID: %d", currentID)
+	}
+
+	// Traverse internal nodes - KEEP ALL LOCKS HELD (pessimistic mode)
+	for {
+		internalPage, ok := currentPage.(*InternalPage)
+		if !ok {
+			// Release all held locks on error
+			for _, lock := range heldLocks {
+				lock.Unlock()
+			}
+			return nil, nil, nil, fmt.Errorf("unexpected page type in traversal")
+		}
+
+		path = append(path, currentID)
+
+		// Binary search: last key <= key
+		pos := common.BinarySearchLastLessOrEqual(internalPage.Keys, key)
+
+		var childIndex int
+		if pos == -1 {
+			childIndex = 0
+		} else {
+			childIndex = pos + 1
+		}
+
+		// Get child page ID
+		if childIndex >= len(internalPage.Children) {
+			// Release all held locks on error
+			for _, lock := range heldLocks {
+				lock.Unlock()
+			}
+			return nil, nil, nil, fmt.Errorf("invalid child index: %d", childIndex)
+		}
+		childID := internalPage.Children[childIndex]
+
+		// Get child page
+		childPage := tree.pager.Get(childID)
+		if childPage == nil {
+			// Release all held locks on error
+			for _, lock := range heldLocks {
+				lock.Unlock()
+			}
+			return nil, nil, nil, fmt.Errorf("page not found: %d", childID)
+		}
+
+		// Acquire lock on child - DO NOT release parent (pessimistic mode)
+		switch child := childPage.(type) {
+		case *LeafPage:
+			// Acquire exclusive lock on leaf
+			child.Mu.Lock()
+			heldLocks = append(heldLocks, &child.Mu)
+			// Return leaf with ALL locks still held
+			// Caller must release all locks after operation complete
+			return child, path, heldLocks, nil
+
+		case *InternalPage:
+			// Acquire exclusive lock on child internal node
+			child.Mu.Lock()
+			heldLocks = append(heldLocks, &child.Mu)
+			// Move to child (keep all locks held)
+			currentID = childID
+			currentPage = child
+
+		default:
+			// Release all held locks on error
+			for _, lock := range heldLocks {
+				lock.Unlock()
+			}
+			return nil, nil, nil, fmt.Errorf("unknown page type for page ID: %d", childID)
+		}
+	}
+}
+
+// releaseLocks releases all locks in reverse order (leaf → root)
+// This is the proper order to avoid potential issues during unlock
+func releaseLocks(locks []*sync.RWMutex) {
+	for i := len(locks) - 1; i >= 0; i-- {
+		locks[i].Unlock()
+	}
+}
+
 // Insert function used for: B+Tree insertion with automatic node splitting to maintain balance. The operation handles two cases: simple insertion (no split) and insertion with splits that propagate upward.
+
 //
 // Algorithm steps:
 // 1. Handle empty tree - Create root leaf if tree is empty
@@ -652,9 +780,8 @@ func (tree *BPlusTree) findLeafForWrite(key KeyType, operationType string) (*Lea
 //
 // Return: error - nil on success, error if duplicate key or operation fails
 func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
-	// Phase 3 (safety-first implementation):
-	// Use optimistic leaf locking for structure, but still serialize writers
-	// with the global tree lock to avoid subtle races in this personal project.
+	// Phase 3: Use global tree lock for writers
+	// This serializes all write operations but ensures correctness
 	tree.mu.Lock()
 	defer tree.mu.Unlock()
 
@@ -666,18 +793,18 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		}
 	}()
 
-	// 1. Empty tree → create root leaf (needs global lock for meta page modification)
+	// 1. Empty tree → create root leaf
 	if tree.meta == nil {
 		if m, err := tree.pager.ReadMeta(); err == nil {
 			tree.meta = m
 		} else {
-		// fallback: create a new meta page in-memory
-		tree.meta = &page.MetaPage{RootPage: 0, PageSize: uint32(page.DefaultPageSize), Order: uint16(page.ORDER), Version: 1}
+			// fallback: create a new meta page in-memory
+			tree.meta = &page.MetaPage{RootPage: 0, PageSize: uint32(page.DefaultPageSize), Order: uint16(page.ORDER), Version: 1}
 		}
 	}
 
 	if tree.meta.RootPage == 0 {
-		// Empty tree creation still runs under the global lock above.
+		// Empty tree creation
 		leaf := tree.pager.NewLeaf()
 		leaf.Keys = append(leaf.Keys, key)
 		leaf.Values = append(leaf.Values, value)
@@ -697,108 +824,45 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 			tree.txManager.TrackPageModification(1, tree.meta, tree)
 		}
 		
-		// Meta page will be written during transaction commit (via defer)
 		return nil
 	}
 
-	// 2. Phase 3: Try optimistic path first (fine-grained locking with safety check)
-	leaf, path, _, err := tree.findLeafForWrite(key, "insert")
+	// 2. Find target leaf (no fine-grained locking needed, global lock held)
+	leaf, path, err := tree.findLeafWithLocking(key, false)
 	if err != nil {
 		return err
 	}
 
-	// Check for duplicate keys using binary search (leaf lock is held)
+	// Check for duplicate keys using binary search
 	if common.BinarySearch(leaf.Keys, key) != -1 {
-		leaf.Mu.Unlock()
 		return fmt.Errorf("duplicate key insertion: %v", key)
 	}
 
-	// Phase 3: Re-check safety AFTER acquiring leaf lock (leaf state might have changed)
-	// The initial safety check was done while holding parent lock, but we need to verify
-	// again now that we have exclusive access to the leaf
-	actualIsSafe := len(leaf.Keys) < MAX_KEYS
-	
-	// If leaf is unsafe, handle split under the already-held global lock
-	if !actualIsSafe {
-		// Release leaf lock (we already have global lock from line 658)
-		leaf.Mu.Unlock()
-		
-		// Pessimistic path: acquire global lock and retry
-		// Global lock is already held (from line 658), no need to re-acquire
-		// Retry with global lock (no fine-grained locking needed)
-		leaf, path, err = tree.findLeafWithLocking(key, false)
-		if err != nil {
-			return err
-		}
-		
-		// Check for duplicate again
-		if common.BinarySearch(leaf.Keys, key) != -1 {
-			return fmt.Errorf("duplicate key insertion: %v", key)
-		}
-		
-		// Insert into the leaf
-		if err := page.InsertIntoLeaf(leaf, key, value); err != nil {
-			return err
-		}
-		
-		// Track page modification for transaction
-		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
-		}
-		
-		// Check for overflow - if overflow, handle split (under already-held global lock)
-		payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
-		keyOverflow := len(leaf.Keys) > MAX_KEYS
-		sizeOverflow := page.ComputeLeafPayloadSize(leaf) > payloadCapacity
-		isOverflow := keyOverflow || sizeOverflow
-		
-		if !isOverflow {
-			return nil
-		}
-		
-		// Handle split under global lock (pessimistic path)
-		return tree.handleSplit(leaf, path)
-	}
-
-	// Optimistic path: leaf is safe, perform insert with only leaf lock held
 	// Insert into the leaf in sorted order
 	if err := page.InsertIntoLeaf(leaf, key, value); err != nil {
-		leaf.Mu.Unlock()
 		return err
 	}
 
-	// Track page modification for transaction (WAL logging happens in commit)
+	// Track page modification for transaction
 	if tree.txManager != nil {
 		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
 	}
 
-	// Check for overflow (should not happen if safety check was correct, but verify)
+	// Check for overflow
 	payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
 	keyOverflow := len(leaf.Keys) > MAX_KEYS
 	sizeOverflow := page.ComputeLeafPayloadSize(leaf) > payloadCapacity
 	isOverflow := keyOverflow || sizeOverflow
 
-	// Release leaf lock
-	leaf.Mu.Unlock()
-
-	// If the leaf does not overflow, we're done (optimistic path succeeded)
+	// If the leaf does not overflow, we're done
 	if !isOverflow {
 		return nil
 	}
 
-	// Safety check was wrong - leaf overflowed. Handle split under already-held global lock.
-	// This should be rare if safety check is correct.
-	// Global lock is already held (from line 658), no need to re-acquire
-	
-	// Re-find leaf (no fine-grained locking needed since we have global lock)
-	leaf, path, err = tree.findLeafWithLocking(key, false)
-	if err != nil {
-		return err
-	}
-	
-	// Handle split under already-held global lock
+	// Handle split under global lock
 	return tree.handleSplit(leaf, path)
 }
+
 
 // handleSplit handles leaf split and propagation under global lock (pessimistic path)
 // Assumes global lock is already held
@@ -892,6 +956,109 @@ func (tree *BPlusTree) handleSplit(leaf *LeafPage, path []uint64) error {
 	}
 	
 	// Meta page will be written during transaction commit (via defer)
+	return nil
+}
+
+// handleSplitWithLocks handles leaf split with explicit lock management (Phase 4 pessimistic path)
+// After split is complete, releases all held locks in reverse order
+func (tree *BPlusTree) handleSplitWithLocks(leaf *LeafPage, path []uint64, heldLocks []*sync.RWMutex) error {
+	// For root split, we need global lock to update meta
+	// Acquire it before modifying anything
+	needsMetaLock := len(path) == 0 || len(leaf.Keys) > MAX_KEYS
+	if needsMetaLock {
+		tree.mu.Lock()
+		defer tree.mu.Unlock()
+	}
+	
+	// Split leaf
+	var pushKey KeyType
+	newLeaf := tree.pager.NewLeaf()
+	
+	pushKey = page.SplitLeaf(leaf, newLeaf)
+
+	// Track page modifications for transaction
+	if tree.txManager != nil {
+		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
+		tree.txManager.TrackPageAllocation(newLeaf.Header.PageID, newLeaf, tree)
+	}
+
+	var childPageID uint64 = newLeaf.Header.PageID
+
+	// Propagate split up: insert the promoted key into parent
+	// internal nodes. If a parent overflows, split it and
+	// continue upward. `childPageID` always points to the
+	// right-side page produced by the most recent split.
+	for len(path) > 0 {
+		parentID := path[len(path)-1]
+		path = path[:len(path)-1]
+
+		parent := tree.pager.Get(parentID).(*page.InternalPage)
+
+		// Insert the separator key and pointer into parent
+		page.InsertIntoInternal(parent, pushKey, childPageID)
+
+		// Track parent modification
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(parentID, parent, tree)
+		}
+
+		// If parent didn't overflow, split propagation stops
+		if len(parent.Keys) < page.ORDER {
+			releaseLocks(heldLocks)
+			return nil
+		}
+
+		// split internal
+		newInternal := tree.pager.NewInternal()
+		pushKey = page.SplitInternal(parent, newInternal, tree.pager)
+		
+		// Track new internal page
+		if tree.txManager != nil {
+			tree.txManager.TrackPageAllocation(newInternal.Header.PageID, newInternal, tree)
+		}
+		
+		childPageID = newInternal.Header.PageID
+	}
+
+	// Root split → create new root
+	newRoot := tree.pager.NewInternal()
+	newRoot.Keys = append(newRoot.Keys, pushKey)
+	newRoot.Children = append(
+		newRoot.Children,
+		tree.meta.RootPage,
+		childPageID,
+	)
+
+	// Ensure correct type assertions for left and right children
+	if left, ok := tree.pager.Get(tree.meta.RootPage).(*page.InternalPage); ok {
+		left.Header.ParentPage = newRoot.Header.PageID
+	} else if leftLeaf, ok := tree.pager.Get(tree.meta.RootPage).(*page.LeafPage); ok {
+		leftLeaf.Header.ParentPage = newRoot.Header.PageID
+	}
+
+	if right, ok := tree.pager.Get(childPageID).(*page.InternalPage); ok {
+		right.Header.ParentPage = newRoot.Header.PageID
+	} else if rightLeaf, ok := tree.pager.Get(childPageID).(*page.LeafPage); ok {
+		rightLeaf.Header.ParentPage = newRoot.Header.PageID
+	}
+
+	newRoot.Header.KeyCount = 1
+	
+	// Update meta root
+	tree.meta.RootPage = newRoot.Header.PageID
+	
+	// Ensure meta page is properly initialized for transaction tracking
+	tree.meta.Header.PageID = 1
+	tree.meta.Header.PageType = page.PageTypeMeta
+	
+	// Track new root and meta modifications (will be persisted on commit)
+	if tree.txManager != nil {
+		tree.txManager.TrackPageAllocation(newRoot.Header.PageID, newRoot, tree)
+		tree.txManager.TrackPageModification(1, tree.meta, tree)
+	}
+	
+	// Release all held locks after split is complete
+	releaseLocks(heldLocks)
 	return nil
 }
 
@@ -1174,9 +1341,8 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 //
 // Return: error - nil on success, error if key not found or deletion fails
 func (tree *BPlusTree) Delete(key KeyType) error {
-	// Phase 3 (safety-first implementation):
-	// Use optimistic leaf locking for structure, but still serialize writers
-	// with the global tree lock to avoid subtle races in this personal project.
+	// Phase 3: Use global tree lock for writers
+	// This serializes all write operations but ensures correctness
 	tree.mu.Lock()
 	defer tree.mu.Unlock()
 
@@ -1188,91 +1354,23 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 		}
 	}()
 
-	// Empty tree check (already have write lock, don't call IsEmpty to avoid deadlock)
+	// Empty tree check
 	if tree.meta == nil || tree.meta.RootPage == 0 {
 		return fmt.Errorf("cannot delete from empty tree")
 	}
 
-	// Phase 3: Try optimistic path first (fine-grained locking with safety check)
-	leaf, path, _, err := tree.findLeafForWrite(key, "delete")
+	// Find target leaf (no fine-grained locking needed, global lock held)
+	leaf, path, err := tree.findLeafWithLocking(key, false)
 	if err != nil {
 		return err
 	}
 
-	// Find and remove the key from the leaf using binary search (leaf lock is held)
+	// Find the key in the leaf using binary search
 	keyIndex := common.BinarySearch(leaf.Keys, key)
 	if keyIndex == -1 {
-		leaf.Mu.Unlock()
 		return fmt.Errorf("key not found: %v", key)
 	}
 
-	// Phase 3: Re-check safety AFTER acquiring leaf lock (leaf state might have changed)
-	actualIsSafe := len(leaf.Keys) > MIN_KEYS
-	
-	// If leaf is unsafe, handle rebalance under already-held global lock
-	if !actualIsSafe {
-		// Release leaf lock (we already have global lock from line 1188)
-		leaf.Mu.Unlock()
-		
-		// Global lock is already held (from line 1188), no need to re-acquire
-		// Retry with global lock (no fine-grained locking needed)
-		leaf, path, err = tree.findLeafWithLocking(key, false)
-		if err != nil {
-			return err
-		}
-		
-		// Check for key again
-		keyIndex = common.BinarySearch(leaf.Keys, key)
-		if keyIndex == -1 {
-			return fmt.Errorf("key not found: %v", key)
-		}
-		
-		// Remove the key and value
-		leaf.Keys = append(leaf.Keys[:keyIndex], leaf.Keys[keyIndex+1:]...)
-		leaf.Values = append(leaf.Values[:keyIndex], leaf.Values[keyIndex+1:]...)
-		leaf.Header.KeyCount = uint16(len(leaf.Keys))
-		
-		// Recompute free space
-		payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
-		used := page.ComputeLeafPayloadSize(leaf)
-		leaf.Header.FreeSpace = uint16(payloadCapacity - used)
-		
-		// Track page modification for transaction
-		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
-		}
-		
-		// If this is the root and it's a leaf, we're done
-		if len(path) == 0 {
-			// If root is now empty, reset tree
-			if len(leaf.Keys) == 0 {
-				tree.meta.RootPage = 0
-				
-				// Ensure meta page is properly initialized for transaction tracking
-				tree.meta.Header.PageID = 1
-				tree.meta.Header.PageType = page.PageTypeMeta
-				
-				// Track meta modification (will be persisted on commit)
-				if tree.txManager != nil {
-					tree.txManager.TrackPageModification(1, tree.meta, tree)
-				}
-				
-				// Meta page will be written during transaction commit (via defer)
-				return nil
-			}
-			return nil
-		}
-		
-		// Check if leaf needs rebalancing
-		if len(leaf.Keys) >= MIN_KEYS {
-			return nil // No underflow, we're done
-		}
-		
-		// Handle underflow: try to borrow or merge (under global lock)
-		return tree.rebalanceLeafAfterDelete(leaf, path)
-	}
-
-	// Optimistic path: leaf is safe, perform delete with only leaf lock held
 	// Remove the key and value
 	leaf.Keys = append(leaf.Keys[:keyIndex], leaf.Keys[keyIndex+1:]...)
 	leaf.Values = append(leaf.Values[:keyIndex], leaf.Values[keyIndex+1:]...)
@@ -1283,77 +1381,33 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	used := page.ComputeLeafPayloadSize(leaf)
 	leaf.Header.FreeSpace = uint16(payloadCapacity - used)
 
-	// Track page modification for transaction (WAL logging happens in commit)
+	// Track page modification for transaction
 	if tree.txManager != nil {
 		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
 	}
 
-	// Check if this is root (needs special handling for meta page)
+	// If this is root leaf, handle potential empty tree
 	if len(path) == 0 {
-		// Release leaf lock (we already have global lock from line 1188)
-		leaf.Mu.Unlock()
-		
-		// Global lock is already held (from line 1188), no need to re-acquire
-		// If root is now empty, reset tree
 		if len(leaf.Keys) == 0 {
 			tree.meta.RootPage = 0
-			
-			// Ensure meta page is properly initialized for transaction tracking
 			tree.meta.Header.PageID = 1
 			tree.meta.Header.PageType = page.PageTypeMeta
-			
-			// Track meta modification (will be persisted on commit)
 			if tree.txManager != nil {
 				tree.txManager.TrackPageModification(1, tree.meta, tree)
 			}
-			
-			// Meta page will be written during transaction commit (via defer)
-			return nil
 		}
 		return nil
 	}
 
-	// Check if leaf needs rebalancing (should not happen if safety check was correct)
-	if len(leaf.Keys) < MIN_KEYS {
-		// Safety check was wrong - leaf underflowed. Handle rebalance under already-held global lock.
-		// Release leaf lock (we already have global lock from line 1188)
-		leaf.Mu.Unlock()
-		
-		// Global lock is already held (from line 1188), no need to re-acquire
-		// Re-find leaf (no fine-grained locking needed)
-		leaf, path, err = tree.findLeafWithLocking(key, false)
-		if err != nil {
-			return err
-		}
-		
-		// Re-check key index
-		keyIndex = common.BinarySearch(leaf.Keys, key)
-		if keyIndex == -1 {
-			return fmt.Errorf("key not found: %v", key)
-		}
-		
-		// Remove key (if not already removed)
-		leaf.Keys = append(leaf.Keys[:keyIndex], leaf.Keys[keyIndex+1:]...)
-		leaf.Values = append(leaf.Values[:keyIndex], leaf.Values[keyIndex+1:]...)
-		leaf.Header.KeyCount = uint16(len(leaf.Keys))
-		
-		// Recompute free space
-		used = page.ComputeLeafPayloadSize(leaf)
-		leaf.Header.FreeSpace = uint16(payloadCapacity - used)
-		
-		// Track page modification
-		if tree.txManager != nil {
-			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
-		}
-		
-		// Handle underflow under already-held global lock
-		return tree.rebalanceLeafAfterDelete(leaf, path)
+	// Check if leaf needs rebalancing
+	if len(leaf.Keys) >= MIN_KEYS {
+		return nil // No underflow, we're done
 	}
 
-	// Release leaf lock - optimistic path succeeded
-	leaf.Mu.Unlock()
-	return nil
+	// Handle underflow under global lock
+	return tree.rebalanceLeafAfterDelete(leaf, path)
 }
+
 
 // rebalanceLeafAfterDelete function used for: Handling leaf node underflow by attempting to borrow keys from siblings (preferred strategy)
 // or merging with siblings when borrowing is not possible.
@@ -1586,7 +1640,24 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 	return tree.rebalanceInternalAfterDelete(parent, path[:len(path)-1])
 }
 
+// rebalanceLeafWithLocks handles leaf rebalancing with explicit lock management (Phase 4 pessimistic path)
+// After rebalancing is complete, releases all held locks in reverse order
+func (tree *BPlusTree) rebalanceLeafWithLocks(leaf *page.LeafPage, path []uint64, heldLocks []*sync.RWMutex) error {
+	// For operations that modify meta (root changes), we need global lock
+	tree.mu.Lock()
+	defer tree.mu.Unlock()
+	
+	// Perform the actual rebalancing (same logic as rebalanceLeafAfterDelete)
+	err := tree.rebalanceLeafAfterDelete(leaf, path)
+	
+	// Release all held locks after rebalancing is complete
+	releaseLocks(heldLocks)
+	
+	return err
+}
+
 // rebalanceInternalAfterDelete function used for: Handling internal node underflow by borrowing from siblings (preferred strategy)
+
 // or merging, and reducing tree height when root has single child.
 //
 // Algorithm steps:

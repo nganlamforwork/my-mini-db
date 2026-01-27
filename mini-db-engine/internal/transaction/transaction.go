@@ -223,13 +223,22 @@ func (tm *TransactionManager) GetActiveTransaction() *Transaction {
 // If no transaction exists, it will be created automatically (auto-commit)
 func (tm *TransactionManager) TrackPageModification(pageID uint64, pageObj interface{}, tree TreeInterface) {
 	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	
 	// Auto-create transaction if none exists (for crash recovery)
 	if tm.activeTx == nil {
-		tm.mu.Unlock()
-		_, _ = tm.BeginAutoCommit(tree)
-		tm.mu.Lock()
+		// Create new transaction directly (avoid recursive lock from BeginAutoCommit)
+		tx := &Transaction{
+			txID:          tm.nextTxID,
+			state:         TxStateActive,
+			tree:          tree,
+			modifiedPages: make(map[uint64]interface{}),
+			originalPages: make(map[uint64]interface{}),
+		}
+		tm.nextTxID++
+		tm.activeTx = tx
+		tm.autoCommit = true
 	}
-	tm.mu.Unlock()
 
 	// Save original state if not already saved
 	if _, exists := tm.activeTx.originalPages[pageID]; !exists {
@@ -258,20 +267,45 @@ func (tm *TransactionManager) TrackPageModification(pageID uint64, pageObj inter
 
 // TrackPageAllocation tracks a newly allocated page
 func (tm *TransactionManager) TrackPageAllocation(pageID uint64, pageObj interface{}, tree TreeInterface) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	
 	// Auto-create transaction if none exists
 	if tm.activeTx == nil {
-		_, _ = tm.BeginAutoCommit(tree)
+		tx := &Transaction{
+			txID:          tm.nextTxID,
+			state:         TxStateActive,
+			tree:          tree,
+			modifiedPages: make(map[uint64]interface{}),
+			originalPages: make(map[uint64]interface{}),
+		}
+		tm.nextTxID++
+		tm.activeTx = tx
+		tm.autoCommit = true
 	}
 	
 	// New pages don't have original state
 	tm.activeTx.modifiedPages[pageID] = pageObj
 }
 
+
 // TrackPageDeletion tracks a page deletion
 func (tm *TransactionManager) TrackPageDeletion(pageID uint64, tree TreeInterface) {
+	tm.mu.Lock()
+	defer tm.mu.Unlock()
+	
 	// Auto-create transaction if none exists
 	if tm.activeTx == nil {
-		_, _ = tm.BeginAutoCommit(tree)
+		tx := &Transaction{
+			txID:          tm.nextTxID,
+			state:         TxStateActive,
+			tree:          tree,
+			modifiedPages: make(map[uint64]interface{}),
+			originalPages: make(map[uint64]interface{}),
+		}
+		tm.nextTxID++
+		tm.activeTx = tx
+		tm.autoCommit = true
 	}
 	
 	// Save original state if not already saved
