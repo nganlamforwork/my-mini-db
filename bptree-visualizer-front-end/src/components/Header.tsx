@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { Sun, Moon } from 'lucide-react'
+import { Sun, Moon, Github } from 'lucide-react'
 import { IconSwitch } from './ui/icon-switch'
 import { cn } from '@/lib/utils'
 
@@ -57,13 +57,24 @@ export function Header() {
             ))}
           </nav>
         </div>
-        <IconSwitch
-          checked={theme === 'dark'}
-          onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')}
-          activeIcon={Moon}
-          inactiveIcon={Sun}
-          aria-label="Toggle theme"
-        />
+        <div className="flex items-center gap-4">
+          <a
+            href="https://github.com/nganlamforwork/my-mini-db"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-muted-foreground hover:text-foreground transition-colors"
+            aria-label="GitHub Repository"
+          >
+            <Github className="h-5 w-5" />
+          </a>
+          <IconSwitch
+            checked={theme === 'dark'}
+            onCheckedChange={(checked) => setTheme(checked ? 'dark' : 'light')}
+            activeIcon={Moon}
+            inactiveIcon={Sun}
+            aria-label="Toggle theme"
+          />
+        </div>
       </div>
     </header>
   )
