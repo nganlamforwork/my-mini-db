@@ -312,18 +312,16 @@ func (tree *BPlusTree) Close() error {
 }
 
 // findLeaf function used for: Traversing the B+Tree from root to locate the leaf page that should contain (or receive) the given key.
-//
-// Algorithm steps:
-// 1. Load meta page if not already loaded
-// 2. Start from root page ID stored in meta
-// 3. Iteratively traverse internal nodes until leaf is reached
-// 4. For each internal node, perform binary search to find last key <= search key
-// 5. Follow corresponding child pointer to next level
-// 6. Track path of internal page IDs from root to leaf (excluding leaf itself)
-// 7. Return target leaf page, path of internal nodes, and any error
+// This is the public interface that uses fine-grained locking (Phase 2) for Search operations.
 //
 // Return: (*LeafPage, []uint64, error) - target leaf page, path of internal page IDs from root to leaf, error if page not found
 func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
+	return tree.findLeafWithLocking(key, true) // Use fine-grained locking for Search operations
+}
+
+// findLeafWithLocking is the internal implementation that supports optional fine-grained locking.
+// If useFineGrainedLocking is true, uses lock coupling (Phase 2). Otherwise, no locking (for use with global lock in Insert/Delete).
+func (tree *BPlusTree) findLeafWithLocking(key KeyType, useFineGrainedLocking bool) (*LeafPage, []uint64, error) {
 	path := make([]uint64, 0)
 	depth := 0
 
@@ -339,36 +337,304 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 		currentID = tree.meta.RootPage
 	}
 
+	if currentID == 0 {
+		return nil, nil, fmt.Errorf("empty tree")
+	}
+
+	rootPage := tree.pager.Get(currentID)
+	if rootPage == nil {
+		return nil, nil, fmt.Errorf("page not found: %d", currentID)
+	}
+
+	// If not using fine-grained locking, use simple traversal (for Insert/Delete with global lock)
+	if !useFineGrainedLocking {
+		for {
+			switch p := rootPage.(type) {
+			case *LeafPage:
+				return p, path, nil
+			case *InternalPage:
+				path = append(path, currentID)
+				pos := common.BinarySearchLastLessOrEqual(p.Keys, key)
+				var childIndex int
+				if pos == -1 {
+					childIndex = 0
+				} else {
+					childIndex = pos + 1
+				}
+				if childIndex >= len(p.Children) {
+					return nil, nil, fmt.Errorf("invalid child index: %d", childIndex)
+				}
+				currentID = p.Children[childIndex]
+				rootPage = tree.pager.Get(currentID)
+				if rootPage == nil {
+					return nil, nil, fmt.Errorf("page not found: %d", currentID)
+				}
+				depth++
+			default:
+				return nil, nil, fmt.Errorf("unknown page type for page ID: %d", currentID)
+			}
+		}
+	}
+
+	// Phase 2: Lock coupling (hand-over-hand locking) for Search operations
+	var currentPage interface{} = rootPage
+	var currentLock *sync.RWMutex = nil
+
+	// Get lock for root page
+	switch p := rootPage.(type) {
+	case *LeafPage:
+		// Root is a leaf - acquire lock and return
+		p.Mu.RLock()
+		return p, path, nil
+	case *InternalPage:
+		p.Mu.RLock()
+		currentLock = &p.Mu
+		currentPage = p
+	default:
+		return nil, nil, fmt.Errorf("unknown page type for page ID: %d", currentID)
+	}
+
+	// Traverse internal nodes with lock coupling
 	for {
-		page := tree.pager.Get(currentID)
-		if page == nil {
-			return nil, nil, fmt.Errorf("page not found: %d", currentID)
+		internalPage, ok := currentPage.(*InternalPage)
+		if !ok {
+			// Should not happen in this loop
+			if currentLock != nil {
+				currentLock.RUnlock()
+			}
+			return nil, nil, fmt.Errorf("unexpected page type in traversal")
 		}
 
-		switch p := page.(type) {
+		path = append(path, currentID)
+
+		// Binary search: last key <= key
+		pos := common.BinarySearchLastLessOrEqual(internalPage.Keys, key)
+
+		// If pos == -1 then all keys in the internal node are > key,
+		// so the correct child to follow is the left-most child (index 0).
+		var childIndex int
+		if pos == -1 {
+			childIndex = 0
+		} else {
+			childIndex = pos + 1
+		}
+
+		// Get child page ID
+		if childIndex >= len(internalPage.Children) {
+			if currentLock != nil {
+				currentLock.RUnlock()
+			}
+			return nil, nil, fmt.Errorf("invalid child index: %d", childIndex)
+		}
+		childID := internalPage.Children[childIndex]
+
+		// Get child page
+		childPage := tree.pager.Get(childID)
+		if childPage == nil {
+			if currentLock != nil {
+				currentLock.RUnlock()
+			}
+			return nil, nil, fmt.Errorf("page not found: %d", childID)
+		}
+
+		// Lock coupling: acquire lock on child before releasing parent
+		switch child := childPage.(type) {
 		case *LeafPage:
-			return p, path, nil
+			// Acquire lock on leaf
+			child.Mu.RLock()
+			// Release parent lock
+			if currentLock != nil {
+				currentLock.RUnlock()
+			}
+			// Return leaf (caller must release the lock)
+			return child, path, nil
 
 		case *InternalPage:
-			path = append(path, currentID)
-
-			// binary search: last key <= key
-			pos := common.BinarySearchLastLessOrEqual(p.Keys, key)
-
-			// If pos == -1 then all keys in the internal node are > key,
-			// so the correct child to follow is the left-most child (index 0).
-			var childIndex int
-			if pos == -1 {
-				childIndex = 0
-			} else {
-				childIndex = pos + 1
+			// Acquire lock on child internal node
+			child.Mu.RLock()
+			// Release parent lock (lock coupling)
+			if currentLock != nil {
+				currentLock.RUnlock()
 			}
-
-			currentID = p.Children[childIndex]
+			// Move to child
+			currentID = childID
+			currentPage = child
+			currentLock = &child.Mu
 			depth++
 
 		default:
-			return nil, nil, fmt.Errorf("unknown page type for page ID: %d", currentID)
+			if currentLock != nil {
+				currentLock.RUnlock()
+			}
+			return nil, nil, fmt.Errorf("unknown page type for page ID: %d", childID)
+		}
+	}
+}
+
+// findLeafForWrite function used for: Traversing the B+Tree from root to leaf using lock coupling with exclusive locks for write operations.
+// Phase 3: Implements crabbing with safety checks for optimistic write operations.
+// operationType: "insert" or "delete" - determines safety check criteria
+// Returns the leaf, path, and a boolean indicating if the leaf is "safe" (won't split/merge).
+//
+// Return: (*LeafPage, []uint64, bool, error) - target leaf page, path of internal page IDs, isSafe flag, error if page not found
+func (tree *BPlusTree) findLeafForWrite(key KeyType, operationType string) (*LeafPage, []uint64, bool, error) {
+	path := make([]uint64, 0)
+	depth := 0
+
+	// ensure meta is loaded
+	if tree.meta == nil {
+		if m, err := tree.pager.ReadMeta(); err == nil {
+			tree.meta = m
+		}
+	}
+
+	currentID := uint64(0)
+	if tree.meta != nil {
+		currentID = tree.meta.RootPage
+	}
+
+	if currentID == 0 {
+		return nil, nil, false, fmt.Errorf("empty tree")
+	}
+
+	// Phase 3: Lock coupling with exclusive locks (Lock) for write operations
+	rootPage := tree.pager.Get(currentID)
+	if rootPage == nil {
+		return nil, nil, false, fmt.Errorf("page not found: %d", currentID)
+	}
+
+	var currentPage interface{} = rootPage
+	var currentLock *sync.RWMutex = nil
+	var heldLocks []*sync.RWMutex // Track all locks we've acquired
+
+	// Get exclusive lock for root page
+	switch p := rootPage.(type) {
+	case *LeafPage:
+		// Root is a leaf - acquire lock first, then check safety
+		p.Mu.Lock()
+		var isSafe bool
+		if operationType == "insert" {
+			isSafe = len(p.Keys) < MAX_KEYS
+		} else if operationType == "delete" {
+			isSafe = len(p.Keys) > MIN_KEYS
+		} else {
+			isSafe = len(p.Keys) < MAX_KEYS // Default to insert safety check
+		}
+		return p, path, isSafe, nil
+	case *InternalPage:
+		p.Mu.Lock()
+		heldLocks = append(heldLocks, &p.Mu)
+		currentLock = &p.Mu
+		currentPage = p
+	default:
+		return nil, nil, false, fmt.Errorf("unknown page type for page ID: %d", currentID)
+	}
+
+	// Traverse internal nodes with lock coupling (exclusive locks)
+	for {
+		internalPage, ok := currentPage.(*InternalPage)
+		if !ok {
+			// Should not happen in this loop
+			// Release all held locks
+			for _, lock := range heldLocks {
+				lock.Unlock()
+			}
+			return nil, nil, false, fmt.Errorf("unexpected page type in traversal")
+		}
+
+		path = append(path, currentID)
+
+		// Binary search: last key <= key
+		pos := common.BinarySearchLastLessOrEqual(internalPage.Keys, key)
+
+		// If pos == -1 then all keys in the internal node are > key,
+		// so the correct child to follow is the left-most child (index 0).
+		var childIndex int
+		if pos == -1 {
+			childIndex = 0
+		} else {
+			childIndex = pos + 1
+		}
+
+		// Get child page ID
+		if childIndex >= len(internalPage.Children) {
+			// Release all held locks
+			for _, lock := range heldLocks {
+				lock.Unlock()
+			}
+			return nil, nil, false, fmt.Errorf("invalid child index: %d", childIndex)
+		}
+		childID := internalPage.Children[childIndex]
+
+		// Get child page
+		childPage := tree.pager.Get(childID)
+		if childPage == nil {
+			// Release all held locks
+			for _, lock := range heldLocks {
+				lock.Unlock()
+			}
+			return nil, nil, false, fmt.Errorf("page not found: %d", childID)
+		}
+
+		// Lock coupling: acquire exclusive lock on child before releasing parent
+		switch child := childPage.(type) {
+		case *LeafPage:
+			// Phase 3: Acquire exclusive lock on leaf FIRST (before safety check)
+			// This ensures we have exclusive access when checking safety
+			child.Mu.Lock()
+			heldLocks = append(heldLocks, &child.Mu)
+			
+			// Safety check AFTER acquiring leaf lock (while parent lock is still held)
+			// For Insert: safe if len(keys) < MAX_KEYS (won't split)
+			// For Delete: safe if len(keys) > MIN_KEYS (won't merge)
+			var isSafe bool
+			if operationType == "insert" {
+				isSafe = len(child.Keys) < MAX_KEYS
+			} else if operationType == "delete" {
+				isSafe = len(child.Keys) > MIN_KEYS
+			} else {
+				// Default to insert safety check
+				isSafe = len(child.Keys) < MAX_KEYS
+			}
+			
+			// Release all parent locks (lock coupling - keep only leaf lock)
+			for i := 0; i < len(heldLocks)-1; i++ {
+				heldLocks[i].Unlock()
+			}
+			
+			// Return leaf with its lock held, and safety status
+			// Caller must release the leaf lock
+			return child, path, isSafe, nil
+
+		case *InternalPage:
+			// Acquire exclusive lock on child internal node
+			child.Mu.Lock()
+			heldLocks = append(heldLocks, &child.Mu)
+			
+			// Release parent lock (lock coupling)
+			if currentLock != nil {
+				currentLock.Unlock()
+				// Remove from heldLocks (it's been released)
+				for i, lock := range heldLocks {
+					if lock == currentLock {
+						heldLocks = append(heldLocks[:i], heldLocks[i+1:]...)
+						break
+					}
+				}
+			}
+			
+			// Move to child
+			currentID = childID
+			currentPage = child
+			currentLock = &child.Mu
+			depth++
+
+		default:
+			// Release all held locks
+			for _, lock := range heldLocks {
+				lock.Unlock()
+			}
+			return nil, nil, false, fmt.Errorf("unknown page type for page ID: %d", childID)
 		}
 	}
 }
@@ -386,7 +652,9 @@ func (tree *BPlusTree) findLeaf(key KeyType) (*LeafPage, []uint64, error) {
 //
 // Return: error - nil on success, error if duplicate key or operation fails
 func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
-	// Phase 1: Acquire write lock for thread-safety
+	// Phase 3 (safety-first implementation):
+	// Use optimistic leaf locking for structure, but still serialize writers
+	// with the global tree lock to avoid subtle races in this personal project.
 	tree.mu.Lock()
 	defer tree.mu.Unlock()
 
@@ -398,7 +666,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		}
 	}()
 
-	// 1. Empty tree → create root leaf
+	// 1. Empty tree → create root leaf (needs global lock for meta page modification)
 	if tree.meta == nil {
 		if m, err := tree.pager.ReadMeta(); err == nil {
 			tree.meta = m
@@ -409,6 +677,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	}
 
 	if tree.meta.RootPage == 0 {
+		// Empty tree creation still runs under the global lock above.
 		leaf := tree.pager.NewLeaf()
 		leaf.Keys = append(leaf.Keys, key)
 		leaf.Values = append(leaf.Values, value)
@@ -432,39 +701,109 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		return nil
 	}
 
-	// 2. Find target leaf + path to parent
-	leaf, path, err := tree.findLeaf(key)
+	// 2. Phase 3: Try optimistic path first (fine-grained locking with safety check)
+	leaf, path, _, err := tree.findLeafForWrite(key, "insert")
 	if err != nil {
 		return err
 	}
 
-	// Check for duplicate keys using binary search
+	// Check for duplicate keys using binary search (leaf lock is held)
 	if common.BinarySearch(leaf.Keys, key) != -1 {
+		leaf.Mu.Unlock()
 		return fmt.Errorf("duplicate key insertion: %v", key)
 	}
 
+	// Phase 3: Re-check safety AFTER acquiring leaf lock (leaf state might have changed)
+	// The initial safety check was done while holding parent lock, but we need to verify
+	// again now that we have exclusive access to the leaf
+	actualIsSafe := len(leaf.Keys) < MAX_KEYS
+	
+	// If leaf is unsafe, handle split under the already-held global lock
+	if !actualIsSafe {
+		// Release leaf lock (we already have global lock from line 658)
+		leaf.Mu.Unlock()
+		
+		// Pessimistic path: acquire global lock and retry
+		// Global lock is already held (from line 658), no need to re-acquire
+		// Retry with global lock (no fine-grained locking needed)
+		leaf, path, err = tree.findLeafWithLocking(key, false)
+		if err != nil {
+			return err
+		}
+		
+		// Check for duplicate again
+		if common.BinarySearch(leaf.Keys, key) != -1 {
+			return fmt.Errorf("duplicate key insertion: %v", key)
+		}
+		
+		// Insert into the leaf
+		if err := page.InsertIntoLeaf(leaf, key, value); err != nil {
+			return err
+		}
+		
+		// Track page modification for transaction
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
+		}
+		
+		// Check for overflow - if overflow, handle split (under already-held global lock)
+		payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
+		keyOverflow := len(leaf.Keys) > MAX_KEYS
+		sizeOverflow := page.ComputeLeafPayloadSize(leaf) > payloadCapacity
+		isOverflow := keyOverflow || sizeOverflow
+		
+		if !isOverflow {
+			return nil
+		}
+		
+		// Handle split under global lock (pessimistic path)
+		return tree.handleSplit(leaf, path)
+	}
+
+	// Optimistic path: leaf is safe, perform insert with only leaf lock held
 	// Insert into the leaf in sorted order
 	if err := page.InsertIntoLeaf(leaf, key, value); err != nil {
+		leaf.Mu.Unlock()
 		return err
 	}
 
-	// Track page modification for transaction
+	// Track page modification for transaction (WAL logging happens in commit)
 	if tree.txManager != nil {
 		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
 	}
 
-	// Check for overflow
+	// Check for overflow (should not happen if safety check was correct, but verify)
 	payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
 	keyOverflow := len(leaf.Keys) > MAX_KEYS
 	sizeOverflow := page.ComputeLeafPayloadSize(leaf) > payloadCapacity
 	isOverflow := keyOverflow || sizeOverflow
 
-	// If the leaf does not overflow (by key count or payload), we're done
+	// Release leaf lock
+	leaf.Mu.Unlock()
+
+	// If the leaf does not overflow, we're done (optimistic path succeeded)
 	if !isOverflow {
 		return nil
 	}
 
-	// 3. Split leaf
+	// Safety check was wrong - leaf overflowed. Handle split under already-held global lock.
+	// This should be rare if safety check is correct.
+	// Global lock is already held (from line 658), no need to re-acquire
+	
+	// Re-find leaf (no fine-grained locking needed since we have global lock)
+	leaf, path, err = tree.findLeafWithLocking(key, false)
+	if err != nil {
+		return err
+	}
+	
+	// Handle split under already-held global lock
+	return tree.handleSplit(leaf, path)
+}
+
+// handleSplit handles leaf split and propagation under global lock (pessimistic path)
+// Assumes global lock is already held
+func (tree *BPlusTree) handleSplit(leaf *LeafPage, path []uint64) error {
+	// Split leaf
 	var pushKey KeyType
 	newLeaf := tree.pager.NewLeaf()
 	
@@ -478,10 +817,10 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 
 	var childPageID uint64 = newLeaf.Header.PageID
 
-	// 4. Propagate split up: insert the promoted key into parent
-	//    internal nodes. If a parent overflows, split it and
-	//    continue upward. `childPageID` always points to the
-	//    right-side page produced by the most recent split.
+	// Propagate split up: insert the promoted key into parent
+	// internal nodes. If a parent overflows, split it and
+	// continue upward. `childPageID` always points to the
+	// right-side page produced by the most recent split.
 	parentDepth := len(path) - 1
 	for len(path) > 0 {
 		parentID := path[len(path)-1]
@@ -515,7 +854,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 		parentDepth--
 	}
 
-	// 5. Root split → create new root
+	// Root split → create new root
 	newRoot := tree.pager.NewInternal()
 	newRoot.Keys = append(newRoot.Keys, pushKey)
 	newRoot.Children = append(
@@ -525,7 +864,7 @@ func (tree *BPlusTree) Insert(key KeyType, value ValueType) error {
 	)
 
 	// Ensure correct type assertions for left and right children
-		if left, ok := tree.pager.Get(tree.meta.RootPage).(*page.InternalPage); ok {
+	if left, ok := tree.pager.Get(tree.meta.RootPage).(*page.InternalPage); ok {
 		left.Header.ParentPage = newRoot.Header.PageID
 	} else if leftLeaf, ok := tree.pager.Get(tree.meta.RootPage).(*page.LeafPage); ok {
 		leftLeaf.Header.ParentPage = newRoot.Header.PageID
@@ -625,17 +964,19 @@ func (tree *BPlusTree) loadPage(pageID uint64) error {
 //
 // Return: (ValueType, error) - value associated with key on success, error if key not found or tree is empty
 func (tree *BPlusTree) Search(key KeyType) (ValueType, error) {
-	// Phase 1: Acquire read lock for thread-safety
+	// Phase 3: Acquire tree-level read lock to prevent race with writers
+	// who hold the tree-level write lock during modifications
 	tree.mu.RLock()
 	defer tree.mu.RUnlock()
 
-	// Empty tree
-	if tree.IsEmpty() {
+	// Empty tree check (already under read lock)
+	if tree.meta == nil || tree.meta.RootPage == 0 {
 		return storage.Record{}, fmt.Errorf("key not found: %v (empty tree)", key)
 	}
 
-	// Find the leaf that should contain the key
-	leaf, _, err := tree.findLeaf(key)
+	// Find the leaf that should contain the key (under tree-level read lock)
+	// Use findLeafWithLocking(false) since we have the tree-level lock
+	leaf, _, err := tree.findLeafWithLocking(key, false)
 	if err != nil {
 		return storage.Record{}, err
 	}
@@ -668,13 +1009,17 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 		return nil, nil, fmt.Errorf("invalid range: startKey %v > endKey %v", startKey, endKey)
 	}
 
-	// Empty tree
-	if tree.IsEmpty() {
+	// Phase 3: Acquire tree-level read lock to prevent race with writers
+	tree.mu.RLock()
+	defer tree.mu.RUnlock()
+
+	// Empty tree check (under read lock)
+	if tree.meta == nil || tree.meta.RootPage == 0 {
 		return []KeyType{}, []ValueType{}, nil
 	}
 
-	// Find the leaf containing or after startKey
-	leaf, _, err := tree.findLeaf(startKey)
+	// Find the leaf containing or after startKey (under tree-level lock)
+	leaf, _, err := tree.findLeafWithLocking(startKey, false)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -682,17 +1027,18 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 	keys := make([]KeyType, 0)
 	values := make([]ValueType, 0)
 
-	// Traverse leaves using the linked list
-	for leaf != nil {
+	// Traverse leaves using the linked list (under tree-level lock, no per-leaf locks needed)
+	currentLeaf := leaf
+	for currentLeaf != nil {
 		// Find starting position using binary search
-		startIdx := common.BinarySearchFirstGreaterOrEqual(leaf.Keys, startKey)
+		startIdx := common.BinarySearchFirstGreaterOrEqual(currentLeaf.Keys, startKey)
 		
 		// Scan keys in current leaf from start position
-		for i := startIdx; i < len(leaf.Keys); i++ {
-			k := leaf.Keys[i]
+		for i := startIdx; i < len(currentLeaf.Keys); i++ {
+			k := currentLeaf.Keys[i]
 			if k.Compare(startKey) >= 0 && k.Compare(endKey) <= 0 {
 				keys = append(keys, k)
-				values = append(values, leaf.Values[i])
+				values = append(values, currentLeaf.Values[i])
 			}
 			// Early exit if we've passed endKey
 			if k.Compare(endKey) > 0 {
@@ -701,15 +1047,20 @@ func (tree *BPlusTree) SearchRange(startKey, endKey KeyType) ([]KeyType, []Value
 		}
 
 		// If last key in this leaf is still < endKey, continue to next leaf
-		if len(leaf.Keys) > 0 && leaf.Keys[len(leaf.Keys)-1].Compare(endKey) < 0 {
-			if leaf.Header.NextPage == 0 {
+		if len(currentLeaf.Keys) > 0 && currentLeaf.Keys[len(currentLeaf.Keys)-1].Compare(endKey) < 0 {
+			nextPageID := currentLeaf.Header.NextPage
+			if nextPageID == 0 {
 				break
 			}
-			nextPage := tree.pager.Get(leaf.Header.NextPage)
+			nextPage := tree.pager.Get(nextPageID)
 			if nextPage == nil {
 				break
 			}
-			leaf = nextPage.(*page.LeafPage)
+			nextLeaf, ok := nextPage.(*page.LeafPage)
+			if !ok {
+				break
+			}
+			currentLeaf = nextLeaf
 		} else {
 			break
 		}
@@ -743,16 +1094,22 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 		}
 	}()
 
-	// Empty tree
-	if tree.IsEmpty() {
+	// Empty tree check (already have write lock, don't call IsEmpty to avoid deadlock)
+	if tree.meta == nil || tree.meta.RootPage == 0 {
 		return fmt.Errorf("key not found: %v (empty tree)", key)
 	}
 
 	// Find the leaf containing the key
-	leaf, _, err := tree.findLeaf(key)
+	// Use findLeafWithLocking(false) since we already have global lock
+	leaf, _, err := tree.findLeafWithLocking(key, false)
 	if err != nil {
 		return err
 	}
+
+	// Phase 2: Acquire page-level lock for modification (even though we have global lock)
+	// This ensures proper synchronization with readers using fine-grained locks
+	leaf.Mu.Lock()
+	defer leaf.Mu.Unlock()
 
 	// Find the key in the leaf using binary search
 	keyIndex := common.BinarySearch(leaf.Keys, key)
@@ -817,7 +1174,9 @@ func (tree *BPlusTree) Update(key KeyType, newValue ValueType) error {
 //
 // Return: error - nil on success, error if key not found or deletion fails
 func (tree *BPlusTree) Delete(key KeyType) error {
-	// Phase 1: Acquire write lock for thread-safety
+	// Phase 3 (safety-first implementation):
+	// Use optimistic leaf locking for structure, but still serialize writers
+	// with the global tree lock to avoid subtle races in this personal project.
 	tree.mu.Lock()
 	defer tree.mu.Unlock()
 
@@ -829,23 +1188,91 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 		}
 	}()
 
-	// Empty tree
-	if tree.IsEmpty() {
+	// Empty tree check (already have write lock, don't call IsEmpty to avoid deadlock)
+	if tree.meta == nil || tree.meta.RootPage == 0 {
 		return fmt.Errorf("cannot delete from empty tree")
 	}
 
-	// Find the target leaf and path
-	leaf, path, err := tree.findLeaf(key)
+	// Phase 3: Try optimistic path first (fine-grained locking with safety check)
+	leaf, path, _, err := tree.findLeafForWrite(key, "delete")
 	if err != nil {
 		return err
 	}
 
-	// Find and remove the key from the leaf using binary search
+	// Find and remove the key from the leaf using binary search (leaf lock is held)
 	keyIndex := common.BinarySearch(leaf.Keys, key)
 	if keyIndex == -1 {
+		leaf.Mu.Unlock()
 		return fmt.Errorf("key not found: %v", key)
 	}
 
+	// Phase 3: Re-check safety AFTER acquiring leaf lock (leaf state might have changed)
+	actualIsSafe := len(leaf.Keys) > MIN_KEYS
+	
+	// If leaf is unsafe, handle rebalance under already-held global lock
+	if !actualIsSafe {
+		// Release leaf lock (we already have global lock from line 1188)
+		leaf.Mu.Unlock()
+		
+		// Global lock is already held (from line 1188), no need to re-acquire
+		// Retry with global lock (no fine-grained locking needed)
+		leaf, path, err = tree.findLeafWithLocking(key, false)
+		if err != nil {
+			return err
+		}
+		
+		// Check for key again
+		keyIndex = common.BinarySearch(leaf.Keys, key)
+		if keyIndex == -1 {
+			return fmt.Errorf("key not found: %v", key)
+		}
+		
+		// Remove the key and value
+		leaf.Keys = append(leaf.Keys[:keyIndex], leaf.Keys[keyIndex+1:]...)
+		leaf.Values = append(leaf.Values[:keyIndex], leaf.Values[keyIndex+1:]...)
+		leaf.Header.KeyCount = uint16(len(leaf.Keys))
+		
+		// Recompute free space
+		payloadCapacity := int(page.DefaultPageSize - page.PageHeaderSize)
+		used := page.ComputeLeafPayloadSize(leaf)
+		leaf.Header.FreeSpace = uint16(payloadCapacity - used)
+		
+		// Track page modification for transaction
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
+		}
+		
+		// If this is the root and it's a leaf, we're done
+		if len(path) == 0 {
+			// If root is now empty, reset tree
+			if len(leaf.Keys) == 0 {
+				tree.meta.RootPage = 0
+				
+				// Ensure meta page is properly initialized for transaction tracking
+				tree.meta.Header.PageID = 1
+				tree.meta.Header.PageType = page.PageTypeMeta
+				
+				// Track meta modification (will be persisted on commit)
+				if tree.txManager != nil {
+					tree.txManager.TrackPageModification(1, tree.meta, tree)
+				}
+				
+				// Meta page will be written during transaction commit (via defer)
+				return nil
+			}
+			return nil
+		}
+		
+		// Check if leaf needs rebalancing
+		if len(leaf.Keys) >= MIN_KEYS {
+			return nil // No underflow, we're done
+		}
+		
+		// Handle underflow: try to borrow or merge (under global lock)
+		return tree.rebalanceLeafAfterDelete(leaf, path)
+	}
+
+	// Optimistic path: leaf is safe, perform delete with only leaf lock held
 	// Remove the key and value
 	leaf.Keys = append(leaf.Keys[:keyIndex], leaf.Keys[keyIndex+1:]...)
 	leaf.Values = append(leaf.Values[:keyIndex], leaf.Values[keyIndex+1:]...)
@@ -856,13 +1283,17 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 	used := page.ComputeLeafPayloadSize(leaf)
 	leaf.Header.FreeSpace = uint16(payloadCapacity - used)
 
-	// Track page modification for transaction
+	// Track page modification for transaction (WAL logging happens in commit)
 	if tree.txManager != nil {
 		tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
 	}
 
-	// If this is the root and it's a leaf, we're done
+	// Check if this is root (needs special handling for meta page)
 	if len(path) == 0 {
+		// Release leaf lock (we already have global lock from line 1188)
+		leaf.Mu.Unlock()
+		
+		// Global lock is already held (from line 1188), no need to re-acquire
 		// If root is now empty, reset tree
 		if len(leaf.Keys) == 0 {
 			tree.meta.RootPage = 0
@@ -882,13 +1313,46 @@ func (tree *BPlusTree) Delete(key KeyType) error {
 		return nil
 	}
 
-	// Check if leaf needs rebalancing
-	if len(leaf.Keys) >= MIN_KEYS {
-		return nil // No underflow, we're done
+	// Check if leaf needs rebalancing (should not happen if safety check was correct)
+	if len(leaf.Keys) < MIN_KEYS {
+		// Safety check was wrong - leaf underflowed. Handle rebalance under already-held global lock.
+		// Release leaf lock (we already have global lock from line 1188)
+		leaf.Mu.Unlock()
+		
+		// Global lock is already held (from line 1188), no need to re-acquire
+		// Re-find leaf (no fine-grained locking needed)
+		leaf, path, err = tree.findLeafWithLocking(key, false)
+		if err != nil {
+			return err
+		}
+		
+		// Re-check key index
+		keyIndex = common.BinarySearch(leaf.Keys, key)
+		if keyIndex == -1 {
+			return fmt.Errorf("key not found: %v", key)
+		}
+		
+		// Remove key (if not already removed)
+		leaf.Keys = append(leaf.Keys[:keyIndex], leaf.Keys[keyIndex+1:]...)
+		leaf.Values = append(leaf.Values[:keyIndex], leaf.Values[keyIndex+1:]...)
+		leaf.Header.KeyCount = uint16(len(leaf.Keys))
+		
+		// Recompute free space
+		used = page.ComputeLeafPayloadSize(leaf)
+		leaf.Header.FreeSpace = uint16(payloadCapacity - used)
+		
+		// Track page modification
+		if tree.txManager != nil {
+			tree.txManager.TrackPageModification(leaf.Header.PageID, leaf, tree)
+		}
+		
+		// Handle underflow under already-held global lock
+		return tree.rebalanceLeafAfterDelete(leaf, path)
 	}
 
-	// Handle underflow: try to borrow or merge
-	return tree.rebalanceLeafAfterDelete(leaf, path)
+	// Release leaf lock - optimistic path succeeded
+	leaf.Mu.Unlock()
+	return nil
 }
 
 // rebalanceLeafAfterDelete function used for: Handling leaf node underflow by attempting to borrow keys from siblings (preferred strategy)
@@ -929,7 +1393,14 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 	if childIndex < len(parent.Children)-1 {
 		// Get right sibling
 		rightSiblingID := parent.Children[childIndex+1]
-		rightSibling := tree.pager.Get(rightSiblingID).(*page.LeafPage)
+		rightSiblingPage := tree.pager.Get(rightSiblingID)
+		if rightSiblingPage == nil {
+			return fmt.Errorf("right sibling page not found: %d", rightSiblingID)
+		}
+		rightSibling, ok := rightSiblingPage.(*page.LeafPage)
+		if !ok {
+			return fmt.Errorf("right sibling is not a leaf page: %d", rightSiblingID)
+		}
 
 		if len(rightSibling.Keys) > MIN_KEYS {
 			// Borrow from right sibling
@@ -965,7 +1436,14 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 	// Try to borrow from left sibling (same logic as right sibling)
 	if childIndex > 0 {
 		leftSiblingID := parent.Children[childIndex-1]
-		leftSibling := tree.pager.Get(leftSiblingID).(*page.LeafPage)
+		leftSiblingPage := tree.pager.Get(leftSiblingID)
+		if leftSiblingPage == nil {
+			return fmt.Errorf("left sibling page not found: %d", leftSiblingID)
+		}
+		leftSibling, ok := leftSiblingPage.(*page.LeafPage)
+		if !ok {
+			return fmt.Errorf("left sibling is not a leaf page: %d", leftSiblingID)
+		}
 
 		if len(leftSibling.Keys) > MIN_KEYS {
 			// Borrow from left sibling
@@ -1006,7 +1484,14 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 	if childIndex < len(parent.Children)-1 {
 		// Merge with right sibling
 		rightSiblingID := parent.Children[childIndex+1]
-		rightSibling := tree.pager.Get(rightSiblingID).(*page.LeafPage)
+		rightSiblingPage := tree.pager.Get(rightSiblingID)
+		if rightSiblingPage == nil {
+			return fmt.Errorf("right sibling page not found for merge: %d", rightSiblingID)
+		}
+		rightSibling, ok := rightSiblingPage.(*page.LeafPage)
+		if !ok {
+			return fmt.Errorf("right sibling is not a leaf page for merge: %d", rightSiblingID)
+		}
 
 		// Merge right into current
 		leaf.Keys = append(leaf.Keys, rightSibling.Keys...)
@@ -1016,8 +1501,12 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 
 		// Update next sibling's prev pointer if it exists
 		if leaf.Header.NextPage != 0 {
-			nextPage := tree.pager.Get(leaf.Header.NextPage).(*page.LeafPage)
-			nextPage.Header.PrevPage = leaf.Header.PageID
+			nextPageObj := tree.pager.Get(leaf.Header.NextPage)
+			if nextPageObj != nil {
+				if nextPage, ok := nextPageObj.(*page.LeafPage); ok {
+					nextPage.Header.PrevPage = leaf.Header.PageID
+				}
+			}
 		}
 
 		// Recompute free space
@@ -1045,7 +1534,14 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 	} else {
 		// Merge with left sibling
 		leftSiblingID := parent.Children[childIndex-1]
-		leftSibling := tree.pager.Get(leftSiblingID).(*page.LeafPage)
+		leftSiblingPage := tree.pager.Get(leftSiblingID)
+		if leftSiblingPage == nil {
+			return fmt.Errorf("left sibling page not found for merge: %d", leftSiblingID)
+		}
+		leftSibling, ok := leftSiblingPage.(*page.LeafPage)
+		if !ok {
+			return fmt.Errorf("left sibling is not a leaf page for merge: %d", leftSiblingID)
+		}
 
 		// Merge current into left
 		leftSibling.Keys = append(leftSibling.Keys, leaf.Keys...)
@@ -1055,8 +1551,12 @@ func (tree *BPlusTree) rebalanceLeafAfterDelete(leaf *page.LeafPage, path []uint
 
 		// Update next sibling's prev pointer if it exists
 		if leftSibling.Header.NextPage != 0 {
-			nextPage := tree.pager.Get(leftSibling.Header.NextPage).(*page.LeafPage)
-			nextPage.Header.PrevPage = leftSibling.Header.PageID
+			nextPageObj := tree.pager.Get(leftSibling.Header.NextPage)
+			if nextPageObj != nil {
+				if nextPage, ok := nextPageObj.(*page.LeafPage); ok {
+					nextPage.Header.PrevPage = leftSibling.Header.PageID
+				}
+			}
 		}
 
 		// Recompute free space
