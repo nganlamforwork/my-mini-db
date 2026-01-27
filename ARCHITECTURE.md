@@ -99,7 +99,6 @@ classDiagram
 
 The current concurrency model allows multiple concurrent readers but prioritizes correctness by serializing writers.
 
-```mermaid
 graph TD
     subgraph "Traffic"
         R1[Reader 1]
@@ -128,9 +127,12 @@ graph TD
     RLock -.->|Concurrent Access| Engine
     WLock -->|Serialized Access| Engine
     
-    note right of RLock: Non-Blocking for Readers
-    note right of WLock: Blocking (1 Writer at a time)
-```
+    %% Notes modeled as nodes
+    NoteRLock[Non-Blocking for Readers] -.-> RLock
+    NoteWLock[Blocking: 1 Writer at a time] -.-> WLock
+    
+    style NoteRLock fill:#f9f,stroke:#333,stroke-dasharray: 5 5
+    style NoteWLock fill:#f9f,stroke:#333,stroke-dasharray: 5 5
 
 **Locking Strategy:**
 - **Readers**: Acquire `tree.mu.RLock()`.
