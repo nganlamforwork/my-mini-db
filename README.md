@@ -15,13 +15,9 @@ A file-backed B+Tree database implementation in Go with full CRUD operations, tr
     - [Architecture Highlights](#architecture-highlights)
   - [Overview](#overview)
   - [Quick Start](#quick-start)
-    - [Option 1: REST API Server](#option-1-rest-api-server)
-    - [Option 2: Direct Go API Usage](#option-2-direct-go-api-usage)
-    - [Option 3: REST API Examples](#option-3-rest-api-examples)
+    - [Direct Go API Usage](#direct-go-api-usage)
   - [Testing](#testing)
     - [Running Tests](#running-tests)
-    - [Web Interface (Optional)](#web-interface-optional)
-    - [API Testing](#api-testing)
   - [Real-World Context](#real-world-context)
   - [Performance Characteristics](#performance-characteristics)
   - [License](#license)
@@ -67,7 +63,7 @@ MiniDB/
 │   │   │   ├── tree_test.go        # B+Tree integration tests
 │   │   │   ├── cache_test.go       # Cache configuration & LRU cache tests
 │   │   │   ├── utils.go            # Utility functions
-│   │   │   └── testdata/           # Test artifacts (DB files, PNG diagrams)
+│   │   │   └── testdata/           # Test artifacts (DB files, description files)
 │   │   ├── page/                   # Page management
 │   │   │   ├── page_header.go      # Page header structure
 │   │   │   ├── meta_page.go        # Metadata page implementation
@@ -88,13 +84,12 @@ MiniDB/
 │   │   ├── IMPLEMENTATION.md       # Implementation details & algorithms
 │   │   ├── TESTING.md              # Test suite documentation
 │   │   └── CHANGELOG.md            # Development history
-│   ├── scripts/                   # Utility scripts
-│   │   └── visualize_tree.py      # Tree visualization tool
+│   ├── scripts/                   # Utility scripts (if any)
 │   ├── database/                   # Database files storage (auto-created)
 │   │   └── *.db, *.wal             # Database and WAL files
 │   ├── go.mod                      # Go module definition
 │   └── go.sum                      # Go module checksums
-├── front-end/                      # React web interface (optional, for visualization)
+├── front-end/                      # React web interface (optional)
 │   └── ...                         # React + TypeScript + Vite application
 └── README.md                       # This file
 ```
@@ -115,6 +110,7 @@ MiniDB/
 
 ### Advanced Features
 
+- **Concurrent Access**: Thread-safe operations with concurrent readers and serialized writers (Phase 3.5)
 - **Transaction Support**: Multi-operation atomicity with Begin/Commit/Rollback
 - **Write-Ahead Logging**: All changes logged before database writes
 - **Crash Recovery**: Automatic recovery by replaying WAL entries
@@ -141,6 +137,7 @@ MiniDB is a production-ready B+Tree database implementation demonstrating core d
 
 The database engine provides:
 - **B+Tree Engine**: Full B+Tree implementation with all CRUD operations
+- **Concurrent Access**: Thread-safe operations supporting multiple concurrent readers
 - **Transaction Support**: Multi-operation atomicity with WAL-based crash recovery
 - **Page Cache**: Configurable LRU cache for efficient memory management
 - **Direct Go API**: Use the B+Tree directly in Go programs
@@ -218,7 +215,6 @@ go test -v ./internal/btree/...
 Tests generate:
 
 - Binary database files (`.db`) in test directories
-- Visual tree diagrams (`.png`)
 - Test documentation (`description.txt`)
 
 See [TESTING.md](mini-db-engine/docs/TESTING.md) for detailed test documentation.
@@ -258,6 +254,7 @@ This project is for educational and demonstration purposes.
 ## Key Features
 
 - **B+Tree Implementation**: Full B+Tree with insert, search, update, delete, and range queries
+- **Concurrent Access**: Thread-safe operations with concurrent readers and serialized writers
 - **Transaction Support**: Multi-operation atomicity with Begin/Commit/Rollback
 - **Write-Ahead Logging**: All changes logged before database writes
 - **Crash Recovery**: Automatic recovery by replaying WAL entries
@@ -270,5 +267,5 @@ This project is for educational and demonstration purposes.
 
 ---
 
-**Version:** 6.0 (Web Interface & Visualization)  
-**Last Updated:** January 2026
+**Version:** 8.0 (Concurrent Access - Phase 3.5)  
+**Last Updated:** January 27, 2026

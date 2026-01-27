@@ -1,6 +1,9 @@
 package page
 
-import "bplustree/internal/storage"
+import (
+	"sync"
+	"bplustree/internal/storage"
+)
 
 // Type aliases for composite keys and structured rows (exported for convenience)
 type KeyType = storage.CompositeKey
@@ -17,6 +20,7 @@ const (
 const ORDER = 4
 
 type InternalPage struct {
+	Mu       sync.RWMutex // Phase 2: Fine-grained locking for concurrent reads (exported for btree package)
 	Header PageHeader
 
 	// payload (in-memory view)
@@ -26,6 +30,7 @@ type InternalPage struct {
 }
 
 type LeafPage struct {
+	Mu       sync.RWMutex // Phase 2: Fine-grained locking for concurrent reads (exported for btree package)
 	Header PageHeader
 
 	// payload (in-memory view)

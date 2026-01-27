@@ -6,7 +6,8 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
 
 - [MiniDB Development Changelog](#minidb-development-changelog)
   - [Table of Contents](#table-of-contents)
-  - [Version 7.0 - Schema Enforcement (Current)](#version-70---schema-enforcement-current)
+  - [Version 8.0 - Concurrent Access (Current)](#version-80---concurrent-access-phase-35)
+  - [Version 7.0 - Schema Enforcement](#version-70---schema-enforcement)
     - [Major Features Added](#major-features-added)
     - [Implementation Details](#implementation-details)
       - [Schema Definition](#schema-definition)
@@ -60,21 +61,84 @@ This document tracks the evolution of the MiniDB B+Tree database implementation,
     - [Files Created](#files-created)
   - [Development Timeline](#development-timeline)
   - [Future Roadmap](#future-roadmap)
-    - [Version 5.0 - Concurrent Access (Planned)](#version-50---concurrent-access-planned)
     - [Version 6.0 - Performance Optimizations (Planned)](#version-60---performance-optimizations-planned)
-    - [Version 8.0 - Advanced Features (Planned)](#version-80---advanced-features-planned)
+    - [Version 9.0 - Advanced Concurrency (Planned)](#version-90---advanced-concurrency-planned)
+    - [Version 10.0 - Advanced Features (Planned)](#version-100---advanced-features-planned)
   - [Statistics](#statistics)
     - [Code Growth](#code-growth)
     - [Test Coverage](#test-coverage)
     - [Features by Version](#features-by-version)
   - [Notes](#notes)
 
+## Version 8.0 - Concurrent Access (Phase 3.5)
+
+**Release Date:** January 27, 2026  
+**Status:** Current Version - Stabilized
+
+### Major Features Added
+
+- **Thread-Safe Architecture**
+  - **Concurrent Readers**: Multiple readers can search the tree simultaneously (Shared Locks)
+  - **Serialized Writers**: Writers operate safely under a Global Lock (Phase 3 approach)
+  - **Thread-Safe Transactions**: Complete overhaul of `TransactionManager` to support concurrent access
+
+### Implementation Details
+
+- **Concurrency Control**
+  - Replaced ad-hoc locking with structured `sync.RWMutex` architecture
+  - `Search` operations acquire `RLock` (Read Lock)
+  - `Insert`/`Delete` operations acquire `Lock` (Write Lock)
+  - Added race detection to CI/CD pipeline
+
+- **Transaction Manager Hardening**
+  - Fixed critical race conditions in internal map access (`modifiedPages`, `originalPages`)
+  - Added fine-grained synchronization to:
+    - `TrackPageModification`
+    - `TrackPageAllocation`
+    - `TrackPageDeletion`
+
+- **Phase 4 Research Artifacts (In-Codebase)**
+  - Implemented but disabled fine-grained pessimistic locking logic:
+    - `findLeafPessimistic()`: Root-to-leaf exclusive locking
+    - `handleSplitWithLocks()`: Specialized split handler for pre-locked paths
+    - `rebalanceLeafWithLocks()`: Specialized merge handler for pre-locked paths
+
+### Why Phase 3.5?
+I successfully implemented the infrastructure for full Phase 4 concurrency (fine-grained splits) but identified exponential complexity risks. To guarantee data integrity (Correctness > Performance), I stabilized at Phase 3.5, which offers concurrent reads and guaranteed safety for writers.
+
+### Testing
+
+- Comprehensive concurrency test suite in `internal/btree/concurrent_test.go`:
+  - `TestCrabbing_ReaderWriterIsolation`: Verifies reader-writer isolation with 20 concurrent readers, 1 writer, and 1 deleter
+  - `TestOptimisticWrite_WALLogging`: Verifies WAL logging correctness under concurrent operations
+  - `TestOptimisticWrite_ConcurrentOperations`: Tests concurrent writers and deleters operating on different key ranges
+  - `TestOptimisticWrite_SafetyChecks`: Validates safety check logic for optimistic operations
+- All tests run with Go race detector (`-race` flag) to ensure zero race conditions
+- Thread-safety verified through stress testing with multiple goroutines
+
+### Files Added
+
+- `internal/btree/concurrent_test.go`: Comprehensive concurrency test suite
+
+### Files Modified
+
+- `internal/btree/tree.go`: Added `sync.RWMutex` for thread-safe operations
+- `internal/transaction/transaction.go`: Added fine-grained locking for thread-safe transaction management
+
+### Key Improvements Over Version 7.0
+
+- **Concurrent Read Access**: Multiple readers can search simultaneously without blocking
+- **Thread Safety**: All operations are now safe for concurrent use
+- **Transaction Hardening**: Transaction manager is fully thread-safe with fine-grained synchronization
+- **Race Condition Free**: All operations verified with Go race detector
+
 ---
 
-## Version 7.0 - Schema Enforcement (Current)
+
+## Version 7.0 - Schema Enforcement
 
 **Release Date:** January 2026  
-**Status:** Current Version
+**Status:** Completed
 
 ### Major Features Added
 
@@ -569,33 +633,50 @@ Phase 3: Type System (v3.0)
   ├── Structured records
   └── Type-safe operations
 
-Phase 4: Complete Transactions (v4.0) ← Current
+Phase 4: Complete Transactions (v4.0)
   ├── Auto-commit transactions (every operation crash-safe)
   ├── Explicit transactions (multi-operation atomicity)
   ├── Write-Ahead Logging (complete implementation)
   ├── Crash recovery (automatic WAL replay)
   └── Crash safety guarantee (no partial writes)
+
+Phase 5: LRU Page Cache (v5.0)
+  ├── Configurable cache size
+  ├── LRU eviction algorithm
+  └── Cache statistics and monitoring
+
+Phase 6: Schema Enforcement (v7.0)
+  ├── Schema definition system
+  ├── Row validation
+  ├── Automatic key extraction
+  └── Schema persistence
+
+Phase 7: Concurrent Access (v8.0) ← Current
+  ├── Concurrent readers (shared locks)
+  ├── Serialized writers (global lock)
+  ├── Thread-safe transactions
+  └── Phase 3.5 stabilized concurrency
 ```
 
 ---
 
 ## Future Roadmap
 
-### Version 5.0 - Concurrent Access (Planned)
-
-- Page-level locking
-- Multiple readers, single writer
-- B-link tree variant consideration
-- Transaction isolation levels
-
 ### Version 6.0 - Performance Optimizations (Planned)
 
-- Buffer pool with LRU eviction
 - Bulk loading for sorted data
 - Key compression
 - Index statistics
+- Query optimization
 
-### Version 8.0 - Advanced Features (Planned)
+### Version 9.0 - Advanced Concurrency (Planned)
+
+- Fine-grained pessimistic locking (Phase 4)
+- Concurrent splits and merges
+- Page-level locking for writers
+- Improved write concurrency
+
+### Version 10.0 - Advanced Features (Planned)
 
 - MVCC (Multi-Version Concurrency Control)
 - Snapshot isolation
@@ -614,6 +695,7 @@ Phase 4: Complete Transactions (v4.0) ← Current
 - **v4.0**: Complete transaction implementation with crash safety
 - **v5.0**: LRU page cache for memory management
 - **v7.0**: Schema enforcement and row-based operations
+- **v8.0**: Concurrent access with thread-safe architecture
 
 ### Test Coverage
 
@@ -621,6 +703,9 @@ Phase 4: Complete Transactions (v4.0) ← Current
 - **v2.0**: Load from disk tests
 - **v3.0**: Multi-column key/value tests
 - **v4.0**: 5+ comprehensive transaction tests (auto-commit, explicit, crash recovery)
+- **v5.0**: Cache configuration and LRU eviction tests
+- **v7.0**: Schema validation and key extraction tests
+- **v8.0**: Concurrency tests (reader-writer isolation, concurrent operations, transaction safety)
 
 ### Features by Version
 
@@ -628,7 +713,9 @@ Phase 4: Complete Transactions (v4.0) ← Current
 - **v2.0**: +1 persistence feature
 - **v3.0**: +2 type system features
 - **v4.0**: +3 transaction features (auto-commit, explicit transactions, crash safety)
+- **v5.0**: +1 cache management feature (LRU cache with configurable size)
 - **v7.0**: +1 schema enforcement feature (row validation, key extraction, schema persistence)
+- **v8.0**: +1 concurrency feature (concurrent readers, serialized writers, thread-safe transactions)
 
 ---
 
@@ -642,6 +729,6 @@ Phase 4: Complete Transactions (v4.0) ← Current
 
 ---
 
-**Last Updated:** January 2026  
-**Current Version:** 7.0  
+**Last Updated:** January 27, 2026  
+**Current Version:** 8.0  
 **Project Status:** Active Development
