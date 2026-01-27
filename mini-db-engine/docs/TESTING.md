@@ -1,8 +1,8 @@
 # MiniDB Testing Documentation
 
 **Date:** January 2026  
-**Version:** 5.0  
-**Status:** Comprehensive Test Suite with Visualization
+**Version:** 8.0  
+**Status:** Comprehensive Test Suite
 
 > **Note:** This document describes the external testing infrastructure. For core implementation details, see [IMPLEMENTATION.md](IMPLEMENTATION.md)
 
@@ -23,9 +23,6 @@
 - [Test Helper Functions](#test-helper-functions)
   - [Key/Value Constructors](#keyvalue-constructors)
   - [TestContext Methods](#testcontext-methods)
-- [Visualization System](#visualization-system)
-  - [Tree Visualization](#tree-visualization)
-  - [Visualization Script](#visualization-script)
   - [Future HTML/CSS Integration](#future-htmlcss-integration)
 - [Running Tests](#running-tests)
   - [Basic Test Execution](#basic-test-execution)
@@ -39,7 +36,6 @@
   - [HTML/CSS UI Design Considerations](#htmlcss-ui-design-considerations)
 - [Test Maintenance](#test-maintenance)
   - [Adding New Tests](#adding-new-tests)
-  - [Updating Visualization](#updating-visualization)
   - [Test Documentation](#test-documentation)
 - [Test Best Practices](#test-best-practices)
 - [Files](#files)
@@ -48,7 +44,7 @@
 
 ## Overview
 
-MiniDB includes a comprehensive test suite with automatic visualization and documentation generation. The test infrastructure is designed to be extensible and ready for future HTML/CSS-based UI for better user experience and interactive testing.
+MiniDB includes a comprehensive test suite with automatic documentation generation. The test infrastructure is designed to be extensible and ready for future HTML/CSS-based UI for better user experience and interactive testing.
 
 ---
 
@@ -60,13 +56,12 @@ The test suite uses a sophisticated `TestContext` helper system that provides:
 
 - **Isolated Test Directories**: Each test runs in its own `testdata/<TestName>/` directory
 - **Automatic Documentation**: Generates human-readable `description.txt` files
-- **Visual Tree Diagrams**: Creates PNG images showing B+Tree structure
 - **Operation Tracking**: Records all operations with natural language descriptions
 - **Expected Results**: Documents expected outcomes for verification
 
 ### Test Output Artifacts
 
-Each test automatically generates three artifacts:
+Each test automatically generates two artifacts:
 
 1. **Binary Database File** (`.db`)
 
@@ -74,14 +69,7 @@ Each test automatically generates three artifacts:
    - Can be loaded and inspected
    - Represents final database state
 
-2. **Visual Tree Diagram** (`.db.png`)
-
-   - Graphical representation using Python matplotlib
-   - Shows internal nodes, leaf nodes, and relationships
-   - Color-coded for different node types
-   - Fallback to text-based dumps if Python unavailable
-
-3. **Test Description** (`description.txt`)
+2. **Test Description** (`description.txt`)
    - Human-readable test documentation
    - Lists all operations performed
    - Documents expected results
@@ -93,11 +81,9 @@ Each test automatically generates three artifacts:
 testdata/
   TestInsertWithSplit/
     TestInsertWithSplit.db         # Binary database file
-    TestInsertWithSplit.db.png     # Visual tree diagram
     description.txt                # Test documentation
   TestDeleteWithMerge/
     TestDeleteWithMerge.db
-    TestDeleteWithMerge.db.png
     description.txt
   ...
 ```
@@ -422,7 +408,46 @@ fmt.Printf("Hits: %d, Misses: %d, Evictions: %d, Size: %d\n",
 
 ---
 
+---
+
+### 8. Concurrency Tests
+
+Tests verify thread safety and race condition freedom using the Go Race Detector.
+
+#### `TestOptimisticWrite_ConcurrentOperations`
+
+- **Purpose**: Verify mixed concurrent workload (Readers + Writers)
+- **Scenario**: 
+  - 10 Concurrent Readers (Search)
+  - 1 Concurrent Writer (Insert)
+  - 500ms duration
+- **Validates**:
+  - No data races (must run with `-race`)
+  - No panics under load
+  - Readers successfully find data inserted by writer
+  - Transaction manager safety under concurrent access
+
+#### `TestCrabbing_ReaderWriterIsolation`
+
+- **Purpose**: Verify isolation between readers and writers
+- **Scenario**: Continuous inserts concurrent with continuous full-scans
+- **Validates**:
+  - Readers never see partially modified pages
+  - Readers are not blocked indefinitely by writers
+  - Structural integrity maintained during splits
+
+#### `TestConcurrent_TransactionSafety`
+
+- **Purpose**: Verify TransactionManager thread safety
+- **Validates**:
+  - Concurrent `TrackPageModification` calls
+  - Safe concurrent access to `modifiedPages` and `activeTx`
+  - Correct isolation of transaction state
+
+---
+
 ## Test Helper Functions
+
 
 ### Key/Value Constructors
 
@@ -465,27 +490,6 @@ ctx.WriteDescription()  // Auto-called, generates description.txt
 
 ---
 
-## Visualization System
-
-### Tree Visualization
-
-The visualization system uses Python's matplotlib to generate tree diagrams:
-
-- **Internal Nodes**: Shown as rectangles with separator keys
-- **Leaf Nodes**: Shown as rectangles with key-value pairs
-- **Connections**: Arrows showing parent-child relationships
-- **Sibling Links**: Horizontal lines showing leaf chain
-- **Color Coding**: Different colors for different node types
-
-### Visualization Script
-
-`visualize_tree.py`:
-
-- Parses binary database format directly
-- Reconstructs tree structure
-- Generates PNG images using matplotlib
-- Handles missing Python dependencies gracefully
-
 ### Future HTML/CSS Integration
 
 The test infrastructure is designed to support future HTML/CSS-based UI:
@@ -493,7 +497,6 @@ The test infrastructure is designed to support future HTML/CSS-based UI:
 - **Structured Data**: Test artifacts are well-organized for parsing
 - **JSON Export**: Can easily export test results to JSON
 - **Interactive UI**: Test descriptions can be converted to interactive forms
-- **Visual Tree**: PNG diagrams can be replaced with SVG/Canvas rendering
 - **Real-time Testing**: Test framework supports programmatic execution
 
 ---
@@ -534,9 +537,8 @@ Tests automatically:
 ### Viewing Test Results
 
 1. **Database Files**: Inspect with hex editor or custom tools
-2. **Visual Diagrams**: Open `.png` files in image viewer
-3. **Documentation**: Read `description.txt` files
-4. **Test Logs**: Check Go test output for runtime information
+2. **Documentation**: Read `description.txt` files
+3. **Test Logs**: Check Go test output for runtime information
 
 ---
 
@@ -557,9 +559,8 @@ Tests automatically:
 ### Test Artifacts Generated
 
 - **18 database files** (`.db`)
-- **18 visual diagrams** (`.png`)
 - **18 documentation files** (`description.txt`)
-- **Total**: 54 artifacts per test run
+- **Total**: 36 artifacts per test run
 
 ---
 
@@ -600,9 +601,8 @@ The test infrastructure is structured to support:
 
 - **Component-Based**: Each test is self-contained
 - **Data-Driven**: Test descriptions are structured data
-- **Visualization-Ready**: Tree structures can be rendered in browser
 - **Extensible**: Test execution can be integrated into custom interfaces
-- **Extensible**: Easy to add new test types and visualizations
+- **Extensible**: Easy to add new test types
 
 ---
 
@@ -616,11 +616,6 @@ The test infrastructure is structured to support:
 4. Set summary and expected results
 5. Test will auto-generate artifacts
 
-### Updating Visualization
-
-1. Modify `visualize_tree.py` for new visualization features
-2. Update test helpers if needed
-3. Regenerate test artifacts: `go test -v`
 
 ### Test Documentation
 
@@ -638,20 +633,18 @@ The test infrastructure is structured to support:
 3. **Clarity**: Test names and descriptions should be self-explanatory
 4. **Coverage**: Test both happy path and error cases
 5. **Documentation**: Always include expected results
-6. **Visualization**: Ensure tree diagrams are readable
-7. **Maintenance**: Keep tests updated with code changes
+6. **Maintenance**: Keep tests updated with code changes
 
 ---
 
 ## Files
 
 - `tree_test.go` - Main test file
-- `visualize_tree.py` - Tree visualization script
 - `testdata/` - Test output directory
 - `TESTING.md` - This document
 
 ---
 
-**Last Updated:** January 2026  
-**Test Suite Version:** 4.0  
+**Last Updated:** January 27, 2026  
+**Test Suite Version:** 8.0  
 **Status:** Comprehensive Coverage

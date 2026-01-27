@@ -3,7 +3,6 @@ package btree
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -155,10 +154,6 @@ func (ctx *TestContext) GetDBFile() string {
 	return filepath.Join(ctx.testDir, ctx.testName+".db")
 }
 
-// GetImageFile returns the image file path in the test subfolder
-func (ctx *TestContext) GetImageFile() string {
-	return filepath.Join(ctx.testDir, ctx.testName+".db.png")
-}
 
 // WriteDescription writes the test description to a text file
 func (ctx *TestContext) WriteDescription() error {
@@ -197,7 +192,6 @@ func (ctx *TestContext) WriteDescription() error {
 	fmt.Fprintf(f, "\n")
 	fmt.Fprintf(f, "Files in this directory:\n")
 	fmt.Fprintf(f, "  - %s.db: Binary database file\n", testName)
-	fmt.Fprintf(f, "  - %s.db.png: Tree structure visualization\n", testName)
 	fmt.Fprintf(f, "  - description.txt: This file\n")
 	
 	return nil
@@ -215,12 +209,6 @@ func TestInsertWithoutSplit(t *testing.T) {
 		t.Fatalf("failed to create tree: %v", err)
 	}
 	defer tree.Close()
-	out := ctx.GetImageFile()
-	defer func() {
-		if err := dumpTreeStructure(tree, out); err != nil {
-			t.Logf("dumpTreeStructure failed: %v", err)
-		}
-	}()
 
 	// Insert keys without causing a split
 	keys := []storage.CompositeKey{K(10), K(20), K(30)}
@@ -271,12 +259,6 @@ func TestInsertWithSplit(t *testing.T) {
 		t.Fatalf("failed to create tree: %v", err)
 	}
 	defer tree.Close()
-	out := ctx.GetImageFile()
-	defer func() {
-		if err := dumpTreeStructure(tree, out); err != nil {
-			t.Logf("dumpTreeStructure failed: %v", err)
-		}
-	}()
 
 	// Insert keys to cause a split
 	keys := []storage.CompositeKey{K(10), K(20), K(30), K(40), K(50)}
@@ -372,12 +354,6 @@ func TestInsertManyComplex(t *testing.T) {
 		t.Fatalf("failed to create tree: %v", err)
 	}
 	defer tree.Close()
-	out := ctx.GetImageFile()
-	defer func() {
-		if err := dumpTreeStructure(tree, out); err != nil {
-			t.Logf("dumpTreeStructure failed: %v", err)
-		}
-	}()
 
 	// 20 keys (more than 15) inserted in a shuffled order to
 	// provoke splits at multiple levels.
@@ -501,90 +477,6 @@ Start:
 	return res
 }
 
-// dumpTreeStructure writes a tree visualization of the B+Tree structure
-// by calling a Python visualization script. It first flushes all pages to disk,
-// then invokes the Python script to read the binary file and generate a tree visualization.
-func dumpTreeStructure(tree *BPlusTree, path string) error {
-	// Flush all pages to disk to ensure the file is up to date
-	if err := tree.pager.FlushAll(); err != nil {
-		return fmt.Errorf("failed to flush pages: %w", err)
-	}
-
-	// Get the database file path from the PageManager
-	dbFile := tree.pager.GetFileName()
-	if dbFile == "" {
-		return fmt.Errorf("cannot determine database file path")
-	}
-
-	// Find the Python script (should be in scripts directory)
-	scriptPath := filepath.Join(filepath.Dir(dbFile), "..", "..", "scripts", "visualize_tree.py")
-	scriptPath, err := filepath.Abs(scriptPath)
-	if err != nil {
-		return fmt.Errorf("failed to resolve script path: %w", err)
-	}
-
-	// Check if Python script exists
-	if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-		// Fallback: try scripts directory
-		scriptPath = filepath.Join("scripts", "visualize_tree.py")
-		if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-			// If script doesn't exist, fall back to simple text dump
-			return dumpTreeStructureSimple(tree, path)
-		}
-	}
-
-	// Call Python script to visualize the tree
-	cmd := exec.Command("python3", scriptPath, dbFile, path)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		// If Python script fails, fall back to simple text dump
-		return dumpTreeStructureSimple(tree, path)
-	}
-
-	return nil
-}
-
-// dumpTreeStructureSimple writes a simple human-readable snapshot of all allocated
-// pages. This is a fallback if the Python visualization script is not available.
-func dumpTreeStructureSimple(tree *BPlusTree, path string) error {
-	f, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	// ensure pages are loaded into the pager cache
-	max := tree.pager.Next - 1
-	ids := make([]uint64, 0, max)
-	for i := uint64(1); i <= max; i++ {
-		p := tree.pager.Get(i)
-		if p == nil {
-			continue
-		}
-		ids = append(ids, i)
-	}
-
-	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
-
-	for _, id := range ids {
-		p := tree.pager.Get(id)
-		switch v := p.(type) {
-		case *page.MetaPage:
-			fmt.Fprintf(f, "Page %d META root=%d pageSize=%d order=%d version=%d\n",
-				id, v.RootPage, v.PageSize, v.Order, v.Version)
-		case *page.InternalPage:
-			fmt.Fprintf(f, "Page %d INTERNAL parent=%d keyCount=%d free=%d keys=%v children=%v\n",
-				id, v.Header.ParentPage, v.Header.KeyCount, v.Header.FreeSpace, v.Keys, v.Children)
-		case *page.LeafPage:
-			fmt.Fprintf(f, "Page %d LEAF parent=%d prev=%d next=%d keyCount=%d free=%d keys=%v values=%v\n",
-				id, v.Header.ParentPage, v.Header.PrevPage, v.Header.NextPage, v.Header.KeyCount, v.Header.FreeSpace, v.Keys, v.Values)
-		default:
-			fmt.Fprintf(f, "Page %d UNKNOWN type=%T\n", id, p)
-		}
-	}
-	return nil
-}
 
 // -----------------------------
 // Test Load from disk
@@ -650,11 +542,6 @@ func TestLoadFromDisk(t *testing.T) {
 	ctx.AddExpected("Page relationships (parent, children, siblings) should be preserved")
 	ctx.AddExpected("No data loss or corruption during persistence")
 
-	// Write dump file
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree2, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 // -----------------------------
@@ -710,10 +597,6 @@ func TestSearch(t *testing.T) {
 		t.Error("expected error for non-existent key, got nil")
 	}
 
-	out := filepath.Join(dbDir, t.Name()+".db.png")
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 // -----------------------------
@@ -766,10 +649,6 @@ func TestDeleteSimple(t *testing.T) {
 	ctx.AddExpected("Tree structure should remain valid (no corruption)")
 	ctx.AddExpected("Search for key 20 should return an error")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestDeleteWithBorrowFromRight(t *testing.T) {
@@ -819,10 +698,6 @@ func TestDeleteWithBorrowFromRight(t *testing.T) {
 	ctx.AddExpected("Parent node separator key should be updated to 40")
 	ctx.AddExpected("All remaining keys (20, 30, 40, 50) should be searchable")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestDeleteWithBorrowFromLeft(t *testing.T) {
@@ -872,10 +747,6 @@ func TestDeleteWithBorrowFromLeft(t *testing.T) {
 	ctx.AddExpected("Parent node separator key should be updated to 40")
 	ctx.AddExpected("All remaining keys (10, 20, 30, 40) should be searchable")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestDeleteWithMerge(t *testing.T) {
@@ -931,10 +802,6 @@ func TestDeleteWithMerge(t *testing.T) {
 	ctx.AddExpected("If parent becomes empty, tree height should decrease")
 	ctx.AddExpected("All remaining keys (10, 20, 30) should be searchable")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestDeleteComplex(t *testing.T) {
@@ -1038,10 +905,6 @@ Traverse:
 	ctx.AddExpected("Keys should remain in sorted order when traversing leaf chain")
 	ctx.AddExpected("Tree structure should be valid (no corruption)")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestDeleteAll(t *testing.T) {
@@ -1090,10 +953,6 @@ func TestDeleteAll(t *testing.T) {
 	ctx.AddExpected("Search for any key should return an error")
 	ctx.AddExpected("Tree should handle empty state correctly without errors")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 // -----------------------------
@@ -1148,10 +1007,6 @@ func TestRangeQuerySimple(t *testing.T) {
 	ctx.AddExpected("Each key should have its correct value (key N -> \"vN\")")
 	ctx.AddExpected("Keys outside range (10, 20, 70, 80, 90) should not be included")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestRangeQueryEdgeCases(t *testing.T) {
@@ -1249,10 +1104,6 @@ func TestRangeQueryEdgeCases(t *testing.T) {
 	ctx.AddExpected("Partial range [5, 25] should return only keys in range: [10, 20]")
 	ctx.AddExpected("Invalid range [50, 10] should return an error")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestRangeQueryAcrossPages(t *testing.T) {
@@ -1312,10 +1163,6 @@ func TestRangeQueryAcrossPages(t *testing.T) {
 	ctx.AddExpected("All key-value pairs should be correct")
 	ctx.AddExpected("Query should efficiently scan only relevant leaf pages")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 // -----------------------------
@@ -1380,10 +1227,6 @@ func TestUpdateSimple(t *testing.T) {
 	ctx.AddExpected("Tree structure should remain unchanged (no rebalancing needed)")
 	ctx.AddExpected("Update should be in-place if new value fits in same page")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestUpdateNonExistentKey(t *testing.T) {
@@ -1418,10 +1261,6 @@ func TestUpdateNonExistentKey(t *testing.T) {
 	ctx.AddExpected("Key 10 should remain unchanged")
 	ctx.AddExpected("Tree structure should remain valid")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestUpdateWithLargeValue(t *testing.T) {
@@ -1480,10 +1319,6 @@ func TestUpdateWithLargeValue(t *testing.T) {
 	ctx.AddExpected("All keys (10, 20, 30) should remain searchable")
 	ctx.AddExpected("Tree structure should remain valid after rebalancing")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 func TestUpdateMultiple(t *testing.T) {
@@ -1554,10 +1389,6 @@ func TestUpdateMultiple(t *testing.T) {
 	ctx.AddExpected("All 8 keys should remain searchable")
 	ctx.AddExpected("Tree structure should remain valid")
 
-	out := ctx.GetImageFile()
-	if err := dumpTreeStructure(tree, out); err != nil {
-		t.Logf("dumpTreeStructure failed: %v", err)
-	}
 }
 
 // TestAutoCommitSingleInsert tests that a single Insert operation automatically creates and commits a transaction

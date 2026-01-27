@@ -1,8 +1,8 @@
 # MiniDB: B+Tree Database Implementation
 
-**Date:** January 13, 2026  
+**Date:** January 27, 2026  
 **Author:** Lam Le Vu Ngan
-**Current Version:** 7.0 (Schema Enforcement)
+**Current Version:** 8.0 (Concurrent Access - Phase 3.5)
 
 > **See [CHANGELOG.md](CHANGELOG.md) for complete development history and version evolution**
 
@@ -47,7 +47,16 @@
       - [9.1. **Auto-Commit Transactions (Crash Recovery for Single Operations)**](#91-auto-commit-transactions-crash-recovery-for-single-operations)
       - [9.2. **Explicit Transactions (Multi-Operation Atomicity)**](#92-explicit-transactions-multi-operation-atomicity)
       - [9.3. **Write-Ahead Logging (WAL) Implementation**](#93-write-ahead-logging-wal-implementation)
+
       - [9.4. **Transaction States and Lifecycle**](#94-transaction-states-and-lifecycle)
+    - [10. **Concurrent Access (Phase 3.5)**](#10-concurrent-access-phase-35)
+      - [10.1. **Concurrency Architecture**](#101-concurrency-architecture)
+      - [10.2. **Reader-Writer Locking Strategy**](#102-reader-writer-locking-strategy)
+      - [10.3. **Transaction Thread-Safety**](#103-transaction-thread-safety)
+      - [10.4. **Phase 3.5 Decision Rationale**](#104-phase-35-decision-rationale)
+      - [10.5. **Testing**](#105-testing)
+      - [10.6. **Performance Characteristics**](#106-performance-characteristics)
+      - [10.7. **Future Enhancements**](#107-future-enhancements)
   - [Checklist: Completed Features](#checklist-completed-features)
     - [Core Operations](#core-operations)
     - [Transaction \& Durability](#transaction--durability)
@@ -2040,7 +2049,6 @@ tree.Insert(key, value)  // Commit completes
 > **For comprehensive testing documentation, see [TESTING.md](TESTING.md)**
 
 - **18 Comprehensive Tests** - All operations tested with edge cases
-- **Visual Tree Diagrams** - PNG images showing B+Tree structure
 - **Automatic Documentation** - Generated description files for each test
 - **Binary Storage Validation** - Proper serialization/deserialization
 - **Test Infrastructure** - Ready for future HTML/CSS-based UI
@@ -2051,10 +2059,11 @@ tree.Insert(key, value)  // Commit completes
 
 ### High Priority
 
-1. **Concurrent Access**
-   - Add page-level locking or latching
-   - Support multiple readers, single writer
-   - Consider B-link tree variant for better concurrency
+1. **Advanced Concurrency (Phase 4)**
+   - Enable fine-grained pessimistic locking for concurrent splits
+   - Implement concurrent merge protocol
+   - Add deadlock detection and recovery
+   - Consider B-link tree variant for better write concurrency
 
 ### Medium Priority
 
@@ -2225,8 +2234,258 @@ The `convertValueToColumn()` function handles type conversion:
 - ORDER = 4 (max 3 keys per node, 4 children)
 - Page size = 4KB
 - LRU page cache with configurable size (default 100 pages, ~400KB)
-- Single-threaded access only (transaction support added, but no concurrent transactions)
+- Concurrent read access (multiple readers can search simultaneously)
+- Serialized write access (writers execute one at a time for correctness)
 - Variable-length keys/values based on data content
 - WAL enabled for durability and crash recovery
 
 > **See [TESTING.md](TESTING.md) for detailed test documentation, test categories, and future HTML/CSS UI plans**
+
+---
+
+## 10. **Concurrent Access (Phase 3.5)**
+
+**Overview:** MiniDB implements a "Phase 3.5" concurrency model that prioritizes correctness and data safety while enabling high read concurrency. This represents a stabilized approach after extensive research into fine-grained locking, balancing performance with correctness guarantees.
+
+### 10.1. **Concurrency Architecture**
+
+MiniDB uses a two-level locking strategy:
+
+1. **Tree-Level Locking**: Global `sync.RWMutex` (`tree.mu`) for high-level operation coordination
+2. **Transaction-Level Locking**: Fine-grained `sync.Mutex` in `TransactionManager` for thread-safe transaction tracking
+
+### 10.2. **Reader-Writer Locking Strategy**
+
+#### Reader Operations (`Search`, `SearchRange`)
+
+**Implementation:**
+- Acquire `RLock()` (Shared Lock) on `tree.mu` at operation start
+- Release lock via `defer tree.mu.RUnlock()` at operation end
+- Multiple readers can execute simultaneously without blocking each other
+- Readers are blocked only when a writer holds the exclusive lock
+
+**Algorithm Steps:**
+```
+function Search(key):
+    tree.mu.RLock()           // Acquire shared lock
+    defer tree.mu.RUnlock()   // Release on return
+    
+    // Perform search operation
+    // All tree traversal happens under read lock
+    leaf = findLeaf(key)
+    return searchInLeaf(leaf, key)
+```
+
+**Benefits:**
+- **High Read Concurrency**: Multiple readers can search simultaneously
+- **No Reader-Reader Blocking**: Readers never block other readers
+- **Simple Correctness**: Read operations see consistent tree state
+
+#### Writer Operations (`Insert`, `Delete`, `Update`)
+
+**Implementation:**
+- Acquire `Lock()` (Exclusive Lock) on `tree.mu` at operation start
+- Release lock via `defer tree.mu.Unlock()` at operation end
+- Writers are serialized (one at a time)
+- Writers block all readers and other writers
+
+**Algorithm Steps:**
+```
+function Insert(key, value):
+    tree.mu.Lock()           // Acquire exclusive lock
+    defer tree.mu.Unlock()   // Release on return
+    
+    // Ensure auto-commit transaction
+    wasAutoCommit = ensureAutoCommitTransaction()
+    defer commitAutoTransaction() if wasAutoCommit
+    
+    // Perform insert operation
+    // All modifications happen under exclusive lock
+    leaf = findLeaf(key)
+    insertIntoLeaf(leaf, key, value)
+    handleSplitIfNeeded(leaf)
+```
+
+**Why Global Lock for Writers?**
+
+1. **Split Complexity**: Node splits require modifying multiple nodes (leaf, parent, possibly root) in a specific order. Global lock ensures atomicity.
+
+2. **Merge Complexity**: Deletions can trigger merges affecting left sibling, right sibling, and parent. Coordinating locks across three nodes plus parent is a known "Hard Problem" in database theory.
+
+3. **Correctness Guarantee**: With the constraint "100% Correctness > Performance", global lock provides guaranteed data safety without risk of deadlocks or corruption.
+
+4. **WAL Integration**: Global lock ensures WAL entries are written atomically before database modifications become visible.
+
+**Trade-offs:**
+- **Performance**: Writers serialize, limiting write throughput
+- **Correctness**: Guaranteed data integrity, no deadlock risk
+- **Simplicity**: Straightforward implementation, easy to verify
+
+### 10.3. **Transaction Thread-Safety**
+
+The `TransactionManager` has been hardened to support concurrent access, ensuring that multiple threads can safely track page modifications even if the high-level tree lock policy changes in the future.
+
+#### Implementation Details
+
+**Granular Locking**: `TransactionManager` uses its own internal `sync.Mutex` (`txManager.mu`) to protect:
+- `activeTx` pointer (current transaction state)
+- `modifiedPages` map (pageID → modified page object)
+- `originalPages` map (pageID → original page snapshot)
+- `pageAllocations` set (newly allocated page IDs)
+- `pageDeletions` set (deleted page IDs)
+
+**Protected Methods:**
+
+1. **`TrackPageModification(pageID, pageObj)`**:
+   - Acquires `txManager.mu` lock
+   - Checks if original page state already saved (avoid duplicate work)
+   - If not saved, reads original from disk (bypassing cache for true original)
+   - Clones original page and stores in `originalPages` map
+   - Updates `modifiedPages` map with modified page
+   - Releases lock
+
+2. **`TrackPageAllocation(pageID)`**:
+   - Acquires `txManager.mu` lock
+   - Adds pageID to `pageAllocations` set
+   - Releases lock
+
+3. **`TrackPageDeletion(pageID)`**:
+   - Acquires `txManager.mu` lock
+   - Moves pageID from `modifiedPages` to `pageDeletions` set
+   - Releases lock
+
+**Design Rationale:**
+
+This design decouples transaction safety from tree structure safety:
+- **Tree Lock**: Protects tree structure modifications (splits, merges, rebalancing)
+- **Transaction Lock**: Protects transaction state (page tracking, rollback data)
+
+This separation allows:
+- Future concurrency enhancements without breaking transaction safety
+- Independent verification of transaction correctness
+- Clear separation of concerns
+
+### 10.4. **Phase 3.5 Decision Rationale**
+
+After successfully implementing Phase 3 (Optimistic writes) and attempting Phase 4 (Pessimistic fallback), a strategic decision was made to stabilize at **Phase 3.5**.
+
+#### What is Phase 3.5?
+
+- **Writers**: Serialized via Global Lock (Safe, Durable)
+- **Readers**: Fully Concurrent (Shared Locks)
+- **Transactions**: Fully Thread-Safe (Fine-grained synchronization)
+- **Infrastructure**: Phase 4 Locking Logic is implemented but dormant
+
+#### Phase 4 Research & Experimentation
+
+Significant effort was invested into implementing full pessimistic locking (Phase 4). This research yielded valuable components and insights, even though the full feature was disabled for stability.
+
+**Implemented Components (Available in Codebase):**
+
+1. **`findLeafPessimistic(key)`**: 
+   - Specialized traversal that acquires exclusive `Lock()` on *every* node from root to leaf
+   - Holds all locks until operation completes
+   - The "Nuclear Option" for safe splits
+
+2. **`handleSplitWithLocks(leaf, path, heldLocks)`**: 
+   - Split handler that respects an existing stack of held locks
+   - Ensures split propagates up the locked path without new lock acquisition
+   - Prevents deadlocks during split propagation
+
+3. **`rebalanceLeafWithLocks(leaf, path, heldLocks)`**: 
+   - Symmetric handler for deletes/merges
+   - Handles borrow and merge operations with pre-acquired locks
+   - Maintains lock ordering during rebalancing
+
+**Critical Discoveries:**
+
+During Phase 4 implementation attempts, subtle but critical bugs were uncovered and fixed:
+
+1. **TransactionManager Race Conditions**: 
+   - The `TransactionManager`'s internal maps (`modifiedPages`, `originalPages`) were not protected against concurrent access
+   - **The Fix**: Added fine-grained synchronization to `TrackPageModification`, `TrackPageAllocation`, and `TrackPageDeletion`
+
+2. **Recursive Locking Deadlocks**: 
+   - `IsEmpty()` checks inside `Insert`/`Delete` were attempting to re-acquire read locks while holding write locks
+   - **The Fix**: Replaced with inline checks to prevent self-deadlock
+
+#### Barriers to Full Phase 4
+
+Moving from Phase 3.5 to full Phase 4 (Concurrent Splits/Merges) presents exponential complexity scaling:
+
+1. **Complexity Explosion**:
+   - Handling a split requires holding locks from Root → Leaf
+   - If a generic Writer (Optimistic) meets a Splitter (Pessimistic), the lock protocols must intersect perfectly to avoid deadlocks
+   - Verifying this intersection mathematically requires formal methods or massive-scale fuzzing
+
+2. **The "Merge" Conundrum**:
+   - Concurrent Deletes are significantly harder than Inserts
+   - A merge can affect left sibling, right sibling, and parent
+   - Locking three nodes (Left, Self, Right) + Parent reliably without deadlock is a known "Hard Problem" in database theory
+   - Often solved by B-Link trees, which we rejected for disk format compatibility
+
+3. **Resources vs Correctness**:
+   - With constraint "100% Correctness > Performance", global write lock guarantees data safety
+   - Risk of data corruption with complex fine-grained split locking outweighs performance benefits
+
+### 10.5. **Testing**
+
+Comprehensive concurrency test suite in `internal/btree/concurrent_test.go`:
+
+1. **`TestCrabbing_ReaderWriterIsolation`**:
+   - Spawns 20 concurrent readers, 1 writer, 1 deleter
+   - Runs for 10 seconds
+   - Verifies: Readers never see garbage data, zero race conditions, no panics
+
+2. **`TestOptimisticWrite_WALLogging`**:
+   - Performs 100 optimistic inserts and 50 deletes
+   - Verifies: Every operation logged to WAL before unlock
+   - Verifies: WAL recovery restores correct tree state
+
+3. **`TestOptimisticWrite_ConcurrentOperations`**:
+   - Spawns 10 concurrent writers and 5 deleters on different key ranges
+   - Verifies: No deadlocks, all operations complete successfully
+   - Verifies: Final tree state matches expected count
+
+4. **`TestOptimisticWrite_SafetyChecks`**:
+   - Validates safety check logic for both Insert and Delete operations
+   - Verifies correct path selection (optimistic vs pessimistic fallback)
+
+**Test Execution:**
+- All tests run with Go race detector (`-race` flag) to ensure zero race conditions
+- Thread-safety verified through stress testing with multiple goroutines
+- Tests verify both correctness (data integrity) and safety (no races, no deadlocks)
+
+### 10.6. **Performance Characteristics**
+
+**Read Performance:**
+- **Concurrent Reads**: Multiple readers execute simultaneously
+- **No Reader Blocking**: Readers never block other readers
+- **O(log n) Complexity**: Same as single-threaded search
+
+**Write Performance:**
+- **Serialized Writes**: Writers execute one at a time
+- **Writer Blocking**: Writers block all readers and other writers
+- **O(log n) Complexity**: Same as single-threaded insert/delete
+
+**Real-World Comparison:**
+- **PostgreSQL**: Uses similar reader-writer locking for B+Tree indexes
+- **MySQL InnoDB**: Uses latch crabbing with global lock fallback for complex operations
+- **SQLite**: Uses file-level locking (similar serialization approach)
+
+### 10.7. **Future Enhancements**
+
+The Phase 4 research artifacts remain in the codebase for future implementation:
+
+- **Fine-Grained Pessimistic Locking**: Enable `findLeafPessimistic()` for concurrent splits
+- **Concurrent Merges**: Implement safe merge protocol with multiple node locks
+- **Lock Ordering Verification**: Add instrumentation to verify lock acquisition order
+- **Performance Profiling**: Measure contention and optimize lock granularity
+
+**Migration Path:**
+When ready to implement Phase 4, the infrastructure exists:
+1. Enable pessimistic locking paths in Insert/Delete operations
+2. Activate `handleSplitWithLocks()` and `rebalanceLeafWithLocks()`
+3. Add comprehensive deadlock detection and recovery
+4. Extensive testing with race detector and stress tests
+
