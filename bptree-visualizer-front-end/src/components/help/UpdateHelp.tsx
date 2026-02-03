@@ -8,11 +8,11 @@ export const UpdateHelp: React.FC = () => {
         <div>
           <div className="flex flex-col gap-2 text-base text-muted-foreground mt-0">
               <div>
-                <span className="font-bold text-amber-700 dark:text-amber-400">Main Objective: </span>
+                <span className="font-bold text-emerald-700 dark:text-emerald-400">Main Objective: </span>
                 Modify the value associated with an existing key.
               </div>
               <div>
-                <span className="font-bold text-yellow-700 dark:text-yellow-400">Key Problem: Existence</span>
+                <span className="font-bold text-rose-700 dark:text-rose-400">Key Problem: Existence</span>
                 <ul className="list-disc ml-5 mt-1 space-y-0.5">
                    <li><strong>Validation:</strong> Must confirm the key actually exists before attempting any write.</li>
                    <li><strong>Structure:</strong> Updates typically do not change the tree structure.</li>

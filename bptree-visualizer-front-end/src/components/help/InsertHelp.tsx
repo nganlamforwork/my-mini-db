@@ -13,7 +13,7 @@ export const InsertHelp: React.FC = () => {
                 Add a new key-value pair to the tree while maintaining sorted order.
               </div>
               <div>
-                <span className="font-bold text-amber-700 dark:text-amber-400">Key Problem: Constraints</span>
+                <span className="font-bold text-rose-700 dark:text-rose-400">Key Problem: Constraints</span>
                 <ul className="list-disc ml-5 mt-1 space-y-0.5">
                    <li><strong>Happy Case:</strong> Node has space (Keys &lt; Order-1).</li>
                    <li><strong>Overflow:</strong> Node is full (Keys = Order-1) &rarr; Requires <strong>Split</strong>.</li>

@@ -9,11 +9,11 @@ export const RangeHelp: React.FC = () => {
         <div>
           <div className="flex flex-col gap-2 text-base text-muted-foreground mt-0">
               <div>
-                <span className="font-bold text-violet-700 dark:text-violet-400">Main Objective: </span>
+                <span className="font-bold text-emerald-700 dark:text-emerald-400">Main Objective: </span>
                 Retrieve all keys falling within a closed interval <code>[Start, End]</code>.
               </div>
               <div>
-                <span className="font-bold text-indigo-700 dark:text-indigo-400">Key Problem: Continuity</span>
+                <span className="font-bold text-rose-700 dark:text-rose-400">Key Problem: Continuity</span>
                 <ul className="list-disc ml-5 mt-1 space-y-0.5">
                    <li><strong>Traversal:</strong> Need to jump between leaf nodes using <code>Next</code> pointers without going back up to the parent.</li>
                 </ul>

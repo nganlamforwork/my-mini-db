@@ -5,10 +5,18 @@ export const SearchHelp: React.FC = () => {
     <ScrollArea className="h-full pr-4">
       <div className="space-y-8">
         <div>
-          <p className="text-lg text-muted-foreground leading-relaxed">
-            The <strong>Search Operation</strong> efficiently locates a value by its key. 
-            It leverages the B+Tree structure to perform binary searches at each level, ensuring predictable performance.
-          </p>
+          <div className="flex flex-col gap-2 text-base text-muted-foreground mt-2">
+              <div>
+                <span className="font-bold text-emerald-700 dark:text-emerald-400">Main Objective: </span>
+                Find the leaf node containing the specific target key.
+              </div>
+              <div>
+                <span className="font-bold text-rose-700 dark:text-rose-400">Key Problem: Navigation</span>
+                <ul className="list-disc ml-5 mt-1 space-y-0.5">
+                   <li><strong>Routing:</strong> Must correctly choose the child pointer where <code>child_key &le; target &lt; next_key</code>.</li>
+                </ul>
+              </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">

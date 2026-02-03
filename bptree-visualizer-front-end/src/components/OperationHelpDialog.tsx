@@ -102,6 +102,7 @@ export const OperationHelpDialog: React.FC<OperationHelpDialogProps> = ({ open, 
             })}
           </TabsList>
           
+          <div className="flex-1 overflow-hidden">
             <TabsContent key="search" value="search" className="h-full m-0 data-[state=inactive]:hidden">
               <SearchHelp />
             </TabsContent>
@@ -121,6 +122,7 @@ export const OperationHelpDialog: React.FC<OperationHelpDialogProps> = ({ open, 
             <TabsContent key="update" value="update" className="h-full m-0 data-[state=inactive]:hidden">
               <UpdateHelp />
             </TabsContent>
+          </div>
         </Tabs>
       </DialogContent>
     </Dialog>
