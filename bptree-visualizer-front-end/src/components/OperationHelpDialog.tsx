@@ -50,7 +50,10 @@ export const OperationHelpDialog: React.FC<OperationHelpDialogProps> = ({ open, 
 
   React.useEffect(() => {
     if (operation) {
-      setSelectedOp(operation);
+      // Cast to satisfy TS since operation can be null, but we'll default to search if so
+      if (['insert', 'search', 'update', 'delete', 'range'].includes(operation as string)) {
+          setSelectedOp(operation as any);
+      }
     }
   }, [operation]);
 

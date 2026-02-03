@@ -28,7 +28,7 @@ export const SearchHelp: React.FC = () => {
                   Begin traversal from the root page. The root is the entry point for all operations.
                 </p>
              </div>
-             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center h-32 border border-dashed">
+             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center min-h-[160px] border border-dashed">
                 <div className="flex flex-col items-center">
                    <div className="w-20 h-12 border-2 border-primary rounded bg-background flex items-center justify-center shadow-sm">
                       <span className="text-sm font-bold">Root</span>
@@ -47,7 +47,7 @@ export const SearchHelp: React.FC = () => {
                   Perform <strong>Binary Search</strong> on separator keys to choose the correct child pointer.
                 </p>
              </div>
-             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center h-32 border border-dashed">
+             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center min-h-[160px] border border-dashed">
                 <div className="flex gap-2">
                    <div className="flex flex-col items-center opacity-50">
                       <div className="w-14 h-10 border rounded flex items-center justify-center bg-background"><span className="text-sm">10</span></div>
@@ -76,7 +76,7 @@ export const SearchHelp: React.FC = () => {
                   In the leaf, search the sorted key array for an exact match.
                 </p>
              </div>
-             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center h-32 border border-dashed">
+             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center min-h-[160px] border border-dashed">
                  <div className="flex items-center gap-0 border border-muted-foreground/30 rounded overflow-hidden shadow-sm bg-background">
                     <div className="px-4 py-3 border-r text-sm text-muted-foreground">15</div>
                     <div className="px-4 py-3 border-r text-sm text-muted-foreground">22</div>
@@ -94,7 +94,7 @@ export const SearchHelp: React.FC = () => {
                   Logarithmic time complexity due to tree height.
                 </p>
              </div>
-              <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center h-32 border border-dashed">
+              <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center min-h-[160px] border border-dashed">
                  <div className="text-center">
                     <code className="text-xl font-mono font-bold text-amber-600 dark:text-amber-400">O(log n)</code>
                     <p className="text-xs text-muted-foreground mt-1">Base depends on Order (Branching Factor)</p>

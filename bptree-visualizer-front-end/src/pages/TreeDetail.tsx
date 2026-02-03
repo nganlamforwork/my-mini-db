@@ -5,6 +5,7 @@ import { TreeCanvas } from "@/components/tree-visualizer/TreeCanvas";
 import { Button } from "@/components/ui/button";
 import { OperationDialog } from "@/components/OperationDialog";
 import { OperationHelpDialog } from "@/components/OperationHelpDialog";
+import { FoundationHelpDialog } from "@/components/FoundationHelpDialog";
 import { SystemLog } from "@/components/SystemLog";
 import {
   QueryResultPanel,
@@ -101,6 +102,7 @@ export function TreeDetail() {
     "insert" | "search" | "update" | "delete" | "range" | null
   >(null);
   const [helpDialogOpen, setHelpDialogOpen] = useState(false);
+  const [foundationHelpOpen, setFoundationHelpOpen] = useState(false);
   const [operationHelpOpen, setOperationHelpOpen] = useState(false);
   const [clearTreeDialogOpen, setClearTreeDialogOpen] = useState(false);
   const [initDialogOpen, setInitDialogOpen] = useState(false);
@@ -579,9 +581,18 @@ export function TreeDetail() {
           {treeName && (
             <div className="flex flex-col items-start">
               <h1 className="text-2xl font-bold">{treeName}</h1>
-              <span className="text-sm text-muted-foreground">
-                <b>Order:</b> 4
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-muted-foreground">
+                  <b>Order:</b> 4
+                </span>
+                <button
+                  onClick={() => setFoundationHelpOpen(true)}
+                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground transition-colors"
+                  title="What is Order?"
+                >
+                  <HelpCircle className="h-3 w-3" />
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -772,6 +783,13 @@ export function TreeDetail() {
         open={operationHelpOpen}
         onOpenChange={setOperationHelpOpen}
         operation={currentOperation || "insert"}
+      />
+
+      {/* Foundation Help Dialog */}
+      <FoundationHelpDialog
+        open={foundationHelpOpen}
+        onOpenChange={setFoundationHelpOpen}
+        defaultTab="order"
       />
 
       {/* Full Logs Dialog */}
