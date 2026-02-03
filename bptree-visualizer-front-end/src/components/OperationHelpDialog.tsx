@@ -58,7 +58,7 @@ export const OperationHelpDialog: React.FC<OperationHelpDialogProps> = ({ open, 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-5xl h-[85vh] flex flex-col p-6 gap-0">
+      <DialogContent className="max-w-7xl h-[85vh] flex flex-col p-6 gap-0">
         <DialogHeader className="mb-4 flex-shrink-0">
           <DialogTitle className="text-2xl font-bold tracking-tight">Operations Guide</DialogTitle>
         </DialogHeader>

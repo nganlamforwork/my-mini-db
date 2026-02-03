@@ -6,16 +6,16 @@ export const RangeHelp: React.FC = () => {
     <ScrollArea className="h-full pr-4">
       <div className="space-y-6">
         <div>
-          <h3 className="text-lg font-semibold mb-2 text-primary">Overview</h3>
-          <p className="text-sm text-muted-foreground leading-relaxed">
+          <h3 className="text-2xl font-semibold mb-2 text-primary">Overview</h3>
+          <p className="text-lg text-muted-foreground leading-relaxed">
             The <strong>Range Query Operation</strong> leverages the B+Tree's leaf-level doubly-linked list.
             Unlike point queries, it scans horizontally across leaves, making it highly efficient for retrieving ranges of data.
           </p>
         </div>
 
         <div>
-          <h3 className="text-lg font-semibold mb-2 text-primary">Algorithm Steps</h3>
-          <ol className="space-y-4 text-sm text-muted-foreground ml-4 list-decimal marker:text-foreground">
+          <h3 className="text-2xl font-semibold mb-2 text-primary">Algorithm Steps</h3>
+          <ol className="space-y-4 text-base text-muted-foreground ml-4 list-decimal marker:text-foreground">
             <li>
               <span className="font-semibold text-foreground">Locate Start</span>:
               <p className="mt-1">
@@ -43,9 +43,9 @@ export const RangeHelp: React.FC = () => {
         </div>
 
         <div>
-           <h3 className="text-lg font-semibold mb-2 text-primary">Complexity</h3>
-           <p className="text-sm font-mono text-foreground bg-secondary/50 inline-block px-2 py-1 rounded">O(log n + k)</p>
-           <p className="text-xs text-muted-foreground mt-1">
+           <h3 className="text-2xl font-semibold mb-2 text-primary">Complexity</h3>
+           <p className="text-base font-mono text-foreground bg-secondary/50 inline-block px-2 py-1 rounded">O(log n + k)</p>
+           <p className="text-sm text-muted-foreground mt-1">
              Where <em>k</em> is the number of results found.
            </p>
         </div>

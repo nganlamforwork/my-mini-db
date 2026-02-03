@@ -6,16 +6,16 @@ export const UpdateHelp: React.FC = () => {
     <ScrollArea className="h-full pr-4">
       <div className="space-y-6">
         <div>
-          <h3 className="text-lg font-semibold mb-2 text-primary">Overview</h3>
-          <p className="text-sm text-muted-foreground leading-relaxed">
+          <h3 className="text-2xl font-semibold mb-2 text-primary">Overview</h3>
+          <p className="text-lg text-muted-foreground leading-relaxed">
             The <strong>Update Operation</strong> modifies the value associated with an existing key. 
             It is optimized to perform <em>in-place updates</em> whenever possible to avoid expensive tree restructuring.
           </p>
         </div>
 
         <div>
-          <h3 className="text-lg font-semibold mb-2 text-primary">Algorithm Steps</h3>
-          <ol className="space-y-4 text-sm text-muted-foreground ml-4 list-decimal marker:text-foreground">
+          <h3 className="text-2xl font-semibold mb-2 text-primary">Algorithm Steps</h3>
+          <ol className="space-y-4 text-base text-muted-foreground ml-4 list-decimal marker:text-foreground">
             <li>
               <span className="font-semibold text-foreground">Locate Key</span>:
               <p className="mt-1">Traverse the tree to find the leaf node containing the target key.</p>
@@ -44,8 +44,8 @@ export const UpdateHelp: React.FC = () => {
         </div>
 
         <div>
-           <h3 className="text-lg font-semibold mb-2 text-primary">Complexity</h3>
-           <p className="text-sm font-mono text-foreground bg-secondary/50 inline-block px-2 py-1 rounded">O(log n)</p>
+           <h3 className="text-2xl font-semibold mb-2 text-primary">Complexity</h3>
+           <p className="text-base font-mono text-foreground bg-secondary/50 inline-block px-2 py-1 rounded">O(log n)</p>
         </div>
       </div>
     </ScrollArea>
