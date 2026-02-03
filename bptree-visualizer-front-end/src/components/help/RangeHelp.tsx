@@ -1,6 +1,5 @@
 import React from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { ArrowLeftRight } from 'lucide-react';
 
 export const RangeHelp: React.FC = () => {
   return (
