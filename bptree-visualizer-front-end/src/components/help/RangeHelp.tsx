@@ -7,14 +7,18 @@ export const RangeHelp: React.FC = () => {
     <ScrollArea className="h-full pr-4">
       <div className="space-y-8">
         <div>
-          <h3 className="text-2xl font-semibold mb-2 text-primary flex items-center gap-2">
-            <ArrowLeftRight className="h-6 w-6" />
-            Overview
-          </h3>
-          <p className="text-lg text-muted-foreground leading-relaxed">
-            The <strong>Range Query Operation</strong> leverages the B+Tree's leaf-level doubly-linked list.
-            Unlike point queries, it scans horizontally across leaves, making it highly efficient for retrieving ranges of data.
-          </p>
+          <div className="flex flex-col gap-2 text-base text-muted-foreground mt-0">
+              <div>
+                <span className="font-bold text-violet-700 dark:text-violet-400">Main Objective: </span>
+                Retrieve all keys falling within a closed interval <code>[Start, End]</code>.
+              </div>
+              <div>
+                <span className="font-bold text-indigo-700 dark:text-indigo-400">Key Problem: Continuity</span>
+                <ul className="list-disc ml-5 mt-1 space-y-0.5">
+                   <li><strong>Traversal:</strong> Need to jump between leaf nodes using <code>Next</code> pointers without going back up to the parent.</li>
+                </ul>
+              </div>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">

@@ -1,16 +1,10 @@
-import React from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Search } from 'lucide-react';
 
 export const SearchHelp: React.FC = () => {
   return (
     <ScrollArea className="h-full pr-4">
       <div className="space-y-8">
         <div>
-          <h3 className="text-2xl font-semibold mb-2 text-primary flex items-center gap-2">
-            <Search className="h-6 w-6" />
-            Overview
-          </h3>
           <p className="text-lg text-muted-foreground leading-relaxed">
             The <strong>Search Operation</strong> efficiently locates a value by its key. 
             It leverages the B+Tree structure to perform binary searches at each level, ensuring predictable performance.

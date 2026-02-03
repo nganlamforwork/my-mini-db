@@ -6,12 +6,19 @@ export const DeleteHelp: React.FC = () => {
     <ScrollArea className="h-full pr-4">
       <div className="space-y-6">
         <div>
-          <h3 className="text-2xl font-semibold mb-2 text-primary">Overview</h3>
-          <p className="text-lg text-muted-foreground leading-relaxed">
-            The <strong>Delete Operation</strong> removes a key-value pair from the B+Tree. 
-            To maintain the tree's balance properties (minimum occupancy), it may trigger 
-            <strong> Redistribution (Borrowing)</strong> or <strong> Merging</strong> operations.
-          </p>
+          <div className="flex flex-col gap-2 text-base text-muted-foreground mt-0">
+              <div>
+                <span className="font-bold text-rose-700 dark:text-rose-400">Main Objective: </span>
+                Remove a target key from the tree.
+              </div>
+              <div>
+                <span className="font-bold text-orange-700 dark:text-orange-400">Key Problem: Underflow</span>
+                <ul className="list-disc ml-5 mt-1 space-y-0.5">
+                   <li><strong>Happy Case:</strong> Node has extra keys (Keys &gt; Order/2).</li>
+                   <li><strong>Underflow:</strong> Node is too empty &rarr; Requires <strong>Borrow</strong> or <strong>Merge</strong>.</li>
+                </ul>
+              </div>
+          </div>
         </div>
 
         <div>

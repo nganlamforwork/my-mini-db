@@ -6,11 +6,19 @@ export const UpdateHelp: React.FC = () => {
     <ScrollArea className="h-full pr-4">
       <div className="space-y-6">
         <div>
-          <h3 className="text-2xl font-semibold mb-2 text-primary">Overview</h3>
-          <p className="text-lg text-muted-foreground leading-relaxed">
-            The <strong>Update Operation</strong> modifies the value associated with an existing key. 
-            It is optimized to perform <em>in-place updates</em> whenever possible to avoid expensive tree restructuring.
-          </p>
+          <div className="flex flex-col gap-2 text-base text-muted-foreground mt-0">
+              <div>
+                <span className="font-bold text-amber-700 dark:text-amber-400">Main Objective: </span>
+                Modify the value associated with an existing key.
+              </div>
+              <div>
+                <span className="font-bold text-yellow-700 dark:text-yellow-400">Key Problem: Existence</span>
+                <ul className="list-disc ml-5 mt-1 space-y-0.5">
+                   <li><strong>Validation:</strong> Must confirm the key actually exists before attempting any write.</li>
+                   <li><strong>Structure:</strong> Updates typically do not change the tree structure.</li>
+                </ul>
+              </div>
+          </div>
         </div>
 
         <div>
