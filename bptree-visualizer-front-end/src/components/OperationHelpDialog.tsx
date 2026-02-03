@@ -1,7 +1,8 @@
 import React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Search, Trash2, Edit, ArrowLeftRight, Plus } from 'lucide-react';
+import { Search, Trash2, Edit, ArrowLeftRight, Plus, Maximize2, Minimize2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { InsertHelp } from '@/components/help/InsertHelp';
 import { DeleteHelp } from '@/components/help/DeleteHelp';
@@ -45,6 +46,7 @@ const operationConfig = {
 
 export const OperationHelpDialog: React.FC<OperationHelpDialogProps> = ({ open, onOpenChange, operation }) => {
   const [selectedOp, setSelectedOp] = React.useState<'insert' | 'search' | 'update' | 'delete' | 'range'>(operation || 'search');
+  const [isFullscreen, setIsFullscreen] = React.useState(false);
 
   React.useEffect(() => {
     if (operation) {
@@ -58,9 +60,25 @@ export const OperationHelpDialog: React.FC<OperationHelpDialogProps> = ({ open, 
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-7xl h-[85vh] flex flex-col p-6 gap-0">
-        <DialogHeader className="mb-4 flex-shrink-0">
+      <DialogContent className={cn(
+        "flex flex-col p-6 gap-0 transition-all duration-300",
+        isFullscreen 
+          ? "w-screen h-screen max-w-none rounded-none border-0" 
+          : "max-w-7xl h-[85vh]"
+      )}>
+        <DialogHeader className="mb-4 flex-shrink-0 flex-row items-center justify-between space-y-0">
           <DialogTitle className="text-2xl font-bold tracking-tight">Operations Guide</DialogTitle>
+          <div className="flex items-center gap-2 pr-8">
+             <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => setIsFullscreen(!isFullscreen)}
+                className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+             >
+                {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+             </Button>
+          </div>
         </DialogHeader>
         
         <Tabs value={selectedOp} onValueChange={(value) => setSelectedOp(value as typeof selectedOp)} className="flex-1 flex flex-col h-full overflow-hidden">
