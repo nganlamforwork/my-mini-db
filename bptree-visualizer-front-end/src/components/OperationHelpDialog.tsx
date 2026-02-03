@@ -1,7 +1,13 @@
 import React from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Search, Trash2, Edit, ArrowLeftRight, Plus } from 'lucide-react';
+import { cn } from '@/lib/utils';
+import { InsertHelp } from '@/components/help/InsertHelp';
+import { DeleteHelp } from '@/components/help/DeleteHelp';
+import { SearchHelp } from '@/components/help/SearchHelp';
+import { UpdateHelp } from '@/components/help/UpdateHelp';
+import { RangeHelp } from '@/components/help/RangeHelp';
 
 interface OperationHelpDialogProps {
   open: boolean;
@@ -9,81 +15,36 @@ interface OperationHelpDialogProps {
   operation: 'insert' | 'search' | 'update' | 'delete' | 'range' | null;
 }
 
-const operationDescriptions = {
-  insert: {
-    title: 'Insert Operation',
-    overview: 'B+Tree insertion with automatic node splitting to maintain balance. The operation handles two cases: simple insertion (no split) and insertion with splits that propagate upward. All insertions maintain sorted order and tree balance properties.',
-    algorithm: [
-      'Handle empty tree - Create root leaf if tree is empty',
-      'Find target leaf - Navigate to leaf that should contain the key',
-      'Check duplicates - Return error if key already exists',
-      'Insert into leaf - Add key-value pair in sorted order',
-      'Check overflow - Verify if leaf exceeds capacity (key count or payload size)',
-      'Split if needed - Split leaf and propagate split upward through internal nodes',
-      'Create new root - If root splits, create new root internal node'
-    ],
-    complexity: 'O(log n)',
-    purpose: 'Adds new key-value pairs to the database while maintaining B+Tree balance through automatic node splitting.'
-  },
+const operationConfig = {
   search: {
-    title: 'Search Operation',
-    overview: 'Standard B+Tree search with O(log n) complexity through binary search at both internal nodes and leaves. The search traverses from root to leaf using binary search to determine the correct path, then performs binary search within the target leaf to find the exact key.',
-    algorithm: [
-      'Start at root - Begin traversal from the root page',
-      'Navigate internal nodes - Binary search keys to determine correct child pointer',
-      'Follow path downward - Descend through internal nodes until reaching a leaf',
-      'Search leaf - Binary search in the leaf\'s sorted key array to find exact match',
-      'Return result - Return value if found, error otherwise'
-    ],
-    complexity: 'O(log n)',
-    purpose: 'Efficiently locates values by their keys using binary search at each tree level.'
-  },
-  update: {
-    title: 'Update Operation',
-    overview: 'Atomic value modification that optimizes for the common case where the new value fits in the existing page. The implementation avoids unnecessary tree rebalancing by performing in-place updates when possible, falling back to delete-insert only when required.',
-    algorithm: [
-      'Locate key - Find leaf containing target key',
-      'Verify existence - Return error if key not found',
-      'Calculate size change - Compare old and new value sizes',
-      'Check capacity - Determine if new value fits in current page',
-      'In-place update - If fits, replace value and update free space',
-      'Fallback - If doesn\'t fit, delete old entry and re-insert'
-    ],
-    complexity: 'O(log n)',
-    purpose: 'Modifies existing values atomically, optimizing for in-place updates when possible.'
-  },
-  delete: {
-    title: 'Delete Operation',
-    overview: 'Full B+Tree deletion maintaining tree balance through redistribution (borrowing) and merging. The algorithm handles both leaf and internal node rebalancing with proper separator key management.',
-    algorithm: [
-      'Locate and remove - Find leaf and remove key-value pair',
-      'Check underflow - Verify node maintains minimum occupancy',
-      'Try borrowing - Attempt to borrow from sibling with surplus keys',
-      'Merge if needed - If siblings at minimum, merge nodes and remove separator',
-      'Propagate upward - Recursively rebalance parent if it underflows',
-      'Handle root - Reduce tree height when root has single child'
-    ],
-    complexity: 'O(log n)',
-    purpose: 'Removes key-value pairs while maintaining B+Tree balance through borrowing and merging operations.'
+    label: 'Search',
+    icon: Search,
+    activeColor: 'data-[state=active]:bg-blue-100 data-[state=active]:text-blue-700 dark:data-[state=active]:bg-blue-900/40 dark:data-[state=active]:text-blue-300'
   },
   range: {
-    title: 'Range Query Operation',
-    overview: 'Efficient range scanning leveraging the leaf-level doubly-linked list. Unlike point queries that require tree traversal, range queries follow horizontal links between leaves after locating the start position, achieving O(log n + k) complexity where k is the result count.',
-    algorithm: [
-      'Validate range - Ensure startKey ≤ endKey',
-      'Locate start leaf - Find leaf containing or after startKey',
-      'Scan current leaf - Collect keys within range',
-      'Follow leaf chain - Use NextPage pointer to traverse horizontally',
-      'Early termination - Stop when keys exceed endKey',
-      'Return results - Aggregate collected key-value pairs'
-    ],
-    complexity: 'O(log n + k) where k = result count',
-    purpose: 'Efficiently retrieves all keys within a specified range using horizontal leaf traversal.'
+    label: 'Range Query',
+    icon: ArrowLeftRight, 
+    activeColor: 'data-[state=active]:bg-violet-100 data-[state=active]:text-violet-700 dark:data-[state=active]:bg-violet-900/40 dark:data-[state=active]:text-violet-300'
+  },
+  insert: {
+    label: 'Insert',
+    icon: Plus,
+    activeColor: 'data-[state=active]:bg-emerald-100 data-[state=active]:text-emerald-700 dark:data-[state=active]:bg-emerald-900/40 dark:data-[state=active]:text-emerald-300'
+  },
+  delete: {
+    label: 'Delete',
+    icon: Trash2,
+    activeColor: 'data-[state=active]:bg-rose-100 data-[state=active]:text-rose-700 dark:data-[state=active]:bg-rose-900/40 dark:data-[state=active]:text-rose-300'
+  },
+  update: {
+    label: 'Update',
+    icon: Edit,
+    activeColor: 'data-[state=active]:bg-amber-100 data-[state=active]:text-amber-700 dark:data-[state=active]:bg-amber-900/40 dark:data-[state=active]:text-amber-300'
   }
 };
 
 export const OperationHelpDialog: React.FC<OperationHelpDialogProps> = ({ open, onOpenChange, operation }) => {
-  const [selectedOp, setSelectedOp] = React.useState<'insert' | 'search' | 'update' | 'delete' | 'range'>(operation || 'insert');
+  const [selectedOp, setSelectedOp] = React.useState<'insert' | 'search' | 'update' | 'delete' | 'range'>(operation || 'search');
 
   React.useEffect(() => {
     if (operation) {
@@ -93,56 +54,57 @@ export const OperationHelpDialog: React.FC<OperationHelpDialogProps> = ({ open, 
 
   if (!open) return null;
 
-  const operations: Array<'insert' | 'search' | 'update' | 'delete' | 'range'> = ['insert', 'search', 'update', 'delete', 'range'];
+  const operations: Array<'insert' | 'search' | 'update' | 'delete' | 'range'> = ['search', 'range', 'insert', 'delete', 'update'];
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl max-h-[85vh]">
-        <DialogHeader>
-          <DialogTitle>Algorithms</DialogTitle>
+      <DialogContent className="max-w-5xl h-[85vh] flex flex-col p-6 gap-0">
+        <DialogHeader className="mb-4 flex-shrink-0">
+          <DialogTitle className="text-2xl font-bold tracking-tight">Operations Guide</DialogTitle>
         </DialogHeader>
-        <Tabs value={selectedOp} onValueChange={(value) => setSelectedOp(value as typeof selectedOp)} className="w-full">
-          <TabsList className="grid w-full grid-cols-5">
-            {operations.map(op => (
-              <TabsTrigger key={op} value={op} className="capitalize text-xs">
-                {op}
-              </TabsTrigger>
-            ))}
+        
+        <Tabs value={selectedOp} onValueChange={(value) => setSelectedOp(value as typeof selectedOp)} className="flex-1 flex flex-col h-full overflow-hidden">
+          <TabsList className="grid w-full grid-cols-5 mb-4 flex-shrink-0 h-auto p-1 bg-muted/50">
+            {operations.map(op => {
+              const config = operationConfig[op];
+              const Icon = config.icon;
+              return (
+                <TabsTrigger 
+                  key={op} 
+                  value={op} 
+                  className={cn(
+                    "flex flex-col sm:flex-row items-center justify-center gap-2 py-2.5 h-auto capitalize transition-all duration-200",
+                    config.activeColor
+                  )}
+                >
+                  <Icon className="h-4 w-4" />
+                  <span>{config.label}</span>
+                </TabsTrigger>
+              );
+            })}
           </TabsList>
-          {operations.map(op => {
-            const info = operationDescriptions[op];
-            return (
-              <TabsContent key={op} value={op} className="mt-4">
-                <ScrollArea className="max-h-[calc(85vh-180px)] pr-4">
-                  <div className="space-y-4">
-                    <div>
-                      <h3 className="text-sm font-semibold mb-2">Overview</h3>
-                      <p className="text-sm text-muted-foreground">{info.overview}</p>
-                    </div>
-                    
-                    <div>
-                      <h3 className="text-sm font-semibold mb-2">Purpose</h3>
-                      <p className="text-sm text-muted-foreground">{info.purpose}</p>
-                    </div>
+          
+          <div className="flex-1 overflow-hidden bg-background rounded-lg border p-4">
+            <TabsContent key="search" value="search" className="h-full m-0 data-[state=inactive]:hidden">
+              <SearchHelp />
+            </TabsContent>
 
-                    <div>
-                      <h3 className="text-sm font-semibold mb-2">Algorithm Steps</h3>
-                      <ol className="space-y-1.5 text-sm text-muted-foreground ml-4 list-decimal">
-                        {info.algorithm.map((step, idx) => (
-                          <li key={idx}>{step.replace(/^\d+\.\s*/, '')}</li>
-                        ))}
-                      </ol>
-                    </div>
+            <TabsContent key="range" value="range" className="h-full m-0 data-[state=inactive]:hidden">
+              <RangeHelp />
+            </TabsContent>
 
-                    <div>
-                      <h3 className="text-sm font-semibold mb-2">Time Complexity</h3>
-                      <p className="text-sm font-mono text-foreground">{info.complexity}</p>
-                    </div>
-                  </div>
-                </ScrollArea>
-              </TabsContent>
-            );
-          })}
+            <TabsContent key="insert" value="insert" className="h-full m-0 data-[state=inactive]:hidden">
+              <InsertHelp />
+            </TabsContent>
+            
+            <TabsContent key="delete" value="delete" className="h-full m-0 data-[state=inactive]:hidden">
+              <DeleteHelp />
+            </TabsContent>
+            
+            <TabsContent key="update" value="update" className="h-full m-0 data-[state=inactive]:hidden">
+              <UpdateHelp />
+            </TabsContent>
+          </div>
         </Tabs>
       </DialogContent>
     </Dialog>
