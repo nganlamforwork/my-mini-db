@@ -29,17 +29,27 @@ export const RangeHelp: React.FC = () => {
                   Traverse the tree to find the leaf containing the <em>Start Key</em> (or the first key &ge; Start Key).
                 </p>
              </div>
-             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center h-32 border border-dashed">
-                <div className="flex flex-col items-center gap-2">
-                   <div className="flex gap-2 opacity-50">
-                      <div className="w-10 h-8 border rounded flex items-center justify-center bg-background text-xs">...</div>
-                   </div>
-                   <div className="flex flex-col items-center">
-                      <div className="px-4 py-2 border-2 border-violet-500 rounded bg-violet-50 dark:bg-violet-950 text-violet-700 dark:text-violet-300 font-bold shadow-md">
-                         Start Search: 18
+             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center min-h-[220px] border border-dashed">
+                <div className="flex flex-col items-center gap-4">
+                   <div className="flex items-center gap-4 bg-background border px-4 py-2 rounded-lg shadow-sm">
+                      <div className="flex flex-col items-center">
+                         <span className="text-[10px] text-muted-foreground uppercase font-bold">Start</span>
+                         <span className="text-lg font-bold text-violet-600">18</span>
                       </div>
-                      <div className="h-4 w-0.5 bg-violet-500"></div>
-                      <div className="w-24 h-10 border rounded flex items-center justify-center bg-background text-sm font-medium shadow-sm">
+                      <div className="h-8 w-px bg-border"></div>
+                      <div className="flex flex-col items-center">
+                         <span className="text-[10px] text-muted-foreground uppercase font-bold">End</span>
+                         <span className="text-lg font-bold text-blue-600">36</span>
+                      </div>
+                   </div>
+                   
+                   <div className="flex flex-col items-center">
+                      <div className="h-4 w-0.5 bg-violet-500 mb-1"></div>
+                      <div className="px-3 py-1 border-2 border-violet-500 rounded bg-violet-50 dark:bg-violet-950 text-violet-700 dark:text-violet-300 text-xs font-bold shadow-sm">
+                         Search Start (18)
+                      </div>
+                      <div className="h-4 w-0.5 bg-violet-500 mt-1"></div>
+                      <div className="w-24 h-8 border rounded flex items-center justify-center bg-background text-sm font-medium shadow-sm">
                          Leaf Node
                       </div>
                    </div>
@@ -55,7 +65,7 @@ export const RangeHelp: React.FC = () => {
                   Iterate through the keys starting from the first matching position. Collect keys <code>&le; End Key</code>.
                 </p>
              </div>
-             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center h-32 border border-dashed flex-col gap-2">
+             <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center min-h-[220px] border border-dashed flex-col gap-2">
                 <div className="text-xs font-semibold text-muted-foreground mb-1">End Key: 36</div>
                 <div className="flex items-center gap-0 border border-muted-foreground/30 rounded overflow-hidden shadow-sm bg-background">
                    <div className="px-3 py-3 border-r text-sm text-muted-foreground/50 bg-muted/20">15</div>
