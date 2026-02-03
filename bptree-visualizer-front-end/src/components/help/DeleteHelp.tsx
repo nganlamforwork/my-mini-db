@@ -401,6 +401,22 @@ export const DeleteHelp: React.FC = () => {
 
                    </div>
                 </TabsContent>
+
+                 {/* Complexity */}
+                <div className="mt-8 space-y-4">
+                     <div className="border-l-4 border-amber-500 pl-4">
+                        <h4 className="font-semibold text-foreground text-lg">Complexity</h4>
+                        <p className="text-base text-muted-foreground mt-1">
+                           Logarithmic time complexity due to tree height traversal. Rebalancing cost is amortized.
+                        </p>
+                     </div>
+                      <div className="bg-muted/30 p-4 rounded-lg flex items-center justify-center h-24 border border-dashed">
+                         <div className="text-center">
+                            <code className="text-xl font-mono font-bold text-amber-600 dark:text-amber-400">O(log n)</code>
+                            <p className="text-xs text-muted-foreground mt-1">n = number of keys</p>
+                         </div>
+                     </div>
+                  </div>
              </div>
           </ScrollArea>
         </div>
