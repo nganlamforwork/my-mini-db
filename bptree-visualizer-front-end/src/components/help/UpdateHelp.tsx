@@ -98,6 +98,20 @@ export const UpdateHelp: React.FC = () => {
                 <TabsContent value="overflow" className="mt-0">
                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                       <div className="space-y-4">
+                         
+                         {/* Clarification Note */}
+                         <div className="bg-blue-50 dark:bg-blue-900/20 p-4 rounded-lg border border-blue-200 dark:border-blue-800 text-sm mb-4">
+                             <div className="flex gap-2">
+                                <FileWarning className="w-5 h-5 text-blue-600 dark:text-blue-400 shrink-0" />
+                                <div>
+                                    <span className="font-bold text-blue-700 dark:text-blue-300">What is "Overflow" here?</span>
+                                    <p className="mt-1 text-blue-800 dark:text-blue-200 leading-relaxed">
+                                        Unlike <strong>Insert Overflow</strong> (which often hits a <em>Key Count</em> limit in simplified visualizations), <strong>Update Overflow</strong> occurs when the <strong>Total Byte Size</strong> of the new value exceeds the node's fixed capacity (e.g., 4KB), even if the node has few keys.
+                                    </p>
+                                </div>
+                             </div>
+                         </div>
+
                          <div className="border-l-4 border-amber-500 pl-4">
                             <h4 className="font-semibold text-foreground text-lg">Logic: Fallback Strategy</h4>
                             <p className="text-muted-foreground mt-2">

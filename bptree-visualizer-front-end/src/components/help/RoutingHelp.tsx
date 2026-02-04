@@ -33,7 +33,7 @@ export const RoutingHelp: React.FC = () => {
                 Efficiently navigate from the Root to the correct Leaf using separator keys.
               </div>
               <div>
-                <span className="font-bold text-violet-700 dark:text-violet-400">Routing Logic:</span>
+                <span className="font-bold text-cyan-700 dark:text-cyan-400">Routing Logic:</span>
                 <ul className="list-disc ml-5 mt-1 space-y-0.5">
                    <li><strong>Internal Nodes:</strong> Contain <code>Key i</code> and pointers <code>P_i</code>.</li>
                    <li><strong>Decision:</strong> Compare Search Key (K) with Separator Key (S).</li>
@@ -44,7 +44,7 @@ export const RoutingHelp: React.FC = () => {
 
         <div className="space-y-8">
             <div className="space-y-4">
-                <div className="border-l-4 border-violet-500 pl-4">
+                <div className="border-l-4 border-cyan-500 pl-4">
                     <h4 className="font-semibold text-foreground text-lg">Routing Rules</h4>
                     <p className="text-muted-foreground mt-1">
                         To find a key <strong>K</strong>, we compare it against the separator keys <strong>K1, K2, K3</strong> in the node to decide which child pointer (branch) to follow.
@@ -142,7 +142,7 @@ export const RoutingHelp: React.FC = () => {
                                 onMouseLeave={() => setHoveredIndex(null)}
                              >
                                  <span className="text-xs text-muted-foreground font-semibold mb-1">P0 Branch</span>
-                                 <code className={`text-sm font-bold ${isHovered(0) ? 'text-blue-700 dark:text-blue-300 scale-110' : 'text-blue-600 dark:text-blue-400'}`}>K &lt; K1</code>
+                                 <code className={`text-sm font-bold ${isHovered(0) ? 'text-blue-700 dark:text-blue-300 scale-110' : 'text-blue-600 dark:text-blue-400'}`}><span className="text-rose-600 dark:text-rose-400">K</span> &lt; K1</code>
                              </div>
 
                              {/* Branch 2 */}
@@ -156,7 +156,7 @@ export const RoutingHelp: React.FC = () => {
                                 onMouseLeave={() => setHoveredIndex(null)}
                              >
                                  <span className="text-xs text-muted-foreground font-semibold mb-1">P1 Branch</span>
-                                 <code className={`text-sm font-bold ${isHovered(1) ? 'text-blue-700 dark:text-blue-300 scale-110' : 'text-blue-600 dark:text-blue-400'}`}>K1 &le; K &lt; K2</code>
+                                 <code className={`text-sm font-bold ${isHovered(1) ? 'text-blue-700 dark:text-blue-300 scale-110' : 'text-blue-600 dark:text-blue-400'}`}>K1 &le; <span className="text-rose-600 dark:text-rose-400">K</span> &lt; K2</code>
                              </div>
 
                              {/* Branch 3 */}
@@ -170,7 +170,7 @@ export const RoutingHelp: React.FC = () => {
                                 onMouseLeave={() => setHoveredIndex(null)}
                              >
                                  <span className="text-xs text-muted-foreground font-semibold mb-1">P2 Branch</span>
-                                 <code className={`text-sm font-bold ${isHovered(2) ? 'text-blue-700 dark:text-blue-300 scale-110' : 'text-blue-600 dark:text-blue-400'}`}>K2 &le; K &lt; K3</code>
+                                 <code className={`text-sm font-bold ${isHovered(2) ? 'text-blue-700 dark:text-blue-300 scale-110' : 'text-blue-600 dark:text-blue-400'}`}>K2 &le; <span className="text-rose-600 dark:text-rose-400">K</span> &lt; K3</code>
                              </div>
 
                              {/* Branch 4 */}
@@ -184,7 +184,7 @@ export const RoutingHelp: React.FC = () => {
                                 onMouseLeave={() => setHoveredIndex(null)}
                              >
                                  <span className="text-xs text-muted-foreground font-semibold mb-1">P3 Branch</span>
-                                 <code className={`text-sm font-bold ${isHovered(3) ? 'text-blue-700 dark:text-blue-300 scale-110' : 'text-blue-600 dark:text-blue-400'}`}>K &ge; K3</code>
+                                 <code className={`text-sm font-bold ${isHovered(3) ? 'text-blue-700 dark:text-blue-300 scale-110' : 'text-blue-600 dark:text-blue-400'}`}><span className="text-rose-600 dark:text-rose-400">K</span> &ge; K3</code>
                              </div>
                          </div>
                      </div>

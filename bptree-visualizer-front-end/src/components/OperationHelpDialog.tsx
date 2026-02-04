@@ -69,19 +69,18 @@ export const OperationHelpDialog: React.FC<OperationHelpDialogProps> = ({ open, 
           ? "w-screen h-screen max-w-none rounded-none border-0" 
           : "max-w-7xl h-[85vh]"
       )}>
+        <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            className="absolute right-12 top-4 h-8 w-8 text-muted-foreground hover:text-foreground z-50"
+            title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+        >
+            {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+        </Button>
+
         <DialogHeader className="mb-4 flex-shrink-0 flex-row items-center justify-between space-y-0">
           <DialogTitle className="text-2xl font-bold tracking-tight">Operations Guide</DialogTitle>
-          <div className="flex items-center gap-2 pr-8">
-             <Button
-                variant="ghost"
-                size="icon"
-                onClick={() => setIsFullscreen(!isFullscreen)}
-                className="h-8 w-8 text-muted-foreground hover:text-foreground"
-                title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
-             >
-                {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
-             </Button>
-          </div>
         </DialogHeader>
         
         <Tabs value={selectedOp} onValueChange={(value) => setSelectedOp(value as typeof selectedOp)} className="flex-1 flex flex-col h-full overflow-hidden">
