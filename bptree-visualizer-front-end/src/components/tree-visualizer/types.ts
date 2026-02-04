@@ -28,6 +28,7 @@ export interface TreeCanvasProps {
   steps?: VisualizationStep[]; // Full list of steps for replay
   hasPendingOperation?: boolean;
   lastOperationSuccess?: boolean;
+  externalDialogOpen?: boolean;
 }
 
 export interface NodePosition {

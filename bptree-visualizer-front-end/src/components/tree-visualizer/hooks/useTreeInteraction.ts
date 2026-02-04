@@ -11,6 +11,7 @@ interface UseTreeInteractionProps {
   positionsRef: React.MutableRefObject<Map<number, NodePosition>>;
   containerRef: RefObject<HTMLDivElement | null>;
   canvasRef: RefObject<HTMLCanvasElement | null>;
+  disableInteraction?: boolean;
 }
 
 export const useTreeInteraction = ({
@@ -19,6 +20,7 @@ export const useTreeInteraction = ({
   positionsRef,
   containerRef,
   canvasRef,
+  disableInteraction = false,
 }: UseTreeInteractionProps) => {
   const [camera, setCamera] = useState({ x: 0, y: 0, zoom: 0.8 });
   const isDragging = useRef(false);
@@ -32,6 +34,8 @@ export const useTreeInteraction = ({
   const hoveredKeyRef = useRef<number | null>(null);
   const [hoveredEdge, setHoveredEdge] = useState<{ parentId: number; childIndex: number; tooltipText: string } | null>(null);
   const [tooltipPosition, setTooltipPosition] = useState<{ x: number; y: number } | null>(null);
+
+  const isInteractionBlocked = disableInteraction || dialogOpen;
 
   // Helper to find node (and specific key) at canvas coordinates
   const findNodeAtPosition = (clientX: number, clientY: number): { nodeId: number; keyIndex: number | null } | null => {
@@ -222,6 +226,8 @@ export const useTreeInteraction = ({
 
   // Interaction Handlers
   const handleMouseDown = (e: React.MouseEvent) => {
+    if (isInteractionBlocked) return;
+
     const result = findNodeAtPosition(e.clientX, e.clientY);
     if (result) {
       const { nodeId, keyIndex } = result;
@@ -243,6 +249,8 @@ export const useTreeInteraction = ({
   };
 
   const handleMouseMove = (e: React.MouseEvent) => {
+    if (isInteractionBlocked) return;
+
     // Update hover state - triggers re-render for smooth visual transition
     const result = findNodeAtPosition(e.clientX, e.clientY);
     const hoveredNodeId = result ? result.nodeId : null;
@@ -294,8 +302,8 @@ export const useTreeInteraction = ({
   };
 
   const handleWheel = (e: React.WheelEvent) => {
-    // Don't handle wheel events if dialog is open - let dialog handle its own scroll
-    if (dialogOpen) {
+    // Don't handle wheel events if interaction is blocked
+    if (isInteractionBlocked) {
       return;
     }
     

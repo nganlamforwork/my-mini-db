@@ -39,6 +39,7 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
   onPlaybackSpeedChange,
   steps, // Add steps to destructuring
   lastOperationSuccess,
+  externalDialogOpen, 
 }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -273,7 +274,8 @@ export const TreeCanvas: React.FC<TreeCanvasProps> = ({
     layout,
     positionsRef,
     containerRef,
-    canvasRef
+    canvasRef,
+    disableInteraction: externalDialogOpen
   });
 
   // 3. Handle Rendering Loop

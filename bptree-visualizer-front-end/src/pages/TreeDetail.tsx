@@ -570,6 +570,17 @@ export function TreeDetail() {
   
   // onStepForward/Back removed as per request
 
+  // Calculate if any global dialog is open to disable canvas interactions
+  const isAnyDialogOpen = 
+    operationDialogOpen || 
+    helpDialogOpen || 
+    foundationHelpOpen || 
+    operationHelpOpen || 
+    clearTreeDialogOpen || 
+    initDialogOpen || 
+    fullLogsOpen ||
+    !!currentOperation; // Also if operation sheet is active
+
   return (
     <div className="flex flex-col h-screen overflow-hidden">
       {/* Simple Header */}
@@ -725,6 +736,7 @@ export function TreeDetail() {
                           ? !!pendingOperation?.response?.value
                           : pendingOperation?.response?.success
                    }
+                   externalDialogOpen={isAnyDialogOpen}
                 />
               </div>
             )}
