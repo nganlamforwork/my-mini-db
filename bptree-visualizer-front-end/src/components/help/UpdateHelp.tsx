@@ -3,6 +3,7 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PenLine, FileWarning, ArrowDown, Trash2, Plus, CheckCircle2 } from 'lucide-react';
 
+
 export const UpdateHelp: React.FC = () => {
   return (
     <div className="h-full flex flex-col">
