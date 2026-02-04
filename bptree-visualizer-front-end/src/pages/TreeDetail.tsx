@@ -587,7 +587,7 @@ export function TreeDetail() {
                 </span>
                 <button
                   onClick={() => setFoundationHelpOpen(true)}
-                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground transition-colors"
+                  className="p-0.5 rounded-full hover:bg-muted text-muted-foreground transition-colors cursor-pointer"
                   title="What is Order?"
                 >
                   <HelpCircle className="h-3 w-3" />
@@ -633,7 +633,7 @@ export function TreeDetail() {
                 </h3>
                 <button
                   onClick={() => setOperationHelpOpen(true)}
-                  className="p-1 rounded hover:bg-accent transition-colors"
+                  className="p-1 rounded hover:bg-accent transition-colors cursor-pointer"
                   title="View operation algorithms"
                 >
                   <HelpCircle className="h-3.5 w-3.5 text-muted-foreground" />
