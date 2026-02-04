@@ -83,12 +83,12 @@ export const StructureHelp: React.FC = () => {
                                 
                                 <div className="flex items-center gap-0 border-2 border-emerald-400 rounded-lg overflow-hidden bg-background shadow-md">
                                     {/* Record 1 */}
-                                    <div className="px-3 h-10 border-r border-emerald-200 flex items-center justify-center gap-2 bg-emerald-50/50">
+                                    <div className="px-3 h-10 border-r border-emerald-200 dark:border-emerald-800 flex items-center justify-center gap-2 bg-emerald-50/50 dark:bg-emerald-900/40">
                                         <span className="font-bold text-sm font-mono">10</span>
                                         <span className="text-xs text-muted-foreground">"ValA"</span>
                                     </div>
                                     {/* Record 2 */}
-                                    <div className="px-3 h-10 border-r border-emerald-200 flex items-center justify-center gap-2 bg-emerald-50/50">
+                                    <div className="px-3 h-10 border-r border-emerald-200 dark:border-emerald-800 flex items-center justify-center gap-2 bg-emerald-50/50 dark:bg-emerald-900/40">
                                         <span className="font-bold text-sm font-mono">15</span>
                                         <span className="text-xs text-muted-foreground">"ValB"</span>
                                     </div>
